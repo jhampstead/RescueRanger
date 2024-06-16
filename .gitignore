@@ -1,0 +1,5 @@
+data/*
+obj/*
+
+bcftools/*
+htslib/*
