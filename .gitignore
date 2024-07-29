@@ -1,5 +1,4 @@
 data/*
 obj/*
+build/*
 
-bcftools/*
-htslib/*
