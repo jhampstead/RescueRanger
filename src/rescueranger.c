@@ -474,48 +474,87 @@ int prediction_offset(bcf1_t *v, Variants *vs, int transcript_start, int transcr
     return offset;
 }
 
-float *match_predictions_to_reference(float *predictions, bcf1_t *v, Variants *vs, Transcript *t, size_t num_reference_predictions) {
-    float *corrected_predictions = malloc(num_reference_predictions * sizeof(float));
-    int current_ref_idx = 0;
-    int current_hap_idx = 0;
-    for (int l = 0; l < vs->n; l++) {
-        bcf1_t *vvv = kv_A(*vs, l);
-        // WARN: Is it actually distance+1?
-        // int v_offset = get_allele_offset_variant(v, t->definition->beg, t->definition->end);
-        // int64_t v_pos = get_position_in_haplotype(v->pos, vs, t->definition->beg, t->definition->end);
-        // int64_t vvv_pos = get_position_in_haplotype(vvv->pos, vs, t->definition->beg, t->definition->end);
-        int alt_len = strlen(vvv->d.allele[1]);
-        // int offset = get_allele_offset(vvv_pos, vvv->rlen, alt_len, v_pos - (CAI_DISTANCE+1), v_pos + CAI_DISTANCE);
-        // if (vvv_pos > v_pos) vvv_pos += v_offset;
+int ranges_overlap(Range r1, Range r2) {
+    return r1.start <= r2.end && r2.start <= r1.end;
+}
 
-        if (vvv->pos + vvv->rlen <= v->pos - (CAI_DISTANCE+1) || vvv->pos > v->pos + CAI_DISTANCE) continue;
+int intersect_ranges(Range r1, Range r2, Range *intersection) {
+    if (!ranges_overlap(r1, r2)) return 1;
 
-        int variant_start = vvv->pos - (v->pos - (CAI_DISTANCE+1));
-        int variant_end = variant_start + vvv->rlen;
-        variant_start *= 3;
-        variant_end *= 3;
-
-        // Copy segments between variants/boundaries
-        int segment_len = (variant_start - current_ref_idx);
-        memcpy(corrected_predictions + current_ref_idx, predictions + current_hap_idx, segment_len * sizeof(float));
-
-        int offset = get_allele_offset_variant(vvv, v->pos - (CAI_DISTANCE+1), v->pos + CAI_DISTANCE);
-        if (offset == 0) {
-            memcpy(corrected_predictions + variant_start, predictions + current_hap_idx + segment_len, (variant_end - variant_start) * sizeof(float));
-        } else if (offset > 0) {
-            float best_scores[3];
-            get_best_insertion_score(predictions + current_hap_idx + segment_len, (offset+1)*3, best_scores);
-            memcpy(corrected_predictions + variant_start, best_scores, 3 * sizeof(float));
-         } else { // offset < 0
-            memcpy(corrected_predictions + variant_start, predictions + current_hap_idx + segment_len, 3 * sizeof(float));
-            memset(corrected_predictions + (variant_start + 3), 0, offset * -3 * sizeof(float));
+    if (r1.start < r2.start) {
+        if (r1.end > r2.end) {
+            *intersection = (Range) {r2.start, r2.end};
+        } else {
+            *intersection = (Range) {r2.start, r1.end};
         }
-
-        current_hap_idx += segment_len + alt_len*3;
-        current_ref_idx = variant_end;
+    } else {
+        if (r1.end > r2.end) {
+            *intersection = (Range) {r1.start, r2.end};
+        } else {
+            *intersection = (Range) {r1.start, r1.end};
+        }
     }
 
-    memcpy(corrected_predictions + current_ref_idx, predictions + current_hap_idx, (num_reference_predictions - current_ref_idx) * sizeof(float));
+    return 0;
+}
+
+int range_len(Range r) {
+    return r.end - r.start;
+}
+
+Range scale_range(Range r, int scale) {
+    return (Range) {r.start * scale, r.end * scale};
+}
+
+void shift_range(Range *r, int value) {
+    r->start += value;
+    r->end += value;
+}
+
+float *match_predictions_to_reference(float *predictions, bcf1_t *v, Variants *vs, Transcript *t, size_t num_reference_predictions) {
+    float *corrected_predictions = malloc(num_reference_predictions * sizeof(float));
+    Range pred_range = {v->pos - (CAI_DISTANCE+1), v->pos + CAI_DISTANCE};
+
+    int ref_idx = 0, hap_idx = 0;
+    for (int l = 0; l < vs->n; l++) {
+        bcf1_t *vvv = kv_A(*vs, l);
+
+        Range ref;
+        if (intersect_ranges((Range) {vvv->pos, vvv->pos + vvv->rlen}, pred_range, &ref) > 0) continue;
+        shift_range(&ref, -pred_range.start);
+        int ref_len = range_len(ref);
+        if (ref_len == 0) continue;
+
+        Range alt;
+        int alt_len = 0;
+        if (intersect_ranges((Range) {vvv->pos, vvv->pos + strlen(vvv->d.allele[1])}, pred_range, &alt) == 0) {
+            shift_range(&alt, -pred_range.start);
+            alt_len = range_len(alt);
+        }
+
+        Range ref_segment = scale_range(ref, 3);
+
+        // Copy segments between variants/boundaries
+        int segment_len = (ref_segment.start - ref_idx);
+        memcpy(corrected_predictions + ref_idx, predictions + hap_idx, segment_len * sizeof(float));
+
+        int offset = ref_len - alt_len; // Naive offset in end position vs ref and alt
+        if (offset == 0) {
+            memcpy(corrected_predictions + ref_segment.start, predictions + hap_idx + segment_len, range_len(ref_segment) * sizeof(float));
+        } else if (offset < 0) {
+            float best_scores[3] = {0};
+            get_best_insertion_score(predictions + hap_idx + segment_len, range_len(alt), best_scores);
+            memcpy(corrected_predictions + ref_segment.start, best_scores, 3 * sizeof(float));
+         } else { // offset > 0
+            memcpy(corrected_predictions + ref_segment.start, predictions + hap_idx + segment_len, 3 * sizeof(float));
+            memset(corrected_predictions + (ref_segment.start + 3), 0, offset * 3 * sizeof(float));
+        }
+
+        hap_idx += segment_len + alt_len*3;
+        ref_idx = ref_segment.end;
+    }
+
+    memcpy(corrected_predictions + ref_idx, predictions + hap_idx, (num_reference_predictions - ref_idx) * sizeof(float));
 
     return corrected_predictions;
 }
@@ -544,22 +583,6 @@ int64_t get_position_in_spliced_haplotype(bcf1_t *v, Variants *vs, Transcript *t
     return -1;
 }
 
-// int64_t get_position_in_complementary_spliced_haplotype(bcf1_t *v, Variants *vs, Transcript *t) {
-//     int positions_skipped;
-//     int previous_exon_end = t->definition->end;
-//
-//     for (int i = t->definition->ncds-1; i >= 0; i--) {
-//         int64_t end = t->definition->cds[i]->beg;
-//
-//         int64_t start = end + t->definition->cds[i]->len;
-//
-//         int64_t
-//
-//     }
-//
-//     return -1;
-// }
-
 void process_phased_variants(Records *vs, HdrFormat *vep_fmt, gff_t *gff, faidx_t *fai, bcf_hdr_t *hdr, Model *models) {
     kvec_t(int64_t) frameshifts_rescued; kv_init(frameshifts_rescued);
 
@@ -567,7 +590,6 @@ void process_phased_variants(Records *vs, HdrFormat *vep_fmt, gff_t *gff, faidx_
     for (int j = 0; j < vs->n; j++) {
         Record *r = kv_A(*vs, j);
         bcf1_t *vv = kv_A(*vs, j)->v;
-        // log_info("%s:%li", bcf_hdr_id2name(hdr, vv->rid), vv->pos);
         VepTranscripts *transcript_csqs = get_vep_transcript_consequences(vv, vep_fmt, hdr);
 
         // Filter transcripts for overlap with current variant

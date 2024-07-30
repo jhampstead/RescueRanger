@@ -4,7 +4,7 @@
 
 int get_allele_offset(int64_t pos, int rlen, int alen, int boundary_start, int boundary_end) {
     if (pos - boundary_start < 0) { // Insertion overlapping start
-        return (rlen - (pos - boundary_start));
+        return 1 - (rlen + (pos - boundary_start));
     } else if (pos + rlen - boundary_end > 0) { // Insertion overlapping end
         return 1 - (rlen - (pos + rlen - boundary_end));
     }
