@@ -20,6 +20,19 @@
 //
 // typedef kvec_t(VepTranscript) VepTranscripts;
 
+enum Trigger {
+    SPLICE,
+    FRAMESHIFT,
+    STOP
+};
+
+typedef kvec_t(bcf1_t *) Variants;
+
+typedef struct Gene {
+    Range coords;
+
+} Gene;
+
 typedef struct ConsequencePredictions {
     kstring_t **hap_score;
     kstring_t **splice_change;
@@ -33,10 +46,12 @@ typedef struct ConsequencePredictions {
 
 typedef struct Record {
     bcf1_t *v;
+    Variants *hap_incl;
+    Variants *hap_excl;
+    enum Trigger triggers[3];
     ConsequencePredictions *c;
 } Record;
 
-typedef kvec_t(bcf1_t *) Variants;
 typedef kvec_t(Record *) Records;
 
 int get_allele_offset(int64_t pos, int rlen, int alen, int boundary_start, int boundary_end);
