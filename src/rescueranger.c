@@ -1,3 +1,4 @@
+#include <stdbool.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -6,14 +7,15 @@
 #include <klib/kvec.h>
 #include <klib/kstring.h>
 
+#include <time.h>
 #include <zlib.h>
 #include <htslib/hts.h>
 #include <htslib/khash.h>
 #include <htslib/khash_str2int.h>
 #include <htslib/vcf.h>
 #include <htslib/faidx.h>
-#include <cpliceai/predict.h>
-#include <cpliceai/utils.h>
+// #include <cpliceai/predict.h>
+// #include <cpliceai/utils.h>
 
 #include "bcftools/gff.h"
 #include "bcftools/regidx.h"
@@ -59,9 +61,9 @@
 #define SPLICEAI_THRESHOLD 0.8
 #define SPLICEAI_RESCUE_THRESHOLD 0.2
 
-// #define SPLICE_TRIGGER 1
-// #define FRAMESHIFT_TRIGGER 2
-// #define STOP_TRIGGER 3
+#define SPLICE_TRIGGER 0
+#define FRAMESHIFT_TRIGGER 1
+#define STOP_TRIGGER 2
 
 #define STOP_CODONS {"TAG", "TGA", "TAA"}
 #define COMPLEMENTARY_STOP_CODONS {"ATC", "ACT", "ATT"}
@@ -89,6 +91,11 @@
 
 #define INFO_TAGS { SPLICEAI_HAP_TAG, CS_TAG, RESCUE_TAG, RESCUE_TYPE_TAG, PTV_TAG, PTV_TYPE_TAG, PREDICTION_FLAGS_TAG }
 
+typedef struct
+{
+    uint32_t start, end;
+} Range;
+
 enum Trigger {
     SPLICE,
     FRAMESHIFT,
@@ -98,9 +105,13 @@ enum Trigger {
 typedef kvec_t(bcf1_t *) Variants;
 
 typedef struct Gene {
+    uint32_t gff_id;
     Range coords;
-
+    kstring_t seq;
+    uint32_t strand;
 } Gene;
+
+typedef kvec_t(Gene *) Genes;
 
 typedef struct ConsequencePredictions {
     kstring_t **hap_score;
@@ -113,23 +124,14 @@ typedef struct ConsequencePredictions {
     size_t num_consequences;
 } ConsequencePredictions;
 
-typedef struct Record {
-    bcf1_t *v;
-    Variants *hap_incl;
-    Variants *hap_excl;
-    enum Trigger triggers[3];
-    ConsequencePredictions *c;
-} Record;
-
-typedef kvec_t(Record *) Records;
-
 typedef struct Transcript {
     int rid;
     gf_tscript_t *definition;
-    kstring_t seq;
 } Transcript;
 
 typedef kvec_t(Transcript) Transcripts;
+
+typedef kvec_t(gf_tscript_t *) gf_tscripts;
 
 typedef struct TscriptCsqs {
     char *tid;
@@ -138,6 +140,22 @@ typedef struct TscriptCsqs {
 } TscriptCsqs;
 
 typedef kvec_t(TscriptCsqs) VepCsqs;
+
+typedef struct Record {
+    bcf1_t *v;
+    VepCsqs *vep;
+    enum Trigger triggers[3];
+    ConsequencePredictions *c;
+    gf_tscripts *tscripts;
+    Genes *genes;
+} Record;
+
+typedef kvec_t(Record *) Records;
+
+typedef struct RecordBlock {
+    int is_coding;
+    Records *records;
+} RecordBlock;
 
 typedef kvec_t(Records *) PhasedRecords;
 
@@ -165,18 +183,13 @@ void init_consequence_predictions(ConsequencePredictions **dst, int num_conseque
 
 
     for (int i = 0; i < num_consequences; i++) {
-        csq_preds->hap_score[i] = malloc(sizeof(kstring_t));
-        *(csq_preds->hap_score[i]) = (kstring_t) {0};
-        csq_preds->is_rescue[i] = malloc(sizeof(kstring_t));
-        *(csq_preds->is_rescue[i]) = (kstring_t) {0};
-        csq_preds->rescue_type[i] = malloc(sizeof(kstring_t));
-        *(csq_preds->rescue_type[i]) = (kstring_t) {0};
-        csq_preds->is_ptv[i] = malloc(sizeof(kstring_t));
-        *(csq_preds->is_ptv[i]) = (kstring_t) {0};
-        csq_preds->ptv_type[i] = malloc(sizeof(kstring_t));
-        *(csq_preds->ptv_type[i]) = (kstring_t) {0};
-        csq_preds->flags[i] = malloc(sizeof(kstring_t));
-        *(csq_preds->flags[i]) = (kstring_t) {0};
+        csq_preds->hap_score[i] = calloc(1, sizeof(kstring_t));
+        csq_preds->splice_change[i] = calloc(1, sizeof(kstring_t));
+        csq_preds->is_rescue[i] = calloc(1, sizeof(kstring_t));
+        csq_preds->rescue_type[i] = calloc(1, sizeof(kstring_t));
+        csq_preds->is_ptv[i] = calloc(1, sizeof(kstring_t));
+        csq_preds->ptv_type[i] = calloc(1, sizeof(kstring_t));
+        csq_preds->flags[i] = calloc(1, sizeof(kstring_t));
     }
 
     *dst = csq_preds;
@@ -184,17 +197,25 @@ void init_consequence_predictions(ConsequencePredictions **dst, int num_conseque
 
 void destroy_consequence_predictions(ConsequencePredictions *csq_preds) {
     for (int i = 0; i < csq_preds->num_consequences; i++) {
-        free(csq_preds->hap_score[i]->s);
+        if (csq_preds->hap_score[i]->m > 0) free(csq_preds->hap_score[i]->s);
         free(csq_preds->hap_score[i]);
-        free(csq_preds->splice_change[i]->s);
+
+        if (csq_preds->splice_change[i]->m > 0) free(csq_preds->splice_change[i]->s);
         free(csq_preds->splice_change[i]);
-        free(csq_preds->is_rescue[i]->s);
+
+        if (csq_preds->is_rescue[i]->m > 0) free(csq_preds->is_rescue[i]->s);
         free(csq_preds->is_rescue[i]);
-        free(csq_preds->rescue_type[i]->s);
+
+        if (csq_preds->rescue_type[i]->m > 0) free(csq_preds->rescue_type[i]->s);
         free(csq_preds->rescue_type[i]);
-        free(csq_preds->is_ptv[i]->s);
+
+        if (csq_preds->is_ptv[i]->m > 0) free(csq_preds->is_ptv[i]->s);
         free(csq_preds->is_ptv[i]);
-        free(csq_preds->flags[i]->s);
+
+        if (csq_preds->ptv_type[i]->m > 0) free(csq_preds->ptv_type[i]->s);
+        free(csq_preds->ptv_type[i]);
+
+        if (csq_preds->flags[i]->m > 0) free(csq_preds->flags[i]->s);
         free(csq_preds->flags[i]);
     }
 
@@ -203,21 +224,10 @@ void destroy_consequence_predictions(ConsequencePredictions *csq_preds) {
     free(csq_preds->is_rescue);
     free(csq_preds->rescue_type);
     free(csq_preds->is_ptv);
+    free(csq_preds->ptv_type);
     free(csq_preds->flags);
-}
 
-Record *init_record(bcf1_t *v, VepCsqs *csqs) {
-    Record *r = malloc(sizeof(Record));
-    r->triggers[0] = 0;
-    r->triggers[1] = 0;
-    r->triggers[2] = 0;
-
-    bcf1_t *v_dup = bcf_dup(v);
-    bcf_unpack(v_dup, BCF_UN_ALL);
-    r->v = v_dup;
-    r->c = NULL; init_consequence_predictions(&r->c, csqs->n);
-
-    return r;
+    free(csq_preds);
 }
 
 /*
@@ -296,7 +306,7 @@ VepCsqs *parse_vep_transcript_consequences(bcf1_t *v, const HdrFormat *vep_fmt, 
         int *vep_field_idxs, vep_n; vep_field_idxs = str_split(&transcript_csq, VEP_DELIM, &vep_n);
 
         int feature_type_id; khash_str2int_get(vep_fmt->str2id, VEP_FEATURE_TYPE, &feature_type_id);
-        if (strcmp(transcript_csq.s + vep_field_idxs[feature_type_id], VEP_FEATURE_TYPE_TRANSCRIPT) != 0) continue;
+        if (strcmp(transcript_csq.s + vep_field_idxs[feature_type_id], VEP_FEATURE_TYPE_TRANSCRIPT) != 0) { free(vep_field_idxs); continue; }
 
         int feature_id; khash_str2int_get(vep_fmt->str2id, VEP_FEATURE, &feature_id);
         int consequences_id; khash_str2int_get(vep_fmt->str2id, VEP_CONSEQUENCE, &consequences_id);
@@ -314,79 +324,212 @@ VepCsqs *parse_vep_transcript_consequences(bcf1_t *v, const HdrFormat *vep_fmt, 
         char *tr_id = transcript_csq.s + vep_field_idxs[feature_id];
         TscriptCsqs t = {strdup(tr_id), consequence_n, cons};
         kv_push(TscriptCsqs, *transcripts, t);
+
+        free(consequence_field_idxs);
+        free(vep_field_idxs);
     }
     free(s.s);
     free(vep_str);
+    free(field_idxs);
 
     return transcripts;
 }
 
-int has_overlapping_transcripts(bcf1_t *v, bcf_hdr_t *hdr, gff_t *gff) {
-    regidx_t *tscripts = gff_get(gff, idx_tscript);
-    regitr_t *itr = regitr_init(tscripts);
+void destroy_vep_csqs(VepCsqs *vep_csqs) {
+    for (int i = 0; i < vep_csqs->n; i++) {
+        TscriptCsqs vep_csq_field = kv_A(*vep_csqs, i);
 
-    int has_overlap = regidx_overlap(tscripts, bcf_hdr_id2name(hdr, v->rid), v->pos, v->pos + v->rlen, itr);
+        for (int j = 0; j < vep_csq_field.num_consequences; j++) {
+            free(vep_csq_field.consequences[j]);
+        }
+        free(vep_csq_field.consequences);
+        free(vep_csq_field.tid);
+    }
 
-    regitr_destroy(itr);
-    return has_overlap;
+    kv_destroy(*vep_csqs);
+    free(vep_csqs);
 }
 
-int find_variant_transcript_region(bcf1_t *v, bcf_hdr_t *hdr, gff_t *gff, IRegion *region) {
-    regidx_t *ts = gff_get(gff, idx_tscript);
-    regitr_t *itr = regitr_init(ts);
+Record *init_record(bcf1_t *v, VepCsqs *csqs) {
+    Record *r = malloc(sizeof(Record));
+
+    bcf1_t *v_dup = bcf_dup(v);
+    bcf_unpack(v_dup, BCF_UN_ALL);
+    r->v = v_dup;
+
+    r->triggers[0] = 0;
+    r->triggers[1] = 0;
+    r->triggers[2] = 0;
+
+    r->c = NULL;
+    r->genes = NULL;
+    r->tscripts = NULL;
+    r->vep = NULL;
+
+    if (csqs == NULL) {
+        return r;
+    }
+
+    r->vep = csqs;
+    init_consequence_predictions(&r->c, csqs->n);
+
+    return r;
+}
+
+void destroy_record(Record *r) {
+    bcf_destroy(r->v);
+    if (r->vep != NULL) {
+        destroy_consequence_predictions(r->c);
+        destroy_vep_csqs(r->vep);
+    }
+
+    if (r->tscripts != NULL) {
+        kv_destroy(*r->tscripts);
+        free(r->tscripts);
+    }
+
+    if (r->genes != NULL) {
+        kv_destroy(*r->genes);
+        free(r->genes);
+    }
+
+    free(r);
+}
+
+
+// int has_overlapping_transcripts(bcf1_t *v, bcf_hdr_t *hdr, gff_t *gff) {
+//     regidx_t *tscripts = gff_get(gff, idx_tscript);
+//     regitr_t *itr = regitr_init(tscripts);
+//
+//     int has_overlap = regidx_overlap(tscripts, bcf_hdr_id2name(hdr, v->rid), v->pos, v->pos + v->rlen, itr);
+//
+//     regitr_destroy(itr);
+//     return has_overlap;
+// }
+
+int find_gene_region_for_variant(bcf1_t *v, bcf_hdr_t *hdr, gff_t *gff, IRegion *region) {
+    regidx_t *genes = gff_get(gff, idx_gene);
+    regitr_t *itr = regitr_init(genes);
     const char *chr = bcf_hdr_id2name(hdr, v->rid);
 
-    if (!regidx_overlap(ts, chr, v->pos, v->pos + v->rlen, itr)) { regitr_destroy(itr); return -1; };
+    if (!regidx_overlap(genes, chr, v->pos, v->pos + v->rlen, itr)) { regitr_destroy(itr); return -1; };
 
     IRegion r = {0};
     r.rid = v->rid;
-    regitr_overlap(itr); r.start = itr->beg; // GFF should be sorted by rid, start; so first transcript should always be the target start
-    while (regitr_overlap(itr)) if (itr->end > r.end) r.end = itr->end;
+    while (regitr_overlap(itr)) {
+        gf_gene_t *t = regitr_payload(itr, gf_gene_t *);
+        if (t->type != GF_PROTEIN_CODING) continue;
+
+        if (r.start == 0) r.start = t->beg;
+        if (itr->end > r.end) r.end = t->end;
+    }
 
     regitr_destroy(itr);
+    if (r.start == 0 && r.end == 0) return -1; // No protein coding gene was found
+
     *region = r;
 
     return 0;
 }
 
-int find_iregion_transcripts(IRegion *region, bcf_hdr_t *hdr, gff_t *gff, faidx_t *fai, Transcripts **out_transcripts) {
-    regidx_t *tscripts = (regidx_t *) gff_get(gff, idx_tscript);
-    regitr_t *itr = regitr_init(tscripts);
+int find_gf_tscripts_by_iregion(IRegion iregion, bcf_hdr_t *hdr, gff_t *gff, gf_tscripts **out_gf_tscripts) {
+    regidx_t *gff_tscripts = (regidx_t *) gff_get(gff, idx_tscript);
+    regitr_t *itr = regitr_init(gff_tscripts);
 
-    const char *chr = bcf_hdr_id2name(hdr, region->rid);
-    if (!regidx_overlap(tscripts, chr, region->start, region->end, itr)) return -1;
+    const char *chr = bcf_hdr_id2name(hdr, iregion.rid);
+    if (!regidx_overlap(gff_tscripts, chr, iregion.start, iregion.end, itr)) { regitr_destroy(itr); return -1; }
 
-    Transcripts *transcripts = malloc(sizeof(Transcripts)); kv_init(*transcripts);
-    int slen;
+    gf_tscripts *tscripts = malloc(sizeof(gf_tscripts));
+    kv_init(*tscripts);
+
     while (regitr_overlap(itr)) {
-        gf_tscript_t *tr = regitr_payload(itr, gf_tscript_t *);
-        char *seq = faidx_fetch_seq(fai, chr, itr->beg, itr->end, &slen);
-        seq[slen] = '\0';
-        kstring_t s = { slen, slen+1, seq };
-
-        Transcript t = { bcf_hdr_name2id(hdr, itr->seq), tr, s};
-        kv_push(Transcript, *transcripts, t);
+        kv_push(gf_tscript_t *, *tscripts, regitr_payload(itr, gf_tscript_t *));
     }
-    regitr_destroy(itr);
 
-    *out_transcripts = transcripts;
+    regitr_destroy(itr);
+    *out_gf_tscripts = tscripts;
+
     return 0;
 }
 
-IRegion transcript_to_iregion(Transcript *t) {
-    return (IRegion) { t->rid, t->definition->beg, t->definition->end };
+void match_gf_tscripts_to_vep_tscripts(gf_tscripts *tscripts, Record *r, gff_t *gff, gf_tscripts **out_gf_scripts) {
+    gf_tscripts *record_tscripts = malloc(sizeof(gf_tscripts));
+    kv_init(*record_tscripts);
+
+    for (int i = 0; i < r->vep->n; i++) {
+        int has_matched = 0;
+
+        if (tscripts == NULL) { kv_push(gf_tscript_t *, *record_tscripts, NULL); continue; }
+        for (int j = 0; j < tscripts->n; j++) {
+            gf_tscript_t *t = kv_A(*tscripts, j);
+            const char *tid = gff_id2string(gff, 0, t->id);
+
+            if (strcmp(tid, kv_A(*r->vep, i).tid) != 0) continue;
+
+            has_matched = 1;
+            kv_push(gf_tscript_t *, *record_tscripts, t);
+            break;
+        }
+
+        if (!has_matched) kv_push(gf_tscript_t *, *record_tscripts, NULL);
+    }
+
+    *out_gf_scripts = record_tscripts;
 }
 
-void predict_for_seq(Model *models, const char *seq, int seq_len, int strand, float *predictions[], int *num_predictions) {
-    float *ohe; one_hot_encode(seq, seq_len, &ohe);
+int find_gf_tscripts_for_record(Record *r, bcf_hdr_t *hdr, gff_t *gff, gf_tscripts **out_gf_tscripts) {
+    IRegion region = variant_to_iregion(r->v);
+    gf_tscripts *tscripts = NULL;
+    find_gf_tscripts_by_iregion(region, hdr, gff, &tscripts);
 
-    if (strand == STRAND_REV) reverse_encoding(ohe, seq_len * ENCODING_SIZE);
+    gf_tscripts *matched_tscripts; match_gf_tscripts_to_vep_tscripts(tscripts, r, gff, &matched_tscripts);
+    if (tscripts != NULL) { kv_destroy(*tscripts); free(tscripts); }
 
-    predict(models, seq_len * ENCODING_SIZE, 1, &ohe, num_predictions, predictions);
-    free(ohe);
-
-    if (strand == STRAND_REV) reverse_prediction(*predictions, *num_predictions, 3);
+    *out_gf_tscripts = matched_tscripts;
+    return 0;
 }
+
+// int find_iregion_transcripts(IRegion *region, bcf_hdr_t *hdr, gff_t *gff, faidx_t *fai, Transcripts **out_transcripts) {
+//     regidx_t *tscripts = (regidx_t *) gff_get(gff, idx_tscript);
+//     regitr_t *itr = regitr_init(tscripts);
+//
+//     const char *chr = bcf_hdr_id2name(hdr, region->rid);
+//     if (!regidx_overlap(tscripts, chr, region->start, region->end, itr)) return -1;
+//
+//     Transcripts *transcripts = malloc(sizeof(Transcripts));
+//     kv_init(*transcripts);
+//     int slen;
+//     while (regitr_overlap(itr)) {
+//         gf_tscript_t *tr = regitr_payload(itr, gf_tscript_t *);
+//         // char *seq = faidx_fetch_seq(fai, chr, itr->beg, itr->end, &slen);
+//         // seq[slen] = '\0';
+//         // kstring_t s = { slen, slen+1, seq };
+//
+//         
+//
+//         Transcript t = { bcf_hdr_name2id(hdr, itr->seq), tr};
+//         kv_push(Transcript, *transcripts, t);
+//     }
+//     regitr_destroy(itr);
+//
+//     *out_transcripts = transcripts;
+//     return 0;
+// }
+
+// IRegion transcript_to_iregion(Transcript *t) {
+//     return (IRegion) { t->rid, t->definition->beg, t->definition->end };
+// }
+
+// void predict_for_seq(Model *models, const char *seq, int seq_len, int strand, float *predictions[], int *num_predictions) {
+//     float *ohe; one_hot_encode(seq, seq_len, &ohe);
+//
+//     if (strand == STRAND_REV) reverse_encoding(ohe, seq_len * ENCODING_SIZE);
+//
+//     predict(models, seq_len * ENCODING_SIZE, 1, &ohe, num_predictions, predictions);
+//     free(ohe);
+//
+//     if (strand == STRAND_REV) reverse_prediction(*predictions, *num_predictions, 3);
+// }
 
 void get_best_insertion_score(float *insert_start, int length, float *best) {
     for (int i = 0; i < length; i+=3) {
@@ -402,7 +545,7 @@ void unpack_variants(Records *vs) {
     }
 }
 
-PhasedRecords *group_variants_by_phase(Records *vs, bcf_hdr_t *hdr) {
+PhasedRecords *split_records_on_phase(Records *vs, bcf_hdr_t *hdr) {
     PhasedRecords *pvs = malloc(sizeof(PhasedRecords)); kv_init(*pvs); 
     for (int i = 0; i < NUM_PHASES; i++) {
         Records *tmp = malloc(sizeof(Records)); kv_init(*tmp);
@@ -418,21 +561,20 @@ PhasedRecords *group_variants_by_phase(Records *vs, bcf_hdr_t *hdr) {
         if (gt[0] == gt[1]) { // Homozygous variant, equal opportunity phaser
             kv_push(Record *, *(pvs->a[0]), r);
             kv_push(Record *, *(pvs->a[1]), r);
+            free(gt);
             continue;
         }
 
         // TODO: Add a CLI option to set this behaviour
         if (!bcf_gt_is_phased(gt[0]) && !bcf_gt_is_phased(gt[1])) { // No phasing for heterozygous variants, including on both for now
-            // log_debug("Skipping %s:%li (heterozygous, no phase)", bcf_hdr_id2name(hdr, r->v->rid), r->v->pos); 
-            // free(gt);
-
             kv_push(Record *, *(pvs->a[0]), r);
             kv_push(Record *, *(pvs->a[1]), r);
             log_debug("Adding %s:%li (heterozygous, no phase)", bcf_hdr_id2name(hdr, r->v->rid), r->v->pos); 
+            free(gt);
             continue; 
         }
 
-        //Something is phased, check what. Enforced split of multiallelic sites should make this easy
+        //Something is phased, check what. Enforced split of multiallelic sites makes this easy
         if (gt[0] > gt[1]) kv_push(Record *, *(pvs->a[0]), r); // gt[0]=4, gt[1]=3, 1|0
         else kv_push(Record *, *(pvs->a[1]), r); // gt[0]=2, gt[1]=5, 0|1
         free(gt);
@@ -446,6 +588,7 @@ void remove_overlapping_variants(Records *vs, const bcf_hdr_t *hdr) {
     int *should_delete = calloc(vs->n, sizeof(int));
     for (int j = 0; j < vs->n; j++) {
         bcf1_t *v = kv_A(*vs, j)->v;
+
         // Skip variant if it overlaps a previous deletion
         IRegion r = variant_to_iregion(v);
         if (iregion_intersects(last_deletion, r)) {
@@ -982,8 +1125,8 @@ int main(int argc, char *argv[]) {
     log_set_level(2);
     setenv("TF_CPP_MIN_LOG_LEVEL", "1", 1);
 
-    log_debug("Loading SpliceAI models...");
-    Model *models = load_models(argv[1]);
+    // log_debug("Loading SpliceAI models...");
+    // Model *models = load_models(argv[1]);
 
     // Parse gff file
     const char *gff_path = argv[2];
@@ -1011,126 +1154,355 @@ int main(int argc, char *argv[]) {
 
     bcf1_t *v = bcf_init();
 
-    Records batch; kv_init(batch);
+    kvec_t(RecordBlock) batches; kv_init(batches);
+
+    Records *batch = malloc(sizeof(Records));
+    kv_init(*batch);
+
     IRegion batch_region = {-1, -1, -1};
-    IRegion var_region = {0};
 
-    int singles = 0;
     while (bcf_read(fp_in, hdr, v) >= 0) {
-        int is_non_coding = find_variant_transcript_region(v, hdr, gff, &var_region);
-        if (is_non_coding) {
-            if (batch.n > 0) { // There exists a batch
-                // Process batch
-                // Clear batch
-            }
+        int end_reached = 0;
 
-            bcf_write(fp_out, hdr, v);
-            continue;
+        IRegion var_region = {0};
+        int is_non_coding = find_gene_region_for_variant(v, hdr, gff, &var_region);
+        if (batch_region.rid == -1) batch_region = var_region;
+        int overlaps_batch = is_non_coding ? 0 : iregion_intersects(batch_region, var_region);
+
+        if (batch->n > 0 && !overlaps_batch) { // Variant is either non-coding or falls outside of batch
+            RecordBlock block = {kv_A(*batch, 0)->vep == NULL ? 0 : 1, batch};
+            kv_push(RecordBlock, batches, block);
+
+            batch_region = var_region;
+            batch = malloc(sizeof(Records));
+            kv_init(*batch);
         }
 
-        // Check for overlap between current variant and batch regions
-        if (iregion_intersects(batch_region, var_region) == 1) { // Variant overlaps with batch region, append to current batch
-            if (var_region.end > batch_region.end) batch_region.end = var_region.end; // Update overlap region if necessary
+        VepCsqs *vep_csqs = is_non_coding ? NULL : parse_vep_transcript_consequences(v, vep_fmt, hdr);
+        if (overlaps_batch && var_region.end > batch_region.end) batch_region.end = var_region.end;
+        kv_push(Record *, *batch, init_record(v, vep_csqs));
+    }
 
-            // Convert variant to record, add to batch
-            VepCsqs *csqs = parse_vep_transcript_consequences(v, vep_fmt, hdr);
-            kv_push(Record *, batch, init_record(v, csqs));
+    if (batch->n > 0) {
+        RecordBlock block = {kv_A(*batch, 0)->vep == NULL ? 0 : 1, batch};
+        kv_push(RecordBlock, batches, block);
+    }
 
-            continue; // Saved variant to batch, go to next
-        }
+    Genes genes; kv_init(genes); // TODO: Turn this into a hash for faster accessing.
+    for (int b = 0; b < batches.n; b++) {
+        RecordBlock block = kv_A(batches, b);
+        if (!block.is_coding) continue;
 
-        // Batch completed, process it
-        PhasedRecords *pvs = group_variants_by_phase(&batch, hdr);
-        for (int i = 0; i < NUM_PHASES; i++) {
-            Records *ppvs = kv_A(*pvs, i);
-            if (ppvs->n == 0) continue;
-            remove_overlapping_variants(ppvs, hdr);
+        // Find matching gff transcripts/genes for records in batch
+        for (int i = 0; i < block.records->n; i++) {
+            Record *r = kv_A(*block.records, i);
+            find_gf_tscripts_for_record(r, hdr, gff, &r->tscripts);
+            if (r->tscripts == NULL) continue; // A variant in a coding gene can still have no overlapping coding transcripts
 
-            if (ppvs->n == 0 || ppvs->n == -1) continue;
-            // Create inclusive and exclusive haplotype record sets
-            // Calculate haplotype sequence
+            r->genes = malloc(sizeof(Genes));
+            kv_init(*r->genes);
+            for (int j = 0; j < r->tscripts->n; j++) {
+                gf_tscript_t *t = kv_A(*r->tscripts, j);
+                if (t == NULL) { kv_push(Gene *, *r->genes, NULL); continue; }
 
-            // process_phased_variants(ppvs, vep_fmt, gff, fai, hdr, models);
-        }
+                uint32_t gene_id = t->gene->id;
+                int has_matched = 0;
 
-        for (int i = 0; i < pvs->n; i++) { kv_destroy(*kv_A(*pvs, i)); free(kv_A(*pvs, i)); };
-        kv_destroy(*pvs); free(pvs);
+                for (int k = 0; k < genes.n; k++) {
+                    Gene *gene = kv_A(genes, k);
+                    if (gene_id != gene->gff_id) continue;
 
-        // Write out and clear current batch
-        for (int i = 0; i < batch.n; i++) {
-            kstring_t hap_score = {0}, is_rescue = {0}, rescue_type = {0};
-            Record *r = kv_A(batch, i);
-            for (int j = 0; j < r->c->num_consequences; j++) {
-                if (j != 0) {
-                    kputc(',', &hap_score);
-                    kputc(',', &is_rescue);
-                    kputc(',', &rescue_type);
+                    has_matched = 1;
+                    kv_push(Gene *, *r->genes, gene);
                 }
 
-                if (r->c->hap_score[j]->l > 0) kputs(r->c->hap_score[j]->s, &hap_score);
-                else kputc('.', &hap_score);
-                if (r->c->is_rescue[j]->l > 0) kputs(r->c->is_rescue[j]->s, &is_rescue);
-                else kputc('.', &is_rescue);
-                if (r->c->rescue_type[j]->l > 0) kputs(r->c->rescue_type[j]->s, &rescue_type);
-                else kputc('.', &rescue_type);
+                if (has_matched) continue;
+
+                // No match found, create and store a new gene
+                Range gene_range = {t->gene->beg, t->gene->end};
+
+                int slen = 0;
+                char *seq = faidx_fetch_seq(fai, bcf_hdr_id2name(hdr, r->v->rid), gene_range.start, gene_range.end, &slen);
+                seq[slen] = '\0';
+                kstring_t s = { slen, slen+1, seq };
+
+                Gene *gene = malloc(sizeof(Gene));
+                gene->gff_id = gene_id;
+                gene->coords = gene_range;
+                gene->seq = s;
+                gene->strand = t->gene->strand;
+                kv_push(Gene *, genes, gene);
             }
-
-            bcf_update_info_string(hdr, r->v, SPLICEAI_HAP_TAG, hap_score.s);
-            bcf_update_info_string(hdr, r->v, RESCUE_TAG, is_rescue.s);
-            bcf_update_info_string(hdr, r->v, RESCUE_TYPE_TAG, rescue_type.s);
-
-
-            bcf_write(fp_out, hdr, r->v);
-            bcf_destroy(r->v);
-
-            // destroy_consequence_predictions(r->c);
-            // free(r);
-            // free(hap_score.s);
         }
-        kv_destroy(batch);
-
-        // Start new batch, with current variant as the first batch entry
-        batch_region = var_region;
-        kv_init(batch);
-        Record *r = init_record(bcf_dup(v));
-        Veps *transcript_csqs = get_vep_transcript_consequences(v, vep_fmt, hdr);
-        init_consequence_predictions(&r->c, transcript_csqs->n);
-        kv_push(Record *, batch, r);
     }
 
-    // Process final batch
-    unpack_variants(&batch);
-    PhasedRecords *pvs = group_variants_by_phase(&batch, hdr);
-    for (int i = 0; i < NUM_PHASES; i++) {
-        Records *ppvs = kv_A(*pvs, i);
-        if (ppvs->n == 0) continue;
-        remove_overlapping_variants(ppvs, hdr);
-
-        if (ppvs->n == 9 || ppvs->n == -1) continue;
-        // process_phased_variants(ppvs, vep_fmt, gff, fai, hdr, models);
-    }
-
-    for (int i = 0; i < pvs->n; i++) { kv_destroy(*kv_A(*pvs, i)); free(kv_A(*pvs, i)); };
-    kv_destroy(*pvs); free(pvs);
-
-    // Clear out final batch
-    for (int i = 0; i < batch.n; i++) {
-        bcf_write(fp_out, hdr, kv_A(batch, i)->v);
-        bcf_destroy(kv_A(batch, i)->v);
-    }
-    kv_destroy(batch);
-
-    // Free remaining allocs
     bcf_destroy(v);
     destroy_hdr_fmt(vep_fmt);
-    bcf_hdr_destroy(hdr);
     bcf_close(fp_in);
-    bcf_close(fp_out);
-
-    gff_destroy(gff);
     fai_destroy(fai);
 
+    for (int b = 0; b < batches.n; b++) {
+        RecordBlock block = kv_A(batches, b);
+        if (!block.is_coding) continue;
+
+        for (int i = 0; i < batch->n; i++) {
+            Record *r = kv_A(*block.records, i);
+
+            // Check VEP consequences for rescue triggers
+            for (int j = 0; j < r->vep->n; j++) {
+                TscriptCsqs transcript_consequence = kv_A(*r->vep, j);
+                for (int k = 0; k < transcript_consequence.num_consequences; k++) {
+                    const char *consequence = transcript_consequence.consequences[k];
+
+                    if (strcmp(consequence, SPLICE_DONOR_VARIANT) == 0 ||
+                        strcmp(consequence, SPLICE_ACCEPTOR_VARIANT) == 0) {
+                        r->triggers[SPLICE_TRIGGER] = 1;
+                    } else if (strcmp(consequence, FRAMESHIFT_VARIANT) == 0) {
+                        r->triggers[FRAMESHIFT_TRIGGER] = 1;
+                    } else if (strcmp(consequence, STOP_GAINED_VARIANT) == 0) {
+                        r->triggers[STOP_TRIGGER] = 1;
+                    }
+                }
+            }
+
+            // TODO: Check SpliceAI output for rescue triggers
+        }
+    }
+
+    // Split records by phase
+    for (int b = 0; b < batches.n; b++) {
+        RecordBlock block = kv_A(batches, b);
+        if (!block.is_coding) continue;
+
+        PhasedRecords *phased_records = split_records_on_phase(block.records, hdr);
+        for (int p = 0; p < NUM_PHASES; p++) {
+            Records *batch = kv_A(*phased_records, p);
+
+            for (int i = 0; i < batch->n; i++) {
+                Record *r = kv_A(*batch, i);
+                if (!r->triggers[SPLICE_TRIGGER] && !r->triggers[FRAMESHIFT_TRIGGER] && !r->triggers[STOP_TRIGGER]) continue;
+
+                for (int g = 0; g < r->genes->n; g++) {
+                    Gene *gene = kv_A(*r->genes, g);
+
+                    // Find records for the current allele
+                    Records hap_in; kv_init(hap_in); // Variants for current allele including current variant
+                    Records hap_ex; kv_init(hap_ex); // Variant for current allele excluding current variant
+
+                    for (int j = 0; j < batch->n; j++) {
+                        Record *hap_r = kv_A(*batch, j);
+
+                        for (int g2 = 0; g2 < hap_r->genes->n; g2++) {
+                            Gene *gene2 = kv_A(*hap_r->genes, g2);
+                            if (gene->gff_id == gene2->gff_id) {
+                                kv_push(Record *, hap_in, hap_r);
+
+                                if (hap_r == r) continue;
+                                kv_push(Record *, hap_ex, hap_r);
+                            }
+                        }
+                    }
+
+                    // Predict splicing
+
+
+
+                    kv_destroy(hap_in);
+                    kv_destroy(hap_ex);
+                }
+            }
+
+            kv_destroy(*batch);
+            free(batch);
+        }
+
+        kv_destroy(*phased_records);
+        free(phased_records);
+    }
+
+
+    // Free genes
+    for (int i = 0; i < genes.n; i++) {
+        free(kv_A(genes, i)->seq.s);
+        free(kv_A(genes, i));
+    }
+    kv_destroy(genes);
+
+    // Free batches
+    for (int i = 0; i < batches.n; i++) {
+        RecordBlock block = kv_A(batches, i);
+
+        for (int j = 0; j < block.records->n; j++) {
+            Record *r = kv_A(*block.records, j);
+            destroy_record(r);
+        }
+        kv_destroy(*block.records);
+        free(block.records);
+    }
+    kv_destroy(batches);
+
+    // while (bcf_read(fp_in, hdr, v) >= 0) {
+    //     int is_non_coding = find_variant_transcript_region(v, hdr, gff, &var_region);
+    //     if (is_non_coding) {
+    //         if (batch.n > 0) { // There exists a batch
+    //             // Process batch
+    //             // Clear batch
+    //         }
+    //
+    //         bcf_write(fp_out, hdr, v);
+    //         continue; // Current variant is non-coding, go to next iteration
+    //     }
+    //
+    //     // Check for overlap between current variant and batch regions
+    //     if (iregion_intersects(batch_region, var_region) == 1) { // Variant overlaps with batch region, append to current batch
+    //         if (var_region.end > batch_region.end) batch_region.end = var_region.end; // Update overlap region if necessary
+    //
+    //         // Convert variant to record, add to batch
+    //         VepCsqs *csqs = parse_vep_transcript_consequences(v, vep_fmt, hdr);
+    //         kv_push(Record *, batch, init_record(v, csqs));
+    //
+    //         continue; // Saved variant to batch, go to next iteration
+    //     }
+    //
+    //     /* Batch completed, process it */
+    //
+    //     // Find matching gff transcripts/genes for records in batch
+    //     kvec_t(Gene) genes; kv_init(genes);
+    //     for (int i = 0; i < batch.n; i++) {
+    //         Record *r = kv_A(batch, i);
+    //         find_gf_tscripts_for_record(r, hdr, gff, &r->tscripts);
+    //
+    //         int slen = 0;
+    //         for (int j = 0; j < r->tscripts->n; j++) {
+    //             gf_tscript_t t = kv_A(*r->tscripts, j);
+    //             uint32_t gene_id = t.gene->id;
+    //
+    //             int has_matched = 0;
+    //             for (int k = 0; k < genes.n; k++) {
+    //                 Gene gene = kv_A(genes, k);
+    //                 if (gene_id != gene.gff_id) continue;
+    //
+    //                 has_matched = 1;
+    //                 r->gene = &gene;
+    //             }
+    //
+    //             if (has_matched) continue;
+    //
+    //             // No match found, create and store a new gene
+    //             Range gene_range = {t.gene->beg, t.gene->end};
+    //
+    //             char *seq = faidx_fetch_seq(fai, bcf_hdr_id2name(hdr, r->v->rid), gene_range.start, gene_range.end, &slen);
+    //             seq[slen] = '\0';
+    //             kstring_t s = { slen, slen+1, seq };
+    //
+    //             Gene gene = { gene_id, gene_range, s, t.gene->strand };
+    //             kv_push(Gene, genes, gene);
+    //         }
+    //     }
+    //
+    //     // Phase records
+    //     PhasedRecords *phased_records = group_variants_by_phase(&batch, hdr);
+    //     for (int i = 0; i < NUM_PHASES; i++) {
+    //         Records *records = kv_A(*phased_records, i);
+    //
+    //         // Preprocess records
+    //         if (records->n < 1) continue;
+    //         remove_overlapping_variants(records, hdr);
+    //
+    //         if (records->n < 1) continue;
+    //
+    //         // Create inclusive and exclusive haplotype record sets
+    //         // Calculate haplotype sequence
+    //
+    //         // process_phased_variants(ppvs, vep_fmt, gff, fai, hdr, models);
+    //     }
+    //
+    //     for (int i = 0; i < genes.n; i++) {
+    //         Gene gene = kv_A(genes, i);
+    //         free(gene.seq.s);
+    //     }
+    //     kv_destroy(genes);
+    //
+    //     for (int i = 0; i < phased_records->n; i++) {
+    //         kv_destroy(*kv_A(*phased_records, i));
+    //         free(kv_A(*phased_records, i));
+    //     };
+    //     kv_destroy(*phased_records); free(phased_records);
+    //
+    //     // Write out and clear current batch
+    //     // for (int i = 0; i < batch.n; i++) {
+    //     //     kstring_t hap_score = {0}, is_rescue = {0}, rescue_type = {0};
+    //     //     Record *r = kv_A(batch, i);
+    //     //     for (int j = 0; j < r->c->num_consequences; j++) {
+    //     //         if (j != 0) {
+    //     //             kputc(',', &hap_score);
+    //     //             kputc(',', &is_rescue);
+    //     //             kputc(',', &rescue_type);
+    //     //         }
+    //     //
+    //     //         if (r->c->hap_score[j]->l > 0) kputs(r->c->hap_score[j]->s, &hap_score);
+    //     //         else kputc('.', &hap_score);
+    //     //         if (r->c->is_rescue[j]->l > 0) kputs(r->c->is_rescue[j]->s, &is_rescue);
+    //     //         else kputc('.', &is_rescue);
+    //     //         if (r->c->rescue_type[j]->l > 0) kputs(r->c->rescue_type[j]->s, &rescue_type);
+    //     //         else kputc('.', &rescue_type);
+    //     //     }
+    //     //
+    //     //     bcf_update_info_string(hdr, r->v, SPLICEAI_HAP_TAG, hap_score.s);
+    //     //     bcf_update_info_string(hdr, r->v, RESCUE_TAG, is_rescue.s);
+    //     //     bcf_update_info_string(hdr, r->v, RESCUE_TYPE_TAG, rescue_type.s);
+    //     //
+    //     //
+    //     //     bcf_write(fp_out, hdr, r->v);
+    //     //     bcf_destroy(r->v);
+    //     //
+    //     //     // destroy_consequence_predictions(r->c);
+    //     //     // free(r);
+    //     //     // free(hap_score.s);
+    //     // }
+    //     for (int i = 0; i < batch.n; i++) {
+    //         Record *r = kv_A(batch, i);
+    //         destroy_record(r);
+    //     }
+    //     kv_destroy(batch);
+    //
+    //     // Start new batch, with current variant as the first batch entry
+    //     batch_region = var_region;
+    //     kv_init(batch);
+    //     Record *r = init_record(bcf_dup(v), parse_vep_transcript_consequences(v, vep_fmt, hdr));
+    //     kv_push(Record *, batch, r);
+    // }
+
+    // Process final batch
+    // unpack_variants(&batch);
+    // PhasedRecords *pvs = group_variants_by_phase(&batch, hdr);
+    // for (int i = 0; i < NUM_PHASES; i++) {
+    //     Records *ppvs = kv_A(*pvs, i);
+    //     if (ppvs->n == 0) continue;
+    //     remove_overlapping_variants(ppvs, hdr);
+    //
+    //     if (ppvs->n == 9 || ppvs->n == -1) continue;
+    //     // process_phased_variants(ppvs, vep_fmt, gff, fai, hdr, models);
+    // }
+
+    // for (int i = 0; i < pvs->n; i++) { kv_destroy(*kv_A(*pvs, i)); free(kv_A(*pvs, i)); };
+    // kv_destroy(*pvs); free(pvs);
+
+    // Clear out final batch
+    // for (int i = 0; i < batch.n; i++) {
+    //     bcf_write(fp_out, hdr, kv_A(batch, i)->v);
+    //     bcf_destroy(kv_A(batch, i)->v);
+    // }
+    // kv_destroy(batch);
+
+    // Free remaining allocs
+
+    gff_destroy(gff);
+    bcf_hdr_destroy(hdr);
+    bcf_close(fp_out);
+
+
     // Destroy SpliceAI models
-    destroy_models(models);
+    // destroy_models(models);
 }
 

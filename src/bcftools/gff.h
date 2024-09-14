@@ -254,6 +254,7 @@ typedef struct
     uint32_t iseq;
     uint32_t id,beg,end,strand:31,  // used only by --dump-gff
              used:1;                // does it have any exons, CDS, UTR?
+    uint32_t type;
 }
 gf_gene_t;
 typedef struct
@@ -298,6 +299,7 @@ typedef enum
     idx_utr,
     idx_exon,
     idx_tscript,
+    idx_gene
 }
 gff_opt_t;
 

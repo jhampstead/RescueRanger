@@ -28,10 +28,10 @@ enum Trigger {
 
 typedef kvec_t(bcf1_t *) Variants;
 
-typedef struct Gene {
-    Range coords;
-
-} Gene;
+// typedef struct Gene {
+//     Range coords;
+//
+// } Gene;
 
 typedef struct ConsequencePredictions {
     kstring_t **hap_score;
