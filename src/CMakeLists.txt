@@ -19,6 +19,14 @@ target_link_libraries(rescueranger Logging)
 add_library(Region STATIC region.c)
 target_link_libraries(rescueranger Region)
 
+# Add range
+#add_library(Range STATIC range.c)
+#target_link_libraries(rescueranger Range)
+
+# Add record
+add_library(Record STATIC record.c)
+target_link_libraries(rescueranger Record)
+
 # Add utils
 add_library(Utils STATIC utils.c)
 target_link_libraries(rescueranger Utils)

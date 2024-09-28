@@ -15,19 +15,19 @@ int get_allele_offset_variant(bcf1_t *v, int boundary_start, int boundary_end) {
     return get_allele_offset(v->pos, v->rlen, strlen(v->d.allele[1]), boundary_start, boundary_end);
 }
 
-int64_t get_position_in_haplotype(int64_t pos, Variants *vs, int64_t start, int64_t stop) {
+int64_t get_position_in_haplotype(int64_t pos, Records *rs, int64_t start, int64_t stop) {
     int offset = 0;
-    for (int i = 0; i < vs->n; i++) {
-        bcf1_t *v = kv_A(*vs, i);
-        if (v->pos >= pos) break;
+    for (int i = 0; i < rs->n; i++) {
+        Record *r = kv_A(*rs, i);
+        if (r->v->pos >= pos) break;
 
-        offset += get_allele_offset_variant(v, start, stop);
+        offset += get_allele_offset_variant(r->v, start, stop);
     }
 
     return pos + offset;
 }
 
-int get_haplotype_sequence(kstring_t ref, Variants vs, int seq_offset, int pos_offset, kstring_t *out_hap) {
+int get_haplotype_sequence(kstring_t ref, Records *rs, int seq_offset, int pos_offset, kstring_t *out_hap) {
     // Prepare kstring
     kstring_t seq;
     seq.m = ref.l + seq_offset + 1; 
@@ -40,18 +40,18 @@ int get_haplotype_sequence(kstring_t ref, Variants vs, int seq_offset, int pos_o
 
     IRegion del_region = {-1, -1, -1};
     int prev_alt_allele_len = 0;
-    for (int i = 0; i < vs.n; i++) {
+    for (int i = 0; i < rs->n; i++) {
         // Get current variant info
-        bcf1_t *v = kv_A(vs, i);
+        Record *r = kv_A(*rs, i);
 
-        int var_idx = v->pos - pos_offset;
+        int var_idx = r->v->pos - pos_offset;
         if (var_idx < 0) { // If a deletion overlaps the transcript start
             prev_cpy_end -= var_idx;
             continue;
         }
 
-        if (var_idx + v->rlen > ref.l) { // If a deletion overlaps the transcript end
-            ref.l -= (var_idx + v->rlen) - ref.l;
+        if (var_idx + r->v->rlen > ref.l) { // If a deletion overlaps the transcript end
+            ref.l -= (var_idx + r->v->rlen) - ref.l;
             continue;
         }
 
@@ -61,14 +61,14 @@ int get_haplotype_sequence(kstring_t ref, Variants vs, int seq_offset, int pos_o
         kputsn(src, segment_len, &seq);
 
         // Copy over variant
-        int alt_allele_len = strlen(v->d.allele[1]);
-        kputsn(v->d.allele[1], alt_allele_len, &seq);
+        int alt_allele_len = strlen(r->v->d.allele[1]);
+        kputsn(r->v->d.allele[1], alt_allele_len, &seq);
 
         // Update state for next iteration
-        prev_cpy_end = var_idx + v->rlen;
-        c_offset += alt_allele_len - v->rlen;
+        prev_cpy_end = var_idx + r->v->rlen;
+        c_offset += alt_allele_len - r->v->rlen;
 
-        if (alt_allele_len == 1 && v->rlen > 1) del_region = variant_to_iregion(v);
+        if (alt_allele_len == 1 && r->v->rlen > 1) del_region = variant_to_iregion(r->v);
     }
 
     // Copy over remaining reference sequence
