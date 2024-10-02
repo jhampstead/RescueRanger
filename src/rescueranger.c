@@ -1,4 +1,5 @@
 #include <cpliceai/range.h>
+#include <htslib/kstring.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -79,15 +80,6 @@
 #define PREDICTION_FLAGS_DESC "##INFO=<ID=PREDICTION_FLAGS,Number=.,Type=String,Description=\"Additional flags for the context in which the prediction happened.\">"
 
 #define INFO_TAGS { SPLICEAI_HAP_TAG, CS_TAG, RESCUE_TAG, RESCUE_TYPE_TAG, PTV_TAG, PTV_TYPE_TAG, PREDICTION_FLAGS_TAG }
-
-typedef kvec_t(bcf1_t *) Variants;
-
-typedef struct Transcript {
-    int rid;
-    gf_tscript_t *definition;
-} Transcript;
-
-typedef kvec_t(Transcript) Transcripts;
 
 typedef struct RecordBlock {
     int is_coding;
@@ -772,7 +764,7 @@ float *match_predictions_to_reference(float *predictions, bcf1_t *v, Records *rs
 //     kv_destroy(frameshifts_rescued);
 // }
 
-int add_rescueranger_tags(bcf_hdr_t *hdr) {
+static int add_rescueranger_tags(bcf_hdr_t *hdr) {
     const char *tags[7] = INFO_TAGS;
     const char *descriptions[7] = { SPLICEAI_HAP_DESC, CS_DESC, RESCUE_DESC, RESCUE_TYPE_DESC, PTV_DESC, PTV_TYPE_DESC, PREDICTION_FLAGS_DESC };
 
@@ -784,6 +776,105 @@ int add_rescueranger_tags(bcf_hdr_t *hdr) {
     }
 
     return 0;
+}
+
+static void filter_to_most_likely_prediction(size_t num_probabilities, float **probabilities) {
+    for (int i = 0; i < num_probabilities; i += NUM_SCORES) {
+        float max = 0;
+        int max_idx = 0;
+
+        for (int pred_idx = i; pred_idx < i+NUM_SCORES; pred_idx++) {
+            if ((*probabilities)[pred_idx] <= max) continue;
+
+            max = (*probabilities)[pred_idx];
+            max_idx = pred_idx;
+        }
+
+        for (int pred_idx = i; pred_idx < i+NUM_SCORES; pred_idx++) {
+            if (pred_idx == max_idx) continue;
+
+            (*probabilities)[pred_idx] = 0;
+        }
+    }
+}
+
+static int transform_to_posterior_probabilities(int target, size_t num_probabilities, float **probabilities) {
+    int i = 0;
+    float prior = 0;
+    int num_values = 0;
+
+    for (i = target; i < num_probabilities; i+=NUM_SCORES) {
+        if ((*probabilities)[i] == 0) continue;
+
+        num_values++;
+        prior += (*probabilities)[i];
+    }
+
+    if (prior == 0) return 0; // Nothing to do here
+
+    for (i = target; i < num_probabilities; i+=NUM_SCORES) {
+        if ((*probabilities)[i] == 0) continue;
+
+        (*probabilities)[i] /= prior;
+    }
+
+    return num_values;
+}
+
+static int set_transcript_exons(Transcript *transcript, const char *chr, const Range range, gff_t *gff) {
+    regidx_t *exons = gff_get(gff, idx_exon);
+    regitr_t *itr = regitr_init(exons);
+
+    if (regidx_overlap(exons, chr, range.start, range.end, itr) == 0) {
+        log_warn("No overlapping exons found for %s:%i-%i", chr, range.start, range.end);
+        regitr_destroy(itr);
+        return 0;
+    }
+
+    transcript->exons = malloc(transcript->mcds * sizeof(Range));
+    int i = 0;
+    while (regitr_overlap(itr)) {
+        gf_exon_t *exon = regitr_payload(itr, gf_exon_t *);
+
+        if (exon->tr->id != transcript->id) continue;
+
+        Range exon_range = (Range) {exon->beg, exon->end};
+
+        // Find possible UTR overlap
+        Range utr3_intersection;
+        int has_utr3 = 0;
+        if (transcript->utr3 != NULL) intersect_ranges(*transcript->utr3, exon_range, &utr3_intersection);
+
+        Range utr5_intersection;
+        int has_utr5 = 0;
+        if (transcript->utr5 != NULL) intersect_ranges(*transcript->utr5, exon_range, &utr5_intersection);
+
+        // All exons (as these are coding genes) should overlap a CDS
+        Range cds_intersection;
+        if (intersect_ranges(exon_range, *transcript->cds[i], &cds_intersection) == 0) { 
+            log_warn("Mismatch between exon and cds(+utr3/5), this may be an error in the gff");
+            transcript->exons[i] = NULL;
+        }
+
+        // Calculate length of CDS + possible UTR
+        int length = range_len(cds_intersection);
+        if (has_utr3) { length += range_len(utr3_intersection); }
+        if (has_utr5) { length += range_len(utr5_intersection); }
+
+        // Length of CDS + UTR should match exon
+        if (length != range_len(exon_range)) { 
+            log_warn("Mismatch between exon and cds(+utr3/5), this may be an error in the gff");
+            transcript->exons[i] = NULL;
+        }
+
+        transcript->exons[i] = malloc(sizeof(Range));
+        transcript->exons[i]->start = exon_range.start;
+
+        if (i == transcript->ncds) break; // All exons have been found
+
+    }
+
+    return 1;
 }
 
 int main(int argc, char *argv[]) {
@@ -814,8 +905,10 @@ int main(int argc, char *argv[]) {
     const char *output_vcf_path = argv[5];
     htsFile *fp_out = hts_open(output_vcf_path, "w");
     add_rescueranger_tags(hdr);
-
     bcf_hdr_write(fp_out, hdr);
+
+    const char *raw_score_path = "raw_scores.tsv";
+    FILE *raw_scores = fopen(raw_score_path, "w");
 
     bcf1_t *v = bcf_init();
 
@@ -853,7 +946,10 @@ int main(int argc, char *argv[]) {
         kv_push(RecordBlock, batches, block);
     }
 
-    Genes genes; kv_init(genes); // TODO: Turn this into a hash for faster accessing.
+    // Convert GFF structures to custom format for ease of use and manipulability
+    khash_t(GeneHash) *genes = kh_init_GeneHash();
+    khash_t(RangeHash) *cds_ranges = kh_init_RangeHash();
+
     for (int b = 0; b < batches.n; b++) {
         RecordBlock block = kv_A(batches, b);
         if (!block.is_coding) continue;
@@ -861,27 +957,76 @@ int main(int argc, char *argv[]) {
         // Find matching gff transcripts/genes for records in batch
         for (int i = 0; i < block.records->n; i++) {
             Record *r = kv_A(*block.records, i);
-            find_gf_tscripts_for_record(r, hdr, gff, &r->tscripts);
-            if (r->tscripts == NULL) continue; // A variant in a coding gene can still have no overlapping coding transcripts
+            gf_tscripts *tscripts = NULL;
+            find_gf_tscripts_for_record(r, hdr, gff, &tscripts);
+            if (tscripts == NULL) continue; // A variant in a coding gene can still have no overlapping coding transcripts
 
-            r->genes = malloc(sizeof(Genes));
-            kv_init(*r->genes);
-            for (int j = 0; j < r->tscripts->n; j++) {
-                gf_tscript_t *t = kv_A(*r->tscripts, j);
-                if (t == NULL) { kv_push(Gene *, *r->genes, NULL); continue; }
+            // Convert tscripts to Transcript
+            r->tscripts = malloc(sizeof(Transcripts));
+            kv_init(*r->tscripts);
+            for (int j = 0; j < tscripts->n; j++) {
+                gf_tscript_t *gf_t = kv_A(*tscripts, j);
+                if (gf_t == NULL) { kv_push(Transcript *, *r->tscripts, NULL); continue; }
 
-                uint32_t gene_id = t->gene->id;
-                int has_matched = 0;
+                Transcript *t = malloc(sizeof(Transcript));
+                t->id = gf_t->id;
+                t->start = gf_t->beg;
+                t->end = gf_t->end;
+                t->strand = gf_t->strand;
+                t->mcds = gf_t->mcds;
+                t->ncds = gf_t->ncds;
+                t->cds = malloc(t->mcds * sizeof(Range));
 
-                for (int k = 0; k < genes.n; k++) {
-                    Gene *gene = kv_A(genes, k);
-                    if (gene_id != gene->gff_id) continue;
+                
 
-                    has_matched = 1;
-                    kv_push(Gene *, *r->genes, gene);
+                for (int k = 0; k < t->ncds; k++) {
+                    uint32_t start, end;
+                    start = gf_t->cds[k]->beg;
+                    end = gf_t->cds[k]->beg + gf_t->cds[k]->len;
+                    uint64_t key = ((uint64_t) start << 32) + (uint64_t) end;
+
+                    // Store CDS that already exists
+                    khint64_t hash_index;
+                    hash_index = kh_get_RangeHash(cds_ranges, (khint64_t) key);
+                    if (hash_index != kh_end(cds_ranges)) {
+                        Range *cd = kh_val(cds_ranges, hash_index);
+                        t->cds[k] = cd;
+                        continue;
+                    }
+
+                    // CDS is unknown, create and store it
+                    Range *cd = malloc(sizeof(Range));
+                    cd->start = start;
+                    cd->end = end;
+
+                    int is_new;
+                    hash_index = kh_put_RangeHash(cds_ranges, key, &is_new);
+                    if (!is_new) {
+                        log_error("Failed to add CDS range %i-%i due to hash conflict.", start, end);
+                    }
+                    kh_val(cds_ranges, hash_index) = cd;
+                    t->cds[k] = cd;
                 }
 
-                if (has_matched) continue;
+                kv_push(Transcript *, *r->tscripts, t);
+            }
+
+            // Create Genes
+            r->transcript_genes = malloc(sizeof(Genes));
+            kv_init(*r->transcript_genes);
+            r->genes = malloc(sizeof(Genes));
+            kv_init(*r->genes);
+            for (int j = 0; j < tscripts->n; j++) {
+                gf_tscript_t *t = kv_A(*tscripts, j);
+                if (t == NULL) { kv_push(Gene *, *r->transcript_genes, NULL); continue; }
+
+                khint_t hash_index;
+                hash_index = kh_get_GeneHash(genes, (khint32_t) t->gene->id);
+                if (hash_index != kh_end(genes)) {
+                    Gene *gene = kh_val(genes, hash_index);
+                    kv_push(Gene *, *r->transcript_genes, gene);
+                    continue;
+                }
 
                 // No match found, create and store a new gene
                 Range gene_range = {t->gene->beg, t->gene->end};
@@ -892,14 +1037,26 @@ int main(int argc, char *argv[]) {
                 kstring_t s = { slen, slen+1, seq };
 
                 Gene *gene = malloc(sizeof(Gene));
-                gene->gff_id = gene_id;
+                gene->gff_id = t->gene->id;
                 gene->name = t->gene->name;
                 gene->coords = gene_range;
                 gene->seq = s;
                 gene->strand = t->gene->strand;
-                kv_push(Gene *, genes, gene);
+
+                // Add gene to hashmap
+                khint32_t key = gene->gff_id;
+                int is_new;
+                hash_index = kh_put_GeneHash(genes, key, &is_new);
+                if (!is_new) {
+                    log_error("Failed to add %s due to hash conflict.", gene->name);
+                }
+                kh_val(genes, hash_index) = gene;
+
                 kv_push(Gene *, *r->genes, gene);
+                kv_push(Gene *, *r->transcript_genes, gene);
             }
+
+            free(tscripts);
         }
     }
 
@@ -950,6 +1107,14 @@ int main(int argc, char *argv[]) {
                 Record *r = kv_A(*batch, i);
                 if (!r->triggers[SPLICE_TRIGGER] && !r->triggers[FRAMESHIFT_TRIGGER] && !r->triggers[STOP_TRIGGER]) continue;
 
+                // Initialize gene coding regions from GFF
+                kvec_t(int) ids;
+                kv_init(ids);
+
+                kvec_t(Range *) coding_regions;
+                kv_init(coding_regions);
+
+
                 for (int g = 0; g < r->genes->n; g++) {
                     Gene *gene = kv_A(*r->genes, g);
                     if (gene == NULL) continue;
@@ -978,8 +1143,6 @@ int main(int argc, char *argv[]) {
                     int hap_ref_offset = 0;
                     for (int l = 0; l < hap_ex.n; l++) hap_ref_offset += get_allele_offset_variant(kv_A(hap_ex, l)->v, gene->coords.start, gene->coords.end);
                     int hap_alt_offset = hap_ref_offset + get_allele_offset_variant(r->v, gene->coords.start, gene->coords.end);
-
-
 
                     // Haplotype ref/alt sequences
                     kstring_t hap_ref;
@@ -1045,6 +1208,14 @@ int main(int argc, char *argv[]) {
                     free(hap_alt_padded);
                     log_info("%d:%d", r->v->rid, r->v->pos);
 
+                    kstring_t s = {0};
+                    for (int i = 0; i < num_hap_alt_predictions; i++) {
+                        kputd(hap_alt_predictions[i], &s);
+                        if (i+1 < num_hap_alt_predictions) kputc('\t', &s);
+                    }
+                    fprintf(raw_scores, "%s\t%i\t%s\t%i\t%s\n", bcf_hdr_id2name(hdr, r->v->rid), r->v->pos+1, gene->name, p, s.s);
+                    free(s.s);
+
                     // Calculate scores between ref and hap_alt
                     Score score = calculate_delta_scores(r->v->d.allele[1], gene->name, ref_predictions, corrected_hap_alt_predictions, num_ref_predictions, CAI_DISTANCE);
                     log_info("%s - AG: %f \t AL: %f \t DG: %f \t DL: %f", score.gene, score.ag, score.al, score.dg, score.dl);
@@ -1052,9 +1223,6 @@ int main(int argc, char *argv[]) {
                     // Calculate scores between hap_ref and hap_alt
                     Score score_hap = calculate_delta_scores(r->v->d.allele[1], gene->name, corrected_hap_ref_predictions, corrected_hap_alt_predictions, num_ref_predictions, CAI_DISTANCE);
                     log_info("%s - AG: %f \t AL: %f \t DG: %f \t DL: %f", score_hap.gene, score_hap.ag, score_hap.al, score_hap.dg, score_hap.dl);
-
-                    kvec_t(Range *) coding_regions;
-                    kv_init(coding_regions);
 
                     int gain_pos = -1, loss_pos = -1;
                     int splice_variant_type = -1;
@@ -1074,29 +1242,44 @@ int main(int argc, char *argv[]) {
                         log_info("Splice frameshift: %d - %d / distance: %d", hap_gain_pos, hap_loss_pos, hap_gain_pos - hap_loss_pos);
                     }
 
-                    gf_tscript_t *t = kv_A(*r->tscripts, g);
-                    for (int i = 0; i < t->ncds; i++) {
+                    // Remove predictions that are most likely to be neutral
+                    filter_to_most_likely_prediction(num_hap_alt_predictions, &hap_alt_predictions);
 
-                        Range *region = malloc(sizeof(Range));
-                        region->start = t->cds[i]->pos;
-                        region->end = t->cds[i]->pos + t->cds[i]->len;
+                    // Scale donor/acceptor probabilities by their prior
+                    int num_acceptors = transform_to_posterior_probabilities(ACCEPTOR_POS, num_hap_alt_predictions, &hap_alt_predictions);
+                    int num_donors = transform_to_posterior_probabilities(DONOR_POS, num_hap_alt_predictions, &hap_alt_predictions);
 
-                        if (splice_variant_type >= 0) {
-                            if (splice_variant_type == 0) { // Donor
-                                region->end = gain_pos;
-                            } else { // Acceptor
-                                region->start = gain_pos;
-                            }
-                        }
-                        kv_push(Range *, coding_regions, region);
-                    }
+                    // Store splice events, { type, position, posterior_probability }
 
-                    for (int i = 0; i < t->ncds; i++) { free(kv_A(coding_regions, i)); }
-                    kv_destroy(coding_regions);
+                    // Is cryptic splice site and posterior_probability > 0?
+                    // If yes, predict for competitor, results in cryptic + canonical pair, competitor + canonical pair
+
+                    // Is posterior_probability < 1?
+                    // If yes, predict for canonical pair and closest canonical competitor, if competitor is within 500 basepairs
+                    // Determine if pair is lost (e.g., exon skipping)
+                    // Determine likelihoods of canonical site + canonical pair, competitor + canonical pair
+
+
+                    // Transcript *t = kv_A(*r->tscripts, g);
+                    // for (int i = 0; i < t->ncds; i++) {
+                    //     Range *region = malloc(sizeof(Range));
+                    //     region->start = t->cds[i]->start;
+                    //     region->end = t->cds[i]->end;
+                    //
+                    //     if (splice_variant_type >= 0) {
+                    //         if (splice_variant_type == 0) { // Donor
+                    //             region->end = gain_pos;
+                    //         } else { // Acceptor
+                    //             region->start = gain_pos;
+                    //         }
+                    //     }
+                    // }
 
                     free(ref_predictions);
                     free(hap_ref_predictions);
                     free(corrected_hap_ref_predictions);
+                    free(hap_alt_predictions);
+                    free(corrected_hap_alt_predictions);
 
                     free(hap_ref.s);
                     free(hap_alt.s);
@@ -1115,12 +1298,23 @@ int main(int argc, char *argv[]) {
     }
 
 
-    // Free genes
-    for (int i = 0; i < genes.n; i++) {
-        free(kv_A(genes, i)->seq.s);
-        free(kv_A(genes, i));
+    // Free genes hashmap
+    for (int k = kh_begin(genes); k != kh_end(genes); ++k) {
+        if (kh_exist(genes, k)) {
+            Gene *gene = kh_value(genes, k);
+            free(gene->seq.s);
+            free(gene);
+        }
     }
-    kv_destroy(genes);
+    kh_destroy_GeneHash(genes);
+
+    // Free CDS ranges
+    for (int k = kh_begin(cds_ranges); k != kh_end(cds_ranges); ++k) {
+        if (!kh_exist(cds_ranges, k)) break;
+
+        Range *cd = kh_value(cds_ranges, k);
+        free(cd);
+    }
 
     // Free batches
     for (int i = 0; i < batches.n; i++) {
@@ -1134,6 +1328,9 @@ int main(int argc, char *argv[]) {
         free(block.records);
     }
     kv_destroy(batches);
+
+    // Free raw scores file
+    fclose(raw_scores);
 
     // Free remaining allocs
     gff_destroy(gff);

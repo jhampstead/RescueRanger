@@ -1,14 +1,35 @@
 #ifndef RECORD_HEADER
 #define RECORD_HEADER
 
+#include <htslib/khash.h>
 #include <htslib/vcf.h>
 #include <htslib/khash_str2int.h>
+#include <klib/khash.h>
+#include <stdint.h>
 
 #include "klib/kvec.h"
 #include "bcftools/gff.h"
 
 #include "cpliceai/range.h"
 
+
+// typedef struct CDS {
+//     uint64_t id:32;
+//     Range coords;
+// } CDS;
+
+typedef struct Transcript
+{
+    uint32_t id;        // transcript id
+    uint32_t start,end;   // transcript's beg and end coordinate (ref strand, 0-based, inclusive)
+    uint32_t strand:2,  // STRAND_REV,FWD,UNK
+             ncds:30,   // number of exon coding regions
+             mcds;
+    Range **cds;     // ordered list of exon coding regions
+    Range **exons;
+    Range *utr5;
+    Range *utr3;
+} Transcript;
 
 typedef struct Gene {
     uint32_t gff_id;
@@ -19,6 +40,9 @@ typedef struct Gene {
 } Gene;
 
 typedef kvec_t(Gene *) Genes;
+
+KHASH_MAP_INIT_INT64(RangeHash, Range *);
+KHASH_MAP_INIT_INT(GeneHash, Gene *);
 
 typedef struct ConsequencePredictions {
     kstring_t **hap_score;
@@ -41,12 +65,15 @@ typedef kvec_t(TscriptCsqs) VepCsqs;
 
 typedef kvec_t(gf_tscript_t *) gf_tscripts;
 
+typedef kvec_t(Transcript *) Transcripts;
+
 typedef struct Record {
     bcf1_t *v;
     VepCsqs *vep;
     int triggers[3];
     ConsequencePredictions *c;
-    gf_tscripts *tscripts;
+    Transcripts *tscripts;
+    Genes *transcript_genes;
     Genes *genes;
 } Record;
 
