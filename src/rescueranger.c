@@ -821,12 +821,26 @@ static int transform_to_posterior_probabilities(int target, size_t num_probabili
     return num_values;
 }
 
-static int set_transcript_exons(Transcript *transcript, const char *chr, const Range range, gff_t *gff) {
+static int set_transcript_utrs(Transcript *transcript, const char *chr, gff_t *gff) {
+    regidx_t *utrs = gff_get(gff, idx_utr);
+    regitr_t *itr = regitr_init(utrs);
+
+    if (regidx_overlap(utrs, chr, transcript->start, transcript->end, itr) == 0) {
+        log_warn("No overlapping exons found for %s:%i-%i", chr, transcript->start, transcript->end);
+        regitr_destroy(itr);
+        return 0;
+    }
+
+    regitr_destroy(itr);
+    return 1;
+}
+
+static int set_transcript_exons(Transcript *transcript, const char *chr, gff_t *gff) {
     regidx_t *exons = gff_get(gff, idx_exon);
     regitr_t *itr = regitr_init(exons);
 
-    if (regidx_overlap(exons, chr, range.start, range.end, itr) == 0) {
-        log_warn("No overlapping exons found for %s:%i-%i", chr, range.start, range.end);
+    if (regidx_overlap(exons, chr, transcript->start, transcript->end, itr) == 0) {
+        log_warn("No overlapping exons found for %s:%i-%i", chr, transcript->start, transcript->end);
         regitr_destroy(itr);
         return 0;
     }
@@ -836,6 +850,7 @@ static int set_transcript_exons(Transcript *transcript, const char *chr, const R
     while (regitr_overlap(itr)) {
         gf_exon_t *exon = regitr_payload(itr, gf_exon_t *);
 
+        // Exons for other transcripts and genes can overlap, but we don't want them!
         if (exon->tr->id != transcript->id) continue;
 
         Range exon_range = (Range) {exon->beg, exon->end};
@@ -852,7 +867,7 @@ static int set_transcript_exons(Transcript *transcript, const char *chr, const R
         // All exons (as these are coding genes) should overlap a CDS
         Range cds_intersection;
         if (intersect_ranges(exon_range, *transcript->cds[i], &cds_intersection) == 0) { 
-            log_warn("Mismatch between exon and cds(+utr3/5), this may be an error in the gff");
+            log_error("Mismatch between exon and cds(+utr3/5), this may be an error in the gff");
             transcript->exons[i] = NULL;
         }
 
@@ -863,17 +878,21 @@ static int set_transcript_exons(Transcript *transcript, const char *chr, const R
 
         // Length of CDS + UTR should match exon
         if (length != range_len(exon_range)) { 
-            log_warn("Mismatch between exon and cds(+utr3/5), this may be an error in the gff");
+            log_error("Mismatch between exon and cds(+utr3/5), this may be an error in the gff");
             transcript->exons[i] = NULL;
         }
 
         transcript->exons[i] = malloc(sizeof(Range));
         transcript->exons[i]->start = exon_range.start;
 
-        if (i == transcript->ncds) break; // All exons have been found
-
+        i++;
     }
 
+    if (i != transcript->ncds) {
+        log_error("Expected %i exons, found %i", transcript->ncds, i);
+    }
+
+    regitr_destroy(itr);
     return 1;
 }
 

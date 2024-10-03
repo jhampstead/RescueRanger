@@ -11,6 +11,7 @@
 #include "bcftools/gff.h"
 
 #include "cpliceai/range.h"
+#include "cpliceai/utils.h"
 
 
 // typedef struct CDS {
@@ -45,6 +46,8 @@ KHASH_MAP_INIT_INT64(RangeHash, Range *);
 KHASH_MAP_INIT_INT(GeneHash, Gene *);
 
 typedef struct ConsequencePredictions {
+    Score *complete_scores;
+    Score *hap_scores;
     kstring_t **hap_score;
     kstring_t **splice_change;
     kstring_t **is_rescue;
