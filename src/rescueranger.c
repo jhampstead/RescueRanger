@@ -50,11 +50,19 @@
 #define VARIANT_POS 5050
 #define SPLICEAI_THRESHOLD 0.8
 #define SPLICEAI_RESCUE_THRESHOLD 0.2
+#define SPLICEAI_CRYPTIC_SPLICE_THRESHOLD 0.5
+
+#define SPLICEAI_DS_AG_INDEX 2  // Index of DS_AG in the INFO/SpliceAI field
+#define SPLICEAI_DS_AL_INDEX 3  // Index of DS_AL in the INFO/SpliceAI field
+#define SPLICEAI_DS_DG_INDEX 4  // Index of DS_DG in the INFO/SpliceAI field
+#define SPLICEAI_DS_DL_INDEX 5  // Index of DS_DL in the INFO/SpliceAI field
 
 #define SPLICE_TRIGGER 0
 #define FRAMESHIFT_TRIGGER 1
 #define STOP_TRIGGER 2
 
+#define START_CODON "ATG"
+#define COMPLEMENTARY_START_CODON "CAT"
 #define STOP_CODONS {"TAG", "TGA", "TAA"}
 #define COMPLEMENTARY_STOP_CODONS {"ATC", "ACT", "ATT"}
 
@@ -896,6 +904,48 @@ static int set_transcript_exons(Transcript *transcript, const char *chr, gff_t *
     return 1;
 }
 
+int trigger_cryptic_splice(bcf1_t *rec, bcf_hdr_t *hdr) {
+    bcf_info_t *info = bcf_get_info(hdr, rec, "SpliceAI");
+    if (info == NULL) {
+        fprintf(stderr, "SpliceAI tag not found in record\n");
+        return 0;  // Cryptic splice trigger is never activated if SpliceAI scores don't exist in input VCF record
+    }
+
+    char *spliceai_string = (char*) info->vptr;
+    int len = info->len;
+
+    char *spliceai_copy = strndup(spliceai_string, len); // Make a copy of the SpliceAI string for safe tokenising
+    char *token;
+    int i = 0;
+    double spliceai_scores[4] = {0.0};  // Store DS_AG, DS_AL, DS_DG, DS_DL
+
+    token = strtok(spliceai_copy, "|");
+    while (token != NULL) {
+        if (i == SPLICEAI_DS_AG_INDEX) {
+            spliceai_scores[0] = atof(token);
+        } else if (i == SPLICEAI_DS_AL_INDEX) {
+            spliceai_scores[1] = atof(token);
+        } else if (i == SPLICEAI_DS_DG_INDEX) {
+            spliceai_scores[2] = atof(token);
+        } else if (i == SPLICEAI_DS_DL_INDEX) {
+            spliceai_scores[3] = atof(token);
+        }
+
+        token = strtok(NULL, "|");
+        i++;
+    }
+
+    free(spliceai_copy);
+
+    for (int i = 0; i < 4; i++) {
+        if (scores[i] >= SPLICEAI_CRYPTIC_SPLICE_THRESHOLD) {
+            return 1;  // Set cryptic splice trigger to 1 if values are greater than CRYPTIC_SPLICE_THRESHOLD
+        }
+    }
+
+    return 0;
+}
+
 int main(int argc, char *argv[]) {
     log_set_level(2);
     setenv("TF_CPP_MIN_LOG_LEVEL", "1", 1);
@@ -1109,6 +1159,8 @@ int main(int argc, char *argv[]) {
             }
 
             // TODO: Check SpliceAI output for rescue triggers
+            // TODO: Change SPLICE_TRIGGER to CRYPTIC_SPLICE_TRIGGER here
+            r->triggers[SPLICE_TRIGGER] = trigger_cryptic_splice(r->v, hdr);
         }
     }
 
