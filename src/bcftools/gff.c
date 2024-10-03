@@ -108,7 +108,7 @@ struct gff_t_
 
     // the main regidx lookups, from chr:beg-end to overlapping features and
     // index iterator
-    regidx_t *idx_cds, *idx_utr, *idx_exon, *idx_tscript;
+    regidx_t *idx_cds, *idx_utr, *idx_exon, *idx_tscript, *idx_gene;
 
     // temporary structures, deleted after initializtion
     aux_t init;
@@ -183,6 +183,7 @@ void *gff_get(gff_t *gff, gff_opt_t key)
         case idx_utr: return gff->idx_utr;
         case idx_exon: return gff->idx_exon;
         case idx_tscript: return gff->idx_tscript;
+        case idx_gene: return gff->idx_gene;
         default:
             error("The key %d is not supported with gff_get\n",key);
     }
@@ -492,6 +493,7 @@ static void gff_parse_gene(gff_t *gff, const char *line, ftr_t *ftr)
 {
     aux_t *aux = &gff->init;
     if ( !aux->id ) return;
+    ftr->type = gff_parse_biotype(aux->biotype);
 
     uint32_t gene_id;
     gff_id_register(&aux->gene_ids, aux->id, aux->id_end, &gene_id);
@@ -506,6 +508,7 @@ static void gff_parse_gene(gff_t *gff, const char *line, ftr_t *ftr)
     }
 
     gene->iseq   = feature_set_seq(gff, aux->chr,aux->chr_end);
+    gene->type   = ftr->type;
     gene->beg    = ftr->beg;
     gene->end    = ftr->end;
     gene->strand = ftr->strand;
@@ -519,6 +522,8 @@ static void gff_parse_gene(gff_t *gff, const char *line, ftr_t *ftr)
     }
     else
         gene->name = strdup(aux->gene_ids.str[gene_id]); // Name=<GeneName> field is not present, use the gene ID instead
+
+    regidx_push(gff->idx_gene, aux->chr, aux->chr_end, gene->beg,gene->end, &gene);
 }
 
 // Returns 0 for exons,CDS,UTRs to indicate these need to be pruned later and regidx built on them,
@@ -978,6 +983,7 @@ int gff_parse(gff_t *gff)
     aux->seq2int   = khash_str2int_init();   // chrom's numeric id
     aux->gid2gene  = kh_init(int2gene);      // gene id to gf_gene_t, for idx_gene
     aux->id2tr     = kh_init(int2tscript);   // transcript id to tscript_t
+    gff->idx_gene = regidx_init(NULL, NULL, NULL, sizeof(gf_gene_t*), NULL);
     gff->idx_tscript = regidx_init(NULL, NULL, regidx_free_tscript, sizeof(gf_tscript_t*), NULL);
     aux->ignored_biotypes = khash_str2int_init();
     gff_id_init(&aux->gene_ids);
@@ -1109,6 +1115,7 @@ void gff_destroy(gff_t *gff)
     regidx_destroy(gff->idx_cds);
     regidx_destroy(gff->idx_utr);
     regidx_destroy(gff->idx_exon);
+    regidx_destroy(gff->idx_gene);
     regidx_destroy(gff->idx_tscript);
 
     gff_id_destroy(&gff->tscript_ids);

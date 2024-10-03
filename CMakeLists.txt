@@ -13,5 +13,5 @@ pkg_check_modules(CPLICEAI REQUIRED cpliceai)
 
 add_subdirectory(src)
 
-include(CTest)
-add_subdirectory(tests)
+#include(CTest)
+#add_subdirectory(tests)

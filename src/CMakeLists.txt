@@ -1,5 +1,5 @@
 set(CMAKE_CXX_FLAGS_DEBUG_INIT "-Wall -g -DLOG_USE_COLOR")
-set(CMAKE_CXX_FLAGS_RELEASE_INIT "-O3")
+set(CMAKE_CXX_FLAGS_RELEASE_INIT "-O2")
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/build)
 
 # Create executable
@@ -18,6 +18,14 @@ target_link_libraries(rescueranger Logging)
 # Add region
 add_library(Region STATIC region.c)
 target_link_libraries(rescueranger Region)
+
+# Add range
+#add_library(Range STATIC range.c)
+#target_link_libraries(rescueranger Range)
+
+# Add record
+add_library(Record STATIC record.c)
+target_link_libraries(rescueranger Record)
 
 # Add utils
 add_library(Utils STATIC utils.c)
