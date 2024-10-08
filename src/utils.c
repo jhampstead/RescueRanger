@@ -30,7 +30,7 @@ int64_t get_position_in_haplotype(int64_t pos, Records *rs, int64_t start, int64
 int get_haplotype_sequence(kstring_t ref, Records *rs, int seq_offset, int pos_offset, kstring_t *out_hap) {
     // Prepare kstring
     kstring_t seq;
-    seq.m = ref.l + seq_offset + 1; 
+    seq.m = ref.l - seq_offset + 1; 
     seq.l = 0;
     seq.s = malloc(seq.m);
 
@@ -45,12 +45,12 @@ int get_haplotype_sequence(kstring_t ref, Records *rs, int seq_offset, int pos_o
         Record *r = kv_A(*rs, i);
 
         int var_idx = r->v->pos - pos_offset;
-        if (var_idx < 0) { // If a deletion overlaps the transcript start
+        if (var_idx < 0) { // If a deletion overlaps the start
             prev_cpy_end -= var_idx;
             continue;
         }
 
-        if (var_idx + r->v->rlen > ref.l) { // If a deletion overlaps the transcript end
+        if (var_idx + r->v->rlen > ref.l) { // If a deletion overlaps the end
             ref.l -= (var_idx + r->v->rlen) - ref.l;
             continue;
         }

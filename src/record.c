@@ -27,7 +27,6 @@ void init_consequence_predictions(ConsequencePredictions **dst, int num_conseque
     csq_preds->ptv_type = malloc(num_consequences * sizeof(kstring_t *));
     csq_preds->flags = malloc(num_consequences * sizeof(kstring_t *));
 
-
     for (int i = 0; i < num_consequences; i++) {
         csq_preds->hap_score[i] = calloc(1, sizeof(kstring_t));
         csq_preds->splice_change[i] = calloc(1, sizeof(kstring_t));
@@ -211,6 +210,8 @@ Record *init_record(bcf1_t *v, VepCsqs *csqs) {
     r->genes = NULL;
     r->tscripts = NULL;
     r->vep = NULL;
+    r->complete_scores = NULL;
+    r->hap_scores = NULL;
 
     if (csqs == NULL) {
         return r;

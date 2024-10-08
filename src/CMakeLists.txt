@@ -1,11 +1,13 @@
 set(CMAKE_CXX_FLAGS_DEBUG_INIT "-Wall -g -DLOG_USE_COLOR")
-set(CMAKE_CXX_FLAGS_RELEASE_INIT "-O2")
+set(CMAKE_C_FLAGS_DEBUG_INIT "-Wall -g -DLOG_USE_COLOR")
+set(CMAKE_CXX_FLAGS_RELEASE_INIT "-O3")
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/build)
 
 # Create executable
 add_executable(rescueranger rescueranger.c)
 
 # Link external libraries
+#target_link_libraries(rescueranger asan)
 target_link_libraries(rescueranger ${HTSLIB_LIBRARIES})
 target_link_libraries(rescueranger ${CPLICEAI_LIBRARIES})
 

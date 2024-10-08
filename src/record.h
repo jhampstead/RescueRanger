@@ -14,10 +14,10 @@
 #include "cpliceai/utils.h"
 
 
-// typedef struct CDS {
-//     uint64_t id:32;
-//     Range coords;
-// } CDS;
+typedef struct Exon {
+    Range *cds;
+    Range *bounds;
+} Exon;
 
 typedef struct Transcript
 {
@@ -27,9 +27,8 @@ typedef struct Transcript
              ncds:30,   // number of exon coding regions
              mcds;
     Range **cds;     // ordered list of exon coding regions
-    Range **exons;
-    Range *utr5;
-    Range *utr3;
+    uint32_t nexons, mexons;
+    Exon **exons;
 } Transcript;
 
 typedef struct Gene {
@@ -46,8 +45,6 @@ KHASH_MAP_INIT_INT64(RangeHash, Range *);
 KHASH_MAP_INIT_INT(GeneHash, Gene *);
 
 typedef struct ConsequencePredictions {
-    Score *complete_scores;
-    Score *hap_scores;
     kstring_t **hap_score;
     kstring_t **splice_change;
     kstring_t **is_rescue;
@@ -75,6 +72,9 @@ typedef struct Record {
     VepCsqs *vep;
     int triggers[3];
     ConsequencePredictions *c;
+
+    Score **hap_scores;
+    Score **complete_scores;
     Transcripts *tscripts;
     Genes *transcript_genes;
     Genes *genes;
