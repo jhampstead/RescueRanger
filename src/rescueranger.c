@@ -458,7 +458,7 @@ static void get_haplotype_sequence(const kstring_t reference_sequence, const Rec
         int skipped_bases = intersected_alt.start - alt.start; // Only non-zero in case of a deletion overlapping start
         strncpy(haplotype_sequence.s + hap_idx, r->v->d.allele[1] + skipped_bases, alt_segment);
 
-        ref_idx += range_len(ref);
+        ref_idx += range_len(intersected_ref);
         hap_idx += range_len(intersected_alt);
     }
 
