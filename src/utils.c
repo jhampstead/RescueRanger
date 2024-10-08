@@ -39,6 +39,7 @@ int get_haplotype_sequence(kstring_t ref, Records *rs, int seq_offset, int pos_o
     int c_offset = 0;
 
     IRegion del_region = {-1, -1, -1};
+
     int prev_alt_allele_len = 0;
     for (int i = 0; i < rs->n; i++) {
         // Get current variant info

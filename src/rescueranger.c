@@ -434,35 +434,34 @@ static void get_haplotype_sequence(const kstring_t reference_sequence, const Rec
     for (int i = 0; i < rs->n; i++) {
         Record *r = kv_A(*rs, i);
 
-        // Get reference position
+        // Get reference position, intersected to gene boundaries to manage start overlap
         Range ref = variant_to_range(r->v, 0);
+        Range intersected_ref; intersect_ranges(ref, gene, &intersected_ref);
         shift_range(&ref, -gene.start);
+        shift_range(&intersected_ref, -gene.start);
 
         // Get alt position, intersected to gene boundaries
-        Range complete_alt = variant_to_range(r->v, 1);
-        Range intersected_alt; intersect_ranges(complete_alt, gene, &intersected_alt);
-        shift_range(&complete_alt, -gene.start);
+        Range alt = variant_to_range(r->v, 1);
+        Range intersected_alt; intersect_ranges(alt, gene, &intersected_alt);
+        shift_range(&alt, -gene.start);
         shift_range(&intersected_alt, -gene.start);
 
         // Copy over reference sequence without variants
-        int ref_segment = ref.start - ref_idx;
+        int ref_segment = intersected_ref.start - ref_idx;
         strncpy(haplotype_sequence.s + hap_idx, reference_sequence.s + ref_idx, ref_segment);
-        // kputsn(reference_sequence.s + ref_idx, ref_segment, &haplotype_sequence);
 
         ref_idx += ref_segment;
         hap_idx += ref_segment;
 
         // Copy over variant
         int alt_segment = range_len(intersected_alt);
-        int skipped_bases = intersected_alt.start - complete_alt.start; // Only non-zero in case of a deletion overlapping start
+        int skipped_bases = intersected_alt.start - alt.start; // Only non-zero in case of a deletion overlapping start
         strncpy(haplotype_sequence.s + hap_idx, r->v->d.allele[1] + skipped_bases, alt_segment);
-        // kputsn(r->v->d.allele[1] + skipped_bases, alt_segment, &haplotype_sequence);
 
         ref_idx += range_len(ref);
         hap_idx += range_len(intersected_alt);
     }
 
-    // kputsn(reference_sequence.s + ref_idx, reference_sequence.l - ref_idx, &haplotype_sequence);
     strncpy(haplotype_sequence.s + hap_idx, reference_sequence.s + ref_idx, reference_sequence.l - ref_idx);
     haplotype_sequence.s[haplotype_sequence.l] = '\0';
  
