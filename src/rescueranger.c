@@ -1292,12 +1292,13 @@ int main(int argc, char *argv[]) {
                     }
 
                     // Shift transcripts by gene
-                    // for (int ti = 0; ti < r->tscripts->n; ti++) {
-                    //     if (kv_A(*r->transcript_genes, ti)->gff_id != gene->gff_id) continue;
-                    //
-                    //     Transcript *t = kv_A(*r->tscripts, ti);
-                    //     shift_exons_to_haplotype_sequence(t, gene, &hap_in);
-                    // }
+                    for (int ti = 0; ti < r->tscripts->n; ti++) {
+                        Gene *transcript_gene = kv_A(*r->transcript_genes, ti);
+                        if (transcript_gene == NULL || transcript_gene->gff_id != gene->gff_id) continue;
+
+                        Transcript *t = kv_A(*r->tscripts, ti);
+                        shift_exons_to_haplotype_sequence(t, gene, &hap_in);
+                    }
 
                     log_info("%d:%d", r->v->rid, r->v->pos);
                     // Haplotype ref/alt sequences
