@@ -14,15 +14,34 @@
 #include "cpliceai/utils.h"
 
 
+typedef struct SpliceSite {
+    uint32_t position;
+    uint32_t predicted; // whether haplotype prediction has been run for the splice site
+    uint32_t gff_canonical; // whether the splice site is canonical in the GFF
+    float prior_probability; // raw SpliceAI probability
+    float posterior_probability; // scaled probability across window
+} SpliceSite;
+
+typedef struct SpliceSites {
+    SpliceSite *canonical_donors;
+    SpliceSite *canonical_acceptors;
+    SpliceSite *cryptic_donors;
+    SpliceSite *cryptic_acceptors;
+    uint32_t n_canonical_donors, m_canonical_donors;
+    uint32_t n_canonical_acceptors, m_canonical_acceptors;
+    uint32_t n_cryptic_donors, m_cryptic_donors;
+    uint32_t n_cryptic_acceptors, m_cryptic_acceptors;
+} SpliceSites;
+
 typedef struct Exon {
     Range *cds;
     Range *bounds;
+    SpliceSites *splice_sites;
 } Exon;
 
-typedef struct Transcript
-{
+typedef struct Transcript {
     uint32_t id;        // transcript id
-    uint32_t start,end;   // transcript's beg and end coordinate (ref strand, 0-based, inclusive)
+    uint32_t start, end;   // transcript's start and end coordinate (ref strand, 0-based, inclusive)
     uint32_t strand:2,  // STRAND_REV,FWD,UNK
              ncds:30,   // number of exon coding regions
              mcds;
