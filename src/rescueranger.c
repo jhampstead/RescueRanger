@@ -188,7 +188,7 @@ void predict_for_seq(Model *models, const char *seq, int seq_len, int strand, fl
     if (strand == STRAND_REV) reverse_prediction(*predictions, *num_predictions, 3);
 }
 
-void get_best_insertion_score(float *insert_start, int length, float *best) {
+void get_best_insertion_score(const float *insert_start, const int length, float *best) {
     for (int i = 0; i < length; i+=3) {
         for (int j = 0; j < 3; j++) {
             if (insert_start[i + j] > best[j]) best[j] = insert_start[i+j];
@@ -371,7 +371,7 @@ int haplotype_offset(const Records *rs, const Range bounds) {
     return offset;
 }
 
-float *match_predictions_to_reference(float *predictions, bcf1_t *v, Records *rs, size_t num_reference_predictions) {
+float *match_predictions_to_reference(const float *predictions, const bcf1_t *v, const Records *rs, const size_t num_reference_predictions) {
     float *corrected_predictions = malloc(num_reference_predictions * sizeof(float));
     Range pred_range = {v->pos - (CAI_DISTANCE), v->pos + CAI_DISTANCE+1};
 
@@ -380,14 +380,14 @@ float *match_predictions_to_reference(float *predictions, bcf1_t *v, Records *rs
         Record *r = kv_A(*rs, l);
 
         Range ref;
-        if (intersect_ranges((Range) {r->v->pos, r->v->pos + r->v->rlen}, pred_range, &ref) == 0) continue;
+        if (intersect_ranges(variant_to_range(r->v, 0), pred_range, &ref) == 0) continue;
         shift_range(&ref, -pred_range.start);
         int ref_len = range_len(ref);
         if (ref_len == 0) continue;
 
         Range alt;
         int alt_len = 0;
-        if (intersect_ranges((Range) {r->v->pos, r->v->pos + strlen(r->v->d.allele[1])}, pred_range, &alt) > 0) {
+        if (intersect_ranges(variant_to_range(r->v, 1), pred_range, &alt) > 0) {
             shift_range(&alt, -pred_range.start);
             alt_len = range_len(alt);
         }
@@ -403,7 +403,7 @@ float *match_predictions_to_reference(float *predictions, bcf1_t *v, Records *rs
             memcpy(corrected_predictions + ref_segment.start, predictions + hap_idx + segment_len, range_len(ref_segment) * sizeof(float));
         } else if (offset < 0) {
             float best_scores[3] = {0};
-            get_best_insertion_score(predictions + hap_idx + segment_len, range_len(alt), best_scores);
+            get_best_insertion_score(predictions + hap_idx + segment_len, alt_len, best_scores);
             memcpy(corrected_predictions + ref_segment.start, best_scores, 3 * sizeof(float));
          } else { // offset > 0
             memcpy(corrected_predictions + ref_segment.start, predictions + hap_idx + segment_len, 3 * sizeof(float));
@@ -436,30 +436,35 @@ static void get_haplotype_sequence(const kstring_t reference_sequence, const Rec
 
         // Get reference position, intersected to gene boundaries to manage start overlap
         Range ref = variant_to_range(r->v, 0);
-        Range intersected_ref; intersect_ranges(ref, gene, &intersected_ref);
+        Range intersected_ref = {0}; 
+        if (intersect_ranges(ref, gene, &intersected_ref) == 0) continue;
         shift_range(&ref, -gene.start);
         shift_range(&intersected_ref, -gene.start);
+        int ref_segment = intersected_ref.start - ref_idx;
 
         // Get alt position, intersected to gene boundaries
         Range alt = variant_to_range(r->v, 1);
-        Range intersected_alt; intersect_ranges(alt, gene, &intersected_alt);
-        shift_range(&alt, -gene.start);
-        shift_range(&intersected_alt, -gene.start);
+        Range intersected_alt = {0}; 
+        int alt_segment = 0, skipped_bases = 0;
+        if (intersect_ranges(alt, gene, &intersected_alt)) {
+            shift_range(&alt, -gene.start);
+            shift_range(&intersected_alt, -gene.start);
+
+            alt_segment = range_len(intersected_alt);
+            skipped_bases = intersected_alt.start - alt.start; // Only ever non-zero in the case of a deletion overlapping start
+        }
 
         // Copy over reference sequence without variants
-        int ref_segment = intersected_ref.start - ref_idx;
         strncpy(haplotype_sequence.s + hap_idx, reference_sequence.s + ref_idx, ref_segment);
 
         ref_idx += ref_segment;
         hap_idx += ref_segment;
 
         // Copy over variant
-        int alt_segment = range_len(intersected_alt);
-        int skipped_bases = intersected_alt.start - alt.start; // Only non-zero in case of a deletion overlapping start
         strncpy(haplotype_sequence.s + hap_idx, r->v->d.allele[1] + skipped_bases, alt_segment);
 
         ref_idx += range_len(intersected_ref);
-        hap_idx += range_len(intersected_alt);
+        hap_idx += alt_segment;
     }
 
     strncpy(haplotype_sequence.s + hap_idx, reference_sequence.s + ref_idx, reference_sequence.l - ref_idx);
@@ -955,22 +960,20 @@ static int set_transcript_exons(Transcript *transcript, const char *chr, gff_t *
     return 1;
 }
 
-static int shift_exons_to_haplotype_sequence(Transcript *t, Gene *g, Records *rs) {
+static void shift_exons_to_haplotype_sequence(const Transcript *t, const Range gene, const Records *rs) {
     for (int i = 0; i < t->nexons; i++) {
         Exon *exon = t->exons[i];
 
         // Shift ranges to by start of gene to make them relative to gene start
-        shift_range(exon->bounds, -g->coords.start);
-        exon->bounds->start -= haplotype_offset(rs, (Range) { g->coords.start, exon->bounds->start });
-        exon->bounds->end -= haplotype_offset(rs, (Range) { g->coords.start, exon->bounds->end });
+        shift_range(exon->bounds, -gene.start);
+        exon->bounds->start -= haplotype_offset(rs, (Range) { gene.start, exon->bounds->start });
+        exon->bounds->end -= haplotype_offset(rs, (Range) { gene.start, exon->bounds->end });
 
         if (exon->cds == NULL) continue; // Can't shift the CDS if it doesn't exist
-        shift_range(exon->cds, -g->coords.start);
-        exon->cds->start -= haplotype_offset(rs, (Range) { g->coords.start, exon->cds->start });
-        exon->cds->end -= haplotype_offset(rs, (Range) { g->coords.start, exon->cds->end });
+        shift_range(exon->cds, -gene.start);
+        exon->cds->start -= haplotype_offset(rs, (Range) { gene.start, exon->cds->start });
+        exon->cds->end -= haplotype_offset(rs, (Range) { gene.start, exon->cds->end });
     }
-
-    return 1;
 }
 
 int trigger_cryptic_splice(bcf1_t *rec, bcf_hdr_t *hdr) {
@@ -1271,18 +1274,27 @@ int main(int argc, char *argv[]) {
                     Gene *gene = kv_A(*r->genes, g);
                     if (gene == NULL) continue;
 
+                    Range intersection;
+                    intersect_ranges(gene->coords, variant_to_range(r->v, 0), &intersection);
+                    if (range_len(intersection) == 0) continue;
+
                     // Find records for the current allele
                     Records hap_in; kv_init(hap_in); // Variants for current allele including current variant
                     Records hap_ex; kv_init(hap_ex); // Variant for current allele excluding current variant
 
                     for (int j = 0; j < batch->n; j++) {
                         Record *hap_r = kv_A(*batch, j);
+                        Range record_range = variant_to_range(r->v, 0);
 
                         for (int g2 = 0; g2 < hap_r->genes->n; g2++) {
                             Gene *gene2 = kv_A(*hap_r->genes, g2);
                             if (gene2 == NULL) continue;
 
                             if (gene->gff_id == gene2->gff_id) {
+                                Range intersection;
+                                intersect_ranges(gene->coords, record_range, &intersection);
+                                if (range_len(intersection) == 0) continue;
+
                                 kv_push(Record *, hap_in, hap_r);
 
                                 if (hap_r == r) continue;
@@ -1292,15 +1304,16 @@ int main(int argc, char *argv[]) {
                     }
 
                     // Shift transcripts by gene
-                    for (int ti = 0; ti < r->tscripts->n; ti++) {
-                        Gene *transcript_gene = kv_A(*r->transcript_genes, ti);
-                        if (transcript_gene == NULL || transcript_gene->gff_id != gene->gff_id) continue;
-
-                        Transcript *t = kv_A(*r->tscripts, ti);
-                        shift_exons_to_haplotype_sequence(t, gene, &hap_in);
-                    }
+                    // for (int ti = 0; ti < r->tscripts->n; ti++) {
+                    //     Gene *transcript_gene = kv_A(*r->transcript_genes, ti);
+                    //     if (transcript_gene == NULL || transcript_gene->gff_id != gene->gff_id) continue;
+                    //
+                    //     Transcript *t = kv_A(*r->tscripts, ti);
+                    //     shift_exons_to_haplotype_sequence(t, gene->coords, &hap_in);
+                    // }
 
                     log_info("%d:%d", r->v->rid, r->v->pos);
+
                     // Haplotype ref/alt sequences
                     kstring_t hap_ref;
                     get_haplotype_sequence(gene->seq, &hap_ex, gene->coords, &hap_ref);
@@ -1332,21 +1345,21 @@ int main(int argc, char *argv[]) {
                         int64_t gene_end = gene->coords.end - haplotype_offset(&hap_ex, gene->coords);
                         int64_t vposition = r->v->pos - haplotype_offset(&hap_ex, (Range) {gene->coords.start, r->v->pos});
 
-                        int32_t hap_ref_start = VARIANT_POS + (gene_start - vposition);
-                        int32_t hap_ref_end = VARIANT_POS - (gene_end - vposition) - pred_offset;
+                        // int32_t hap_ref_start = VARIANT_POS + (gene_start - vposition);
+                        // int32_t hap_ref_end = VARIANT_POS - (gene_end - vposition) - pred_offset;
+                        //
+                        // char *hap_ref_seq = hap_ref.s - hap_ref_start;
+                        // if (hap_ref_start < 0) hap_ref_start = 0;
+                        // if (hap_ref_end < 0) hap_ref_end = 0;
 
-                        char *hap_ref_seq = hap_ref.s - hap_ref_start;
-                        if (hap_ref_start < 0) hap_ref_start = 0;
-                        if (hap_ref_end < 0) hap_ref_end = 0;
+                        // Range hap_ref_boundary = {hap_ref_start, hap_ref_end};
+                        // char *hap_ref_padded = pad_sequence(hap_ref_seq, hap_ref_boundary, WIDTH - pred_offset);
+                        // float *hap_ref_predictions; int num_hap_ref_predictions;
+                        // int hap_ref_len = strlen(hap_ref_padded);
+                        // predict_for_seq(models, hap_ref_padded, hap_ref_len, gene->strand, &hap_ref_predictions, &num_hap_ref_predictions);
+                        // float *corrected_hap_ref_predictions = match_predictions_to_reference(hap_ref_predictions, r->v, &hap_ex, num_ref_predictions);
 
-                        Range hap_ref_boundary = {hap_ref_start, hap_ref_end};
-                        char *hap_ref_padded = pad_sequence(hap_ref_seq, hap_ref_boundary, WIDTH - pred_offset);
-                        float *hap_ref_predictions; int num_hap_ref_predictions;
-                        int hap_ref_len = strlen(hap_ref_padded);
-                        predict_for_seq(models, hap_ref_padded, hap_ref_len, gene->strand, &hap_ref_predictions, &num_hap_ref_predictions);
-                        float *corrected_hap_ref_predictions = match_predictions_to_reference(hap_ref_predictions, r->v, &hap_ex, num_ref_predictions);
-
-                        free(hap_ref_padded);
+                        // free(hap_ref_padded);
 
                         // HAP ALT
                         pred_offset = prediction_offset(r->v, &hap_in);
@@ -1381,22 +1394,10 @@ int main(int argc, char *argv[]) {
                         log_info("%s - AG: %f \t AL: %f \t DG: %f \t DL: %f", score.gene, score.ag, score.al, score.dg, score.dl);
 
                         // Calculate scores between hap_ref and hap_alt
-                        Score score_hap = calculate_delta_scores(r->v->d.allele[1], gene->name, corrected_hap_ref_predictions, corrected_hap_alt_predictions, num_ref_predictions, CAI_DISTANCE);
-                        log_info("%s - AG: %f \t AL: %f \t DG: %f \t DL: %f", score_hap.gene, score_hap.ag, score_hap.al, score_hap.dg, score_hap.dl);
+                        // Score score_hap = calculate_delta_scores(r->v->d.allele[1], gene->name, corrected_hap_ref_predictions, corrected_hap_alt_predictions, num_ref_predictions, CAI_DISTANCE);
+                        // log_info("%s - AG: %f \t AL: %f \t DG: %f \t DL: %f", score_hap.gene, score_hap.ag, score_hap.al, score_hap.dg, score_hap.dl);
                         r->complete_scores[g * NUM_PHASES + p] = malloc(sizeof(Score));
-                        *r->complete_scores[g * NUM_PHASES + p] = score_hap;
-
-                        int gain_pos = -1, loss_pos = -1;
-                        int splice_variant_type = -1;
-                        if ((score.dg > SPLICEAI_THRESHOLD) & (score.dl > SPLICEAI_THRESHOLD)) {
-                            gain_pos = r->v->pos + score.dg_idx;
-                            loss_pos = r->v->pos + score.dl_idx;
-                            splice_variant_type = 0;
-                        } else if ((score.ag > SPLICEAI_THRESHOLD) & (score.al > SPLICEAI_THRESHOLD)) {
-                            gain_pos = r->v->pos + score.ag_idx;
-                            loss_pos = r->v->pos + score.al_idx;
-                            splice_variant_type = 1;
-                        }
+                        *r->complete_scores[g * NUM_PHASES + p] = score;
 
                         // Remove predictions that are most likely to be neutral
                         filter_to_most_likely_prediction(num_hap_alt_predictions, &hap_alt_predictions);
@@ -1495,8 +1496,8 @@ int main(int argc, char *argv[]) {
                         // } 
 
                         free(ref_predictions);
-                        free(hap_ref_predictions);
-                        free(corrected_hap_ref_predictions);
+                        // free(hap_ref_predictions);
+                        // free(corrected_hap_ref_predictions);
                         free(hap_alt_predictions);
                         free(corrected_hap_alt_predictions);
                     } else {
