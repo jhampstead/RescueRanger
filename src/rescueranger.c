@@ -92,8 +92,8 @@
 #define INFO_TAGS { SPLICEAI_HAP_TAG, CS_TAG, RESCUE_TAG, RESCUE_TYPE_TAG, PTV_TAG, PTV_TYPE_TAG, PREDICTION_FLAGS_TAG }
 
 enum SpliceType {
-    ACCEPTOR,
-    DONOR
+    ACCEPTOR = 1,
+    DONOR = 2
 };
 
 typedef struct SpliceProbability {
@@ -353,11 +353,12 @@ int allele_offset(const bcf1_t *v, const int ref_index, const int alt_index, con
 
     Range alt = variant_to_range(v, alt_index);
     Range alt_range;
-    if (intersect_ranges(alt, bounds, &alt_range) == 0) {
-        return 0;
+    int alt_len = 0;
+    if (intersect_ranges(alt, bounds, &alt_range) != 0) {
+        alt_len = range_len(alt_range);
     }
 
-    return range_len(ref_range) - range_len(alt_range);
+    return range_len(ref_range) - alt_len;
 }
 
 int haplotype_offset(const Records *rs, const Range bounds) {
@@ -924,7 +925,7 @@ static int set_transcript_exons(Transcript *transcript, const char *chr, gff_t *
 
     transcript->nexons = 0;
     transcript->mexons = transcript->mcds ? transcript->mcds : 4;
-    transcript->exons = malloc(transcript->mexons * sizeof(Exon));
+    transcript->exons = malloc(transcript->mexons * sizeof(Exon *));
 
     int ci = 0;
     while (regitr_overlap(itr)) {
@@ -934,7 +935,7 @@ static int set_transcript_exons(Transcript *transcript, const char *chr, gff_t *
         if (gf_e->tr->id != transcript->id) continue;
 
         Range *cds = NULL;
-        if (ci < transcript->ncds) cds = transcript->cds[ci++];
+        if (ci < transcript->ncds) cds = &transcript->cds[ci++];
 
         Range *exon = malloc(sizeof(Range));
         *exon = (Range) {gf_e->beg, gf_e->end};
@@ -942,7 +943,7 @@ static int set_transcript_exons(Transcript *transcript, const char *chr, gff_t *
         // Resize as needed
         if (transcript->nexons >= transcript->mexons) {
             transcript->mexons *= 2;
-            transcript->exons = realloc(transcript->exons, transcript->mexons * sizeof(Exon));
+            transcript->exons = realloc(transcript->exons, transcript->mexons * sizeof(Exon *));
         }
 
 
@@ -951,7 +952,7 @@ static int set_transcript_exons(Transcript *transcript, const char *chr, gff_t *
         if (cds != NULL) intersect_ranges(*exon, *cds, &cds_intersection);
 
         transcript->exons[transcript->nexons] = malloc(sizeof(Exon));
-        *transcript->exons[transcript->nexons] = (Exon) { cds, exon };
+        *transcript->exons[transcript->nexons] = (Exon) { cds, exon, NULL };
         transcript->nexons++;
     }
 
@@ -1019,6 +1020,27 @@ int trigger_cryptic_splice(bcf1_t *rec, bcf_hdr_t *hdr) {
     return 0;
 }
 
+float * predict_on_sequence(Model *models, char *seq, uint32_t position, Range prediction_boundaries, int strand, Records rs) {
+    int64_t gene_start = prediction_boundaries.start;
+    int64_t gene_end = prediction_boundaries.end - haplotype_offset(&rs, prediction_boundaries);
+    int64_t vposition = position - haplotype_offset(&rs, (Range) { prediction_boundaries.start, position });
+
+    int32_t start_offset = VARIANT_POS + (gene_start - position);
+    int32_t end_offset = VARIANT_POS - (gene_end - position);
+
+    char *shifted_seq = seq - start_offset;
+    if (start_offset < 0) start_offset = 0;
+    if (end_offset < 0) end_offset = 0;
+
+    Range padding_boundary = {start_offset, end_offset};
+    char *padded_seq = pad_sequence(shifted_seq, padding_boundary, WIDTH);
+    float *predictions; int num_predictions;
+    predict_for_seq(models, padded_seq, WIDTH, strand, &predictions, &num_predictions);
+    free(padded_seq);
+
+    return predictions;
+}
+
 int main(int argc, char *argv[]) {
     log_set_level(2);
     setenv("TF_CPP_MIN_LOG_LEVEL", "1", 1);
@@ -1042,7 +1064,7 @@ int main(int argc, char *argv[]) {
     log_debug("Loading VCF from: %s", input_vcf_path);
     htsFile *fp_in = hts_open(input_vcf_path, "r");
     bcf_hdr_t *hdr = bcf_hdr_read(fp_in);
-    HdrFormat *vep_fmt = parse_csq_format(hdr);
+    HdrFormat *vep_fmt = parse_csq_hdr_fmt(hdr);
 
     const char *output_vcf_path = argv[5];
     htsFile *fp_out = hts_open(output_vcf_path, "w");
@@ -1090,7 +1112,7 @@ int main(int argc, char *argv[]) {
 
     // Convert GFF structures to custom format for ease of use and manipulability
     khash_t(GeneHash) *genes = kh_init_GeneHash();
-    khash_t(RangeHash) *cds_ranges = kh_init_RangeHash();
+    khash_t(TranscriptHash) *transcripts = kh_init_TranscriptHash();
 
     for (int b = 0; b < batches.n; b++) {
         RecordBlock block = kv_A(batches, b);
@@ -1110,46 +1132,35 @@ int main(int argc, char *argv[]) {
                 gf_tscript_t *gf_t = kv_A(*tscripts, j);
                 if (gf_t == NULL) { kv_push(Transcript *, *r->tscripts, NULL); continue; }
 
+                int key = gf_t->id;
+                khint32_t hash_index = kh_get_TranscriptHash(transcripts, key);
+                if (hash_index != kh_end(transcripts)) {
+                    Transcript *t = kh_val(transcripts, hash_index);
+                    kv_push(Transcript *, *r->tscripts, t);
+                    continue;
+                }
+
                 Transcript *t = malloc(sizeof(Transcript));
-                t->id = gf_t->id;
+                t->id = key;
                 t->start = gf_t->beg;
                 t->end = gf_t->end;
                 t->strand = gf_t->strand;
+
                 t->mcds = gf_t->mcds;
                 t->ncds = gf_t->ncds;
                 t->cds = malloc(t->mcds * sizeof(Range));
-
                 for (int k = 0; k < t->ncds; k++) {
-                    uint32_t start, end;
-                    start = gf_t->cds[k]->beg;
-                    end = gf_t->cds[k]->beg + gf_t->cds[k]->len;
-                    uint64_t key = ((uint64_t) start << 32) + (uint64_t) end;
-
-                    // Store CDS that already exists
-                    khint64_t hash_index;
-                    hash_index = kh_get_RangeHash(cds_ranges, (khint64_t) key);
-                    if (hash_index != kh_end(cds_ranges)) {
-                        Range *cd = kh_val(cds_ranges, hash_index);
-                        t->cds[k] = cd;
-                        continue;
-                    }
-
-                    // CDS is unknown, create and store it
-                    Range *cd = malloc(sizeof(Range));
-                    cd->start = start;
-                    cd->end = end;
-
-                    int is_new;
-                    hash_index = kh_put_RangeHash(cds_ranges, key, &is_new);
-                    if (!is_new) {
-                        log_error("Failed to add CDS range %i-%i due to hash conflict.", start, end);
-                    }
-                    kh_val(cds_ranges, hash_index) = cd;
-                    t->cds[k] = cd;
+                    uint32_t start = gf_t->cds[k]->beg;
+                    uint32_t end = gf_t->cds[k]->beg + gf_t->cds[k]->len;
+                    t->cds[k] = (Range) { start, end };
                 }
 
                 const char *chr = bcf_hdr_id2name(hdr, r->v->rid);
                 set_transcript_exons(t, chr, gff);
+
+                int is_new;
+                hash_index = kh_put_TranscriptHash(transcripts, key, &is_new);
+                kh_val(transcripts, hash_index) = t;
 
                 kv_push(Transcript *, *r->tscripts, t);
             }
@@ -1303,15 +1314,6 @@ int main(int argc, char *argv[]) {
                         }
                     }
 
-                    // Shift transcripts by gene
-                    // for (int ti = 0; ti < r->tscripts->n; ti++) {
-                    //     Gene *transcript_gene = kv_A(*r->transcript_genes, ti);
-                    //     if (transcript_gene == NULL || transcript_gene->gff_id != gene->gff_id) continue;
-                    //
-                    //     Transcript *t = kv_A(*r->tscripts, ti);
-                    //     shift_exons_to_haplotype_sequence(t, gene->coords, &hap_in);
-                    // }
-
                     log_info("%d:%d", r->v->rid, r->v->pos);
 
                     // Haplotype ref/alt sequences
@@ -1393,9 +1395,6 @@ int main(int argc, char *argv[]) {
                         Score score = calculate_delta_scores(r->v->d.allele[1], gene->name, ref_predictions, corrected_hap_alt_predictions, num_ref_predictions, CAI_DISTANCE);
                         log_info("%s - AG: %f \t AL: %f \t DG: %f \t DL: %f", score.gene, score.ag, score.al, score.dg, score.dl);
 
-                        // Calculate scores between hap_ref and hap_alt
-                        // Score score_hap = calculate_delta_scores(r->v->d.allele[1], gene->name, corrected_hap_ref_predictions, corrected_hap_alt_predictions, num_ref_predictions, CAI_DISTANCE);
-                        // log_info("%s - AG: %f \t AL: %f \t DG: %f \t DL: %f", score_hap.gene, score_hap.ag, score_hap.al, score_hap.dg, score_hap.dl);
                         r->complete_scores[g * NUM_PHASES + p] = malloc(sizeof(Score));
                         *r->complete_scores[g * NUM_PHASES + p] = score;
 
@@ -1423,49 +1422,109 @@ int main(int argc, char *argv[]) {
                             splice_probabilities[prob_idx++] = (SpliceProbability) { type, probability, prediction_position };
                         }
 
-                        // Initialize canonical splice sites for exons
+                        // Shift exon position to haplotype sequence and initialize canonical splice sites for said positions
+                        for (int ti = 0; ti < r->tscripts->n; ti++) {
+                            Transcript *t = kv_A(*r->tscripts, ti);
+                            if (t == NULL) continue;
 
+                            for (int ei = 0; ei < t->nexons; ei++) {
+                                Exon *e = t->exons[ei];
+                                if (e->splice_sites != NULL) continue;
+                                int kept_start = 1, kept_end = 1;
 
-                        // if (r->triggers[SPLICE_TRIGGER] == CANONICAL_SPLICE_VALUE) { // A wild canonical splice site has been found!
-                        //     for (int i = 0; i > r->tscripts->n; i++) {
-                        //         Transcript *t = kv_A(*r->tscripts, i);
-                        //
-                        //         for (int si = 0; si < num_splice_probabilities; si++) {
-                        //             SpliceProbability probability = splice_probabilities[si];
-                        //             // If position is exon boundary, no splice change has occurred, and posterior is 1, set and continue
-                        //
-                        //             // Set variable: is_compensatory
-                        //             // If is_compensatory: Add as canonical site
-                        //             // Else: Add as cryptic site, predict for closest canonical competitor, if no prediction available
-                        //
-                        //             // Predict for paired canonical site, if no predicted available
-                        //             // Set variable: is_paired_compensatory
-                        //             // If !is_paired_compensatory: Add as a cryptic site, predict for closest canonical competitor, if no prediction available
-                        //             // Else: 
-                        //             /// If is_compensatory: Add as a canonical site
-                        //             /// Else: Predict for closest canonical competitor
-                        //
-                        //
-                        //             // If position is within compensatory window:
-                        //             /// Add as canonical site
-                        //             /// Predict for paired canonical site, if no prediction available
-                        //             /// If paired prediction is within compensatory window:
-                        //             //// Add as canonical site
-                        //             /// Else:
-                        //             //// If paired prediction, add as cryptic site, predict for closest canonical competitor, if no prediction available
-                        //
-                        //             // Else:
-                        //             /// If prediction, add as cryptic site, predict for closest canonical competitor, if no prediction available
-                        //             /// Predict for paired canonical site, if no prediction available
-                        //             /// If paired prediction is within compensatory window:
-                        //             //// Predict for closest canonical competitor, if no prediction available
-                        //             /// Else:
-                        //             //// If paired prediction, add as cryptic site, predict for closest canonical competitor, if no prediction available
-                        //
-                        //
-                        //         }
-                        //     }
-                        // }
+                                // Checks if donor/acceptor sites were lost due to a deletion  TODO: Check effect of +1 here in gdb
+                                Range canonical_start = (Range) { e->bounds->start, e->bounds->start+1 };
+                                Range canonical_end = (Range) { e->bounds->end, e->bounds->end+1 };
+                                for (int ri = 0; ri < hap_in.n; ri++) {
+                                    Record *hap_r = kv_A(hap_in, ri);
+                                    int is_deletion = allele_offset(hap_r->v, 0, 1, gene->coords) > 0;
+                                    if (!is_deletion) continue;
+
+                                    Range ref = variant_to_range(r->v, 0);
+
+                                    Range intersection;
+                                    if (intersect_ranges(ref, canonical_start, &intersection) && range_len(intersection) > 0) kept_start = 0;
+                                    if (intersect_ranges(ref, canonical_end, &intersection) && range_len(intersection) > 0) kept_end = 0;
+                                }
+
+                                uint32_t hap_start = e->bounds->start - haplotype_offset(&hap_in, (Range) { gene->coords.start, e->bounds->start });
+                                uint32_t hap_end = e->bounds->end - haplotype_offset(&hap_in, (Range) { gene->coords.start, e->bounds->end });
+
+                                SpliceSites *sites = malloc(sizeof(SpliceSites));
+                                init_splice_site(&sites->canonical_acceptors, &sites->n_canonical_acceptors, &sites->m_canonical_acceptors);
+                                init_splice_site(&sites->canonical_donors, &sites->n_canonical_donors, &sites->m_canonical_donors);
+                                init_splice_site(&sites->cryptic_acceptors, &sites->n_cryptic_acceptors, &sites->m_cryptic_acceptors);
+                                init_splice_site(&sites->cryptic_donors, &sites->n_cryptic_donors, &sites->m_cryptic_donors);
+
+                                if (t->strand == STRAND_FWD) {
+                                    if (ei > 0) sites->canonical_acceptors[sites->n_canonical_acceptors++] = (SpliceSite) { hap_start, 0, kept_start, 1.0, 1.0 };
+                                    if (ei < hap_in.n-1) sites->canonical_donors[sites->n_canonical_donors++] = (SpliceSite) { hap_end, 0, kept_end, 1.0, 1.0 };
+                                } if (t->strand == STRAND_UNK) {
+                                    if (ei < hap_in.n-1) sites->canonical_acceptors[sites->n_canonical_acceptors++] = (SpliceSite) { hap_end, 0, kept_end, 1.0, 1.0 };
+                                    if (ei > 0) sites->canonical_donors[sites->n_canonical_donors++] = (SpliceSite) { hap_start, 0, kept_start, 1.0, 1.0 };
+                                }
+
+                                *e->bounds = (Range) {hap_start, hap_end};
+                                e->splice_sites = sites;
+                            }
+                        }
+
+                        if (r->triggers[SPLICE_TRIGGER] == CANONICAL_SPLICE_VALUE) { // A wild canonical splice site has been found!
+                            for (int i = 0; i < r->tscripts->n; i++) {
+                                Transcript *t = kv_A(*r->tscripts, i);
+
+                                if (t == NULL) continue;
+                                for (int si = 0; si < num_splice_probabilities; si++) {
+                                    SpliceProbability probability = splice_probabilities[si];
+                                    // If position is canonical splice site, no splice change has occurred, and posterior is 1, set and continue
+                                    int is_canonical = 0, is_compensatory;
+                                    enum SpliceType splice_site_type;
+                                    SpliceSite target;
+
+                                    if (probability.type == ACCEPTOR) {
+                                        for (int ei = 1; ei < t->nexons; ei++) {
+                                            Exon *e = t->exons[ei];
+                                            SpliceSite acceptor = e->splice_sites->canonical_acceptors[0]; // 0 is the only possible gff_canonical
+                                            if (!acceptor.gff_canonical) continue; // If in deletion it can loose gff_canonical
+
+                                            SpliceSite donor = t->exons[ei-1]->splice_sites->canonical_donors[0];
+
+                                            if (probability.probability == 1 &&
+                                                probability.position == acceptor.position &&
+                                                acceptor.posterior_probability == 1) continue;
+
+                                            if (acceptor.gff_canonical && 
+                                                acceptor.position > probability.position ? 
+                                                acceptor.position - probability.position : 
+                                                probability.position - acceptor.position <= 15) {
+                                                if (!donor.predicted && donor.gff_canonical) {
+                                                    log_error("Additional prediction!");
+                                                    float *predictions = predict_on_sequence(models, hap_alt.s, donor.position, gene->coords, gene->strand, hap_in);
+                                                    // If compensatory gain on pair: add gain(s) as canonical splice sites
+                                                    // Else if gain is too far or acceptor, add as cryptic splice site
+                                                    /// Get downstream canonical acceptor, if it exists, predict for it
+                                                    /// If compensatory gain on competitor: add gain(s) as canonical splice sites
+                                                    /// Else if gain is too far or acceptor, add as cryptic splice site
+
+                                                    // free(predictions);
+                                                }
+                                            }
+                                        }
+                                    } else if (probability.type == DONOR) {
+                                        // for (int ei = 0; ei < t->nexons-1; ei++) {
+                                        //     Exon *e = t->exons[ei];
+                                        //     for (int ai = 0; ai < e->splice_sites->n_canonical_donors; ai++) {
+                                        //         SpliceSite donor = e->splice_sites->canonical_donors[ai];
+                                        //         if (probability.probability == 1 &&
+                                        //             probability.position == donor.position &&
+                                        //             donor.gff_canonical &&
+                                        //             donor.posterior_probability == 1) continue;
+                                        //     }
+                                        // }
+                                    }
+                                }
+                            }
+                        }
 
                         // if (r->triggers[SPLICE_TRIGGER] == CRYPTIC_SPLICE_VALUE) { // Cryptic splicing has occurred!
                         //     for (int i = 0; i < r->tscripts->n; i++) {
@@ -1594,12 +1653,12 @@ int main(int argc, char *argv[]) {
     kh_destroy_GeneHash(genes);
 
     // Free CDS ranges
-    for (int k = kh_begin(cds_ranges); k != kh_end(cds_ranges); ++k) {
-        if (!kh_exist(cds_ranges, k)) break;
-
-        Range *cd = kh_value(cds_ranges, k);
-        free(cd);
-    }
+    // for (int k = kh_begin(cds_ranges); k != kh_end(cds_ranges); ++k) {
+    //     if (!kh_exist(cds_ranges, k)) break;
+    //
+    //     Range *cd = kh_value(cds_ranges, k);
+    //     free(cd);
+    // }
 
     // Free batches
     for (int i = 0; i < batches.n; i++) {
