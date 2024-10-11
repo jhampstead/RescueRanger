@@ -890,24 +890,34 @@ static void filter_to_most_likely_prediction(size_t num_probabilities, float **p
     }
 }
 
-static int transform_to_posterior_probabilities(int target, size_t num_probabilities, float **probabilities) {
+static int transform_to_posterior_probabilities(int target, size_t num_probabilities, float **probabilities, float **posterior_probabilities) {
     int i = 0;
-    float prior = 0;
+    float sum = 0;
     int num_values = 0;
+
+    *posterior_probabilities = (float *)malloc(num_probabilities * sizeof(float));
+
+    for (i = 0; i < num_probabilities; i++) {
+        (*posterior_probabilities)[i] = 0;
+    }
 
     for (i = target; i < num_probabilities; i+=NUM_SCORES) {
         if ((*probabilities)[i] == 0) continue;
 
         num_values++;
-        prior += (*probabilities)[i];
+        sum += (*probabilities)[i];
     }
 
-    if (prior == 0) return 0; // Nothing to do here
+    if (sum == 0) {
+        free(*posterior_probabilities);
+        *posterior_probabilities = NULL; // Set pointer to NULL
+        return 0;
+    }
 
     for (i = target; i < num_probabilities; i+=NUM_SCORES) {
         if ((*probabilities)[i] == 0) continue;
 
-        (*probabilities)[i] /= prior;
+        (*posterior_probabilities)[i] = (*probabilities)[i] / sum;
     }
 
     return num_values;
@@ -1039,6 +1049,168 @@ float * predict_on_sequence(Model *models, char *seq, uint32_t position, Range p
     free(padded_seq);
 
     return predictions;
+}
+
+void create_splice_probabilities(int vposition, int num_hap_alt_predictions, float *hap_alt_predictions, SpliceProbability *splice_probabilities) {
+    float *posterior_probabilities = NULL;
+    int num_acceptors = transform_to_posterior_probabilities(ACCEPTOR_POS, num_hap_alt_predictions, hap_alt_predictions, &posterior_probabilities); // I think I don't need the & on hap_alt_predictions but not sure
+    int num_donors = transform_to_posterior_probabilities(DONOR_POS, num_hap_alt_predictions, hap_alt_predictions, &posterior_probabilities);
+
+    int num_splice_probabilities = num_acceptors + num_donors;
+
+    SpliceProbability splice_probabilities[num_splice_probabilities];
+    int prob_idx = 0;
+    for (int i = 0; i < num_hap_alt_predictions; i++) {
+        if (i % 3 == 0) continue; // Skip predictions for neither
+
+        float prior_probability = hap_alt_predictions[i];
+        float posterior_probability = posterior_probabilities[i];
+        if (posterior_probability == 0) continue; // Skip null predictions
+
+        int type = i % 3;
+        int offset_from_variant = ((int) (i / NUM_SCORES)) - CAI_DISTANCE;
+        int prediction_position = vposition + offset_from_variant;
+
+        splice_probabilities[prob_idx++] = (SpliceProbability) { type, prior_probability, posterior_probability, prediction_position };
+    }
+}
+
+void expand_splice_sites(SpliceSite **sites_array, size_t *current_size) {
+    *current_size *= 2;
+    *sites_array = realloc(*sites_array, (*current_size) * sizeof(SpliceSite));
+}
+
+int check_proximity(uint32_t predicted_position, uint32_t gff_canonical) {
+    if (abs((int32_t)predicted_position - (int32_t)gff_canonical) <= PROXIMITY_THRESHOLD) {
+        return 1;
+    }
+    return 0;
+}
+
+void assign_predictions_to_splice_sites(SpliceProbability *splice_predictions, size_t num_predictions, SpliceSites *splice_sites) {
+    for (size_t i = 0; i < num_predictions; i++) {
+        SpliceProbability prediction = splice_predictions[i];
+
+        if (prediction.type == DONOR & prediction.posterior_probability > 0) {
+            // Store canonical donor site
+            if (splice_sites->canonical_donors[0].gff_canonical & prediction.posterior_probability == 1 & prediction.position == splice_sites->canonical_donors[0].position) { // If canonical exists and is the only splice site within the window
+                splice_sites->canonical_donors[0].predicted = 1;
+                splice_sites->canonical_donors[0].prior_probability = prediction.prior_probability;
+                splice_sites->canonical_donors[0].posterior_probability = prediction.posterior_probability;
+            } else if (splice_sites->canonical_donors[0].gff_canonical & check_proximity(prediction.position, splice_sites->canonical_donors[0].position)) { // If canonical exists and site is compensatory for canonical
+                // Check if prediction position already exists as a canonical donor site
+                int canonical_donor_exists = 0;
+                int canonical_donor_predicted = 0;
+                for (int i = 0; i < splice_sites->n_canonical_donors; i++) {
+                    if (splice_sites->canonical_donors[i].position == prediction.position) {
+                        canonical_donor_exists = 1;
+                        if (splice_sites->canonical_donors[i].predicted == 1) {
+                            canonical_donor_predicted = 1;
+                        }
+                    }
+                }
+
+                if (canonical_donor_exists & canonical_donor_predicted) continue;
+                if (canonical_donor_exists & !canonical_donor_predicted) {
+                    for (int i = 0; i < splice_sites->n_canonical_donors; i++) {
+                        if (splice_sites->canonical_donors[i].position == prediction.position) {
+                            splice_sites->canonical_donors[i].predicted = 1;
+                            splice_sites->canonical_donors[i].prior_probability = prediction.prior_probability;
+                            splice_sites->canonical_donors[i].posterior_probability = prediction.posterior_probability;
+                        }
+                    }
+                } else {
+                    if (splice_sites->n_canonical_donors >= splice_sites->m_canonical_donors) {
+                        expand_splice_sites(&splice_sites->canonical_donors, &splice_sites->m_canonical_donors);
+                    }
+                    SpliceSite *canonical_donor = &splice_sites->canonical_donors[splice_sites->n_canonical_donors++];
+                    canonical_donor->predicted = 1;
+                    canonical_donor->position = prediction.position;
+                    canonical_donor->prior_probability = prediction.prior_probability;
+                    canonical_donor->posterior_probability = prediction.posterior_probability; 
+                }
+            // Store cryptic donor site
+            } else {
+                // Check if prediction position already exists as a cryptic donor site
+                int cryptic_donor_exists = 0;
+                for (int i = 0; i < splice_sites->n_cryptic_donors; i++) {
+                    if (splice_sites->cryptic_donors[i].position == prediction.position) {
+                        cryptic_donor_exists = 1;
+                    }
+                }
+
+                if (!cryptic_donor_exists) {
+                    if (splice_sites->n_cryptic_donors >= splice_sites->m_cryptic_donors) {
+                        expand_splice_sites(&splice_sites->cryptic_donors, &splice_sites->m_cryptic_donors);
+                    }
+                    SpliceSite *cryptic_donor = &splice_sites->canonical_donors[splice_sites->n_canonical_donors++];
+                    cryptic_donor->predicted = 1;
+                    cryptic_donor->position = prediction.position;
+                    cryptic_donor->prior_probability = prediction.prior_probability;
+                    cryptic_donor->posterior_probability = prediction.posterior_probability; 
+                }
+            }
+        } else if (prediction.type == ACCEPTOR & prediction.posterior_probability > 0) {
+            // Store canonical acceptor site
+            if (splice_sites->canonical_acceptors[0].gff_canonical & prediction.posterior_probability == 1 & prediction.position == splice_sites->canonical_acceptors[0].position) { // If canonical exists and is the only splice site within the window
+                splice_sites->canonical_acceptors[0].predicted = 1;
+                splice_sites->canonical_acceptors[0].prior_probability = prediction.prior_probability;
+                splice_sites->canonical_acceptors[0].posterior_probability = prediction.posterior_probability;
+            } else if (splice_sites->canonical_acceptors[0].gff_canonical & check_proximity(prediction.position, splice_sites->canonical_acceptors[0].position)) { // If canonical exists and site is compensatory for canonical
+                // Check if prediction position already exists as a canonical acceptor site
+                int canonical_acceptor_exists = 0;
+                int canonical_acceptor_predicted = 0;
+                for (int i = 0; i < splice_sites->n_canonical_acceptors; i++) {
+                    if (splice_sites->canonical_acceptors[i].position == prediction.position) {
+                        canonical_acceptor_exists = 1;
+                        if (splice_sites->canonical_acceptors[i].predicted == 1) {
+                            canonical_acceptor_predicted = 1;
+                        }
+                    }
+                }
+
+                if (canonical_acceptor_exists & canonical_acceptor_predicted) continue;
+                if (canonical_acceptor_exists & !canonical_acceptor_predicted) {
+                    for (int i = 0; i < splice_sites->n_canonical_acceptors; i++) {
+                        if (splice_sites->canonical_acceptors[i].position == prediction.position) {
+                            splice_sites->canonical_acceptors[i].predicted = 1;
+                            splice_sites->canonical_acceptors[i].prior_probability = prediction.prior_probability;
+                            splice_sites->canonical_acceptors[i].posterior_probability = prediction.posterior_probability;
+                        }
+                    }
+                } else {
+                    if (splice_sites->n_canonical_acceptors >= splice_sites->m_canonical_acceptors) {
+                        expand_splice_sites(&splice_sites->canonical_acceptors, &splice_sites->m_canonical_acceptors);
+                    }
+                    SpliceSite *canonical_acceptor = &splice_sites->canonical_acceptors[splice_sites->n_canonical_acceptors++];
+                    canonical_acceptor->predicted = 1;
+                    canonical_acceptor->position = prediction.position;
+                    canonical_acceptor->prior_probability = prediction.prior_probability;
+                    canonical_acceptor->posterior_probability = prediction.posterior_probability; 
+                }
+            // Store cryptic acceptor site
+            } else {
+                // Check if prediction position already exists as a cryptic acceptor site
+                int cryptic_acceptor_exists = 0;
+                for (int i = 0; i < splice_sites->n_cryptic_acceptors; i++) {
+                    if (splice_sites->cryptic_acceptors[i].position == prediction.position) {
+                        cryptic_acceptor_exists = 1;
+                    }
+                }
+
+                if (!cryptic_acceptor_exists) {
+                    if (splice_sites->n_cryptic_acceptors >= splice_sites->m_cryptic_acceptors) {
+                        expand_splice_sites(&splice_sites->cryptic_acceptors, &splice_sites->m_cryptic_acceptors);
+                    }
+                    SpliceSite *cryptic_acceptor = &splice_sites->cryptic_acceptors[splice_sites->n_cryptic_acceptors++];
+                    cryptic_acceptor->predicted = 1;
+                    cryptic_acceptor->position = prediction.position;
+                    cryptic_acceptor->prior_probability = prediction.prior_probability;
+                    cryptic_acceptor->posterior_probability = prediction.posterior_probability; 
+                }
+            }
+        }
+    }
 }
 
 int main(int argc, char *argv[]) {
@@ -1402,8 +1574,9 @@ int main(int argc, char *argv[]) {
                         filter_to_most_likely_prediction(num_hap_alt_predictions, &hap_alt_predictions);
 
                         // Scale donor/acceptor probabilities by their prior
-                        int num_acceptors = transform_to_posterior_probabilities(ACCEPTOR_POS, num_hap_alt_predictions, &hap_alt_predictions);
-                        int num_donors = transform_to_posterior_probabilities(DONOR_POS, num_hap_alt_predictions, &hap_alt_predictions);
+                        float *posterior_probabilities = NULL;
+                        int num_acceptors = transform_to_posterior_probabilities(ACCEPTOR_POS, num_hap_alt_predictions, &hap_alt_predictions, &posterior_probabilities);
+                        int num_donors = transform_to_posterior_probabilities(DONOR_POS, num_hap_alt_predictions, &hap_alt_predictions, &posterior_probabilities);
 
                         int num_splice_probabilities = num_acceptors + num_donors;
 
@@ -1412,7 +1585,7 @@ int main(int argc, char *argv[]) {
                         for (int i = 0; i < num_hap_alt_predictions; i++) {
                             if (i % 3 == 0) continue; // Skip predictions for neither
 
-                            float probability = hap_alt_predictions[i];
+                            float probability = posterior_probabilities[i];
                             if (probability == 0) continue; // Skip null predictions
 
                             int type = i % 3;
@@ -1485,7 +1658,7 @@ int main(int argc, char *argv[]) {
                                         for (int ei = 1; ei < t->nexons; ei++) {
                                             Exon *e = t->exons[ei];
                                             SpliceSite acceptor = e->splice_sites->canonical_acceptors[0]; // 0 is the only possible gff_canonical
-                                            if (!acceptor.gff_canonical) continue; // If in deletion it can loose gff_canonical
+                                            if (!acceptor.gff_canonical) continue; // If in deletion it can lose gff_canonical
 
                                             SpliceSite donor = t->exons[ei-1]->splice_sites->canonical_donors[0];
 
