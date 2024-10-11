@@ -353,11 +353,12 @@ int allele_offset(const bcf1_t *v, const int ref_index, const int alt_index, con
 
     Range alt = variant_to_range(v, alt_index);
     Range alt_range;
-    if (intersect_ranges(alt, bounds, &alt_range) == 0) {
-        return 0;
+    int alt_len = 0;
+    if (intersect_ranges(alt, bounds, &alt_range) != 0) {
+        alt_len = range_len(alt_range);
     }
 
-    return range_len(ref_range) - range_len(alt_range);
+    return range_len(ref_range) - alt_len;
 }
 
 int haplotype_offset(const Records *rs, const Range bounds) {
