@@ -58,6 +58,7 @@ typedef struct Gene {
     uint32_t strand;
 } Gene;
 
+typedef kvec_t(Range) Ranges;
 typedef kvec_t(Gene *) Genes;
 
 KHASH_MAP_INIT_INT64(RangeHash, Range *);
