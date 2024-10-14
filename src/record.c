@@ -19,7 +19,7 @@ const char *vep_feature_type_transcript = "Transcript";
 void init_consequence_predictions(ConsequencePredictions **dst, int num_consequences) {
     ConsequencePredictions *csq_preds = malloc(sizeof(ConsequencePredictions));
     csq_preds->num_consequences = num_consequences;
-    csq_preds->hap_score = malloc(num_consequences * sizeof(kstring_t *));
+    // csq_preds->hap_score = malloc(num_consequences * sizeof(kstring_t *));
     csq_preds->splice_change = malloc(num_consequences * sizeof(kstring_t *));
     csq_preds->is_rescue = malloc(num_consequences * sizeof(kstring_t *));
     csq_preds->rescue_type = malloc(num_consequences * sizeof(kstring_t *));
@@ -28,7 +28,7 @@ void init_consequence_predictions(ConsequencePredictions **dst, int num_conseque
     csq_preds->flags = malloc(num_consequences * sizeof(kstring_t *));
 
     for (int i = 0; i < num_consequences; i++) {
-        csq_preds->hap_score[i] = calloc(1, sizeof(kstring_t));
+        // csq_preds->hap_score[i] = calloc(1, sizeof(kstring_t));
         csq_preds->splice_change[i] = calloc(1, sizeof(kstring_t));
         csq_preds->is_rescue[i] = calloc(1, sizeof(kstring_t));
         csq_preds->rescue_type[i] = calloc(1, sizeof(kstring_t));
@@ -42,8 +42,8 @@ void init_consequence_predictions(ConsequencePredictions **dst, int num_conseque
 
 void destroy_consequence_predictions(ConsequencePredictions *csq_preds) {
     for (int i = 0; i < csq_preds->num_consequences; i++) {
-        if (csq_preds->hap_score[i]->m > 0) free(csq_preds->hap_score[i]->s);
-        free(csq_preds->hap_score[i]);
+        // if (csq_preds->hap_score[i]->m > 0) free(csq_preds->hap_score[i]->s);
+        // free(csq_preds->hap_score[i]);
 
         if (csq_preds->splice_change[i]->m > 0) free(csq_preds->splice_change[i]->s);
         free(csq_preds->splice_change[i]);
@@ -64,7 +64,7 @@ void destroy_consequence_predictions(ConsequencePredictions *csq_preds) {
         free(csq_preds->flags[i]);
     }
 
-    free(csq_preds->hap_score);
+    // free(csq_preds->hap_score);
     free(csq_preds->splice_change);
     free(csq_preds->is_rescue);
     free(csq_preds->rescue_type);
@@ -211,7 +211,7 @@ Record *init_record(bcf1_t *v, VepCsqs *csqs) {
     r->tscripts = NULL;
     r->vep = NULL;
     r->complete_scores = NULL;
-    r->hap_scores = NULL;
+    // r->hap_scores = NULL;
 
     if (csqs == NULL) {
         return r;
