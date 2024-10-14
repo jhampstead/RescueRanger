@@ -1533,12 +1533,13 @@ int main(int argc, char *argv[]) {
 
         for (int i = 0; i < block.records->n; i++) {
             Record *r = kv_A(*block.records, i);
+            if (!r->triggers[SPLICE_TRIGGER]) continue;
 
             kstring_t s = {0};
 
             int has_scores = 0;
             for (int g = 0; g < r->genes->n; g++) {
-                if (g > 0 && has_scores) kputc(',', &s);
+                if (g > 0) kputc(',', &s);
 
                 for (int p = 0; p < NUM_PHASES; p++) {
 
