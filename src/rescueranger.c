@@ -1491,8 +1491,8 @@ int main(int argc, char *argv[]) {
                             if (intersect_ranges(ref, canonical_end, &intersection) && range_len(intersection) > 0) kept_end = 0;
                         }
 
-                        uint32_t hap_start = e->bounds->start - haplotype_offset(&hap_in, (Range) { gene->coords.start, e->bounds->start });
-                        uint32_t hap_end = e->bounds->end - haplotype_offset(&hap_in, (Range) { gene->coords.start, e->bounds->end });
+                        uint32_t exon_hap_start = e->bounds->start - haplotype_offset(&hap_in, (Range) { gene->coords.start, e->bounds->start });
+                        uint32_t exon_hap_end = e->bounds->end - haplotype_offset(&hap_in, (Range) { gene->coords.start, e->bounds->end });
 
                         SpliceSites *sites = malloc(sizeof(SpliceSites));
                         init_splice_site(&sites->canonical_acceptors, &sites->n_canonical_acceptors, &sites->m_canonical_acceptors);
@@ -1501,18 +1501,25 @@ int main(int argc, char *argv[]) {
                         init_splice_site(&sites->cryptic_donors, &sites->n_cryptic_donors, &sites->m_cryptic_donors);
 
                         if (t->strand == STRAND_FWD) {
-                            if (ei > 0) sites->canonical_acceptors[sites->n_canonical_acceptors++] = (SpliceSite) { hap_start, 0, kept_start, 1.0, 1.0 };
-                            if (ei < hap_in.n-1) sites->canonical_donors[sites->n_canonical_donors++] = (SpliceSite) { hap_end, 0, kept_end, 1.0, 1.0 };
+                            if (ei > 0) sites->canonical_acceptors[sites->n_canonical_acceptors++] = (SpliceSite) { exon_hap_start, 0, kept_start, 1.0, 1.0 };
+                            if (ei < hap_in.n-1) sites->canonical_donors[sites->n_canonical_donors++] = (SpliceSite) { exon_hap_end, 0, kept_end, 1.0, 1.0 };
 
-                            *e->bounds = (Range) {hap_start, hap_end};
+                            *e->bounds = (Range) {exon_hap_start, exon_hap_end};
                         } else if (t->strand == STRAND_REV) {
-                            if (ei < hap_in.n-1) sites->canonical_acceptors[sites->n_canonical_acceptors++] = (SpliceSite) { hap_end, 0, kept_end, 1.0, 1.0 };
-                            if (ei > 0) sites->canonical_donors[sites->n_canonical_donors++] = (SpliceSite) { hap_start, 0, kept_start, 1.0, 1.0 };
+                            if (ei < hap_in.n-1) sites->canonical_acceptors[sites->n_canonical_acceptors++] = (SpliceSite) { exon_hap_end, 0, kept_end, 1.0, 1.0 };
+                            if (ei > 0) sites->canonical_donors[sites->n_canonical_donors++] = (SpliceSite) { exon_hap_start, 0, kept_start, 1.0, 1.0 };
 
-                            *e->bounds = (Range) {hap_end, hap_start};
+                            *e->bounds = (Range) {exon_hap_end, exon_hap_start};
                         }
 
                         e->splice_sites = sites;
+
+                        // Convert CDS boundaries to haplotype positions
+                        if (e->cds == NULL) continue;
+                        uint32_t cds_hap_start = e->cds->start - haplotype_offset(&hap_in, (Range) { gene->coords.start, e->cds->start });
+                        uint32_t cds_hap_end = e->cds->end - haplotype_offset(&hap_in, (Range) { gene->coords.start, e->cds->end });
+                        if (t->strand == STRAND_FWD) *e->cds = (Range) {cds_hap_start, cds_hap_end};
+                        if (t->strand == STRAND_REV) *e->cds = (Range) {cds_hap_end, cds_hap_start};
                     }
 
                     kv_destroy(hap_in);
@@ -1831,23 +1838,29 @@ int main(int argc, char *argv[]) {
                         }
                     }
 
-
                     // Initialize 2d array for storing noncoding regions
-                    int n_nc_regions = 0, m_nc_regions = t->nexons + 2;
+                    int n_nc_regions = 0, m_nc_regions = t->nexons+5; // TODO: rework this, +5 is messy, and probably not needed in the vast majority of cases
                     Ranges *nc_regions = malloc(m_nc_regions * sizeof(Ranges));
                     for (int i2 = 0; i2 < m_nc_regions; i2++) {
                         kv_init(nc_regions[i2]);
                     }
 
+                    int is_coding = 0;
                     if (t->strand == STRAND_FWD) {
                         for (int ei = 0; ei < t->nexons; ei++) {
                             Exon *e = t->exons[ei];
-                            if (ei == 0) {
-                                // Calculate GENE.start:CDS.start
+                            if (e->cds == NULL) continue;
+                            is_coding = 1;
+
+                            if (n_nc_regions == 0 && range_len(*e->bounds) != range_len(*e->cds) && e->bounds->start != e->cds->start) { // 5' UTR
+                                Range ncr = { gene->coords.start, e->cds->start };
+                                kv_push(Range, nc_regions[n_nc_regions], ncr);
                                 n_nc_regions++;
                             }
-                            if (ei == t->nexons-1) {
-                                // Calculate CDS.end:GENE.end
+                            if (n_nc_regions > 0 && range_len(*e->bounds) != range_len(*e->cds) && e->bounds->end != e->cds->end) { // 3' UTR
+                                Range ncr = { e->cds->end,  gene->coords.end };
+                                kv_push(Range, nc_regions[n_nc_regions], ncr);
+                                n_nc_regions++;
                                 break; // End of transcript
                             }
 
@@ -1859,14 +1872,17 @@ int main(int argc, char *argv[]) {
                             if (lost_canonical_acceptor) {
                                 if (ei+2 < t->nexons) target = t->exons[ei+2];
                             } else {
-                                target = t->exons[ei+1];
+                                if (ei+1 < t->nexons) target = t->exons[ei+1];
                             }
+
+                            // TODO: Add a way to handle missing canonical donor sites, and the possible exon skipped that would be induced
 
                             for (int di = 0; di < e->splice_sites->n_canonical_donors; di++) {
                                 uint32_t donor_pos = e->splice_sites->canonical_donors[di].position;
 
                                 if (target == NULL) {
                                     Range ncr = { donor_pos, gene->coords.end };
+                                    kv_push(Range, nc_regions[n_nc_regions], ncr);
                                     continue;
                                 }
 
@@ -1881,8 +1897,118 @@ int main(int argc, char *argv[]) {
                                     kv_push(Range, nc_regions[n_nc_regions], ncr);
                                 }
                             }
+
+                            n_nc_regions++;
+                        }
+                    } else if (t->strand == STRAND_REV) {
+                        for (int ei = t->nexons-1; ei >= 0; ei--) {
+                            Exon *e = t->exons[ei];
+                            if (e->cds == NULL) continue;
+                            is_coding = 1;
+
+                            if (n_nc_regions == 0 && range_len(*e->bounds) != range_len(*e->cds) && e->bounds->start != e->cds->start) { // 5' UTR
+                                Range ncr = { gene->coords.start, e->cds->start };
+                                kv_push(Range, nc_regions[n_nc_regions], ncr);
+                                n_nc_regions++;
+                            }
+                            if (n_nc_regions > 0 && range_len(*e->bounds) != range_len(*e->cds) && e->bounds->end != e->cds->end) { // 3' UTR
+                                Range ncr = { e->cds->end,  gene->coords.end };
+                                kv_push(Range, nc_regions[n_nc_regions], ncr);
+                                n_nc_regions++;
+                                break; // End of transcript
+                            }
+
+                            if (e->splice_sites->canonical_donors[0].gff_canonical == 0 && e->splice_sites->n_cryptic_donors == 0) continue; // No donors, skip
+                            int lost_canonical_acceptor = e->splice_sites->canonical_acceptors[0].gff_canonical == 0 && e->splice_sites->n_cryptic_acceptors == 0;
+
+                            // Get the exon in which the search for the acceptor will be performed
+                            Exon *target = NULL;
+                            if (lost_canonical_acceptor) {
+                                if (ei-2 >= 0) target = t->exons[ei-2];
+                            } else {
+                                if (ei-1 >= 0) target = t->exons[ei-1];
+                            }
+
+                            // TODO: Add a way to handle missing canonical donor sites, and the possible exon skipped that would be induced
+
+                            for (int di = 0; di < e->splice_sites->n_canonical_donors; di++) {
+                                uint32_t donor_pos = e->splice_sites->canonical_donors[di].position;
+
+                                if (target == NULL) {
+                                    Range ncr = { donor_pos, gene->coords.end };
+                                    kv_push(Range, nc_regions[n_nc_regions], ncr);
+                                    continue;
+                                }
+
+                                for (int ai = 0; ai < target->splice_sites->n_canonical_acceptors; ai++) {
+                                    if (ai == 0 && !e->splice_sites->canonical_acceptors[0].gff_canonical) continue; // Canonical acceptor is lost, can't be used
+                                    Range ncr = { donor_pos, target->splice_sites->canonical_acceptors[ai].position };
+                                    kv_push(Range, nc_regions[n_nc_regions], ncr);
+                                }
+
+                                for (int ai = 0; ai < target->splice_sites->n_cryptic_acceptors; ai++) {
+                                    Range ncr = { donor_pos, target->splice_sites->cryptic_acceptors[ai].position };
+                                    kv_push(Range, nc_regions[n_nc_regions], ncr);
+                                }
+                            }
+
+                            n_nc_regions++;
                         }
                     }
+
+                    if (!is_coding) continue; // Transcript is not protein-coding!
+
+                    int nisoforms = 0, misoforms = 1;
+                    for (int i = 0; i < n_nc_regions; i++) {
+                        Ranges ranges = nc_regions[i];
+                        if (ranges.n == 0) continue;
+
+                        misoforms *= ranges.n;
+                    }
+
+                    Ranges *isoforms = malloc(misoforms * sizeof(Ranges));
+                    for (int i = 0; i < misoforms; i++) {
+                        kv_init(isoforms[i]);
+                    }
+
+                    for (int i = 0; i < n_nc_regions; i++) {
+                        Ranges ranges = nc_regions[i];
+                        if (ranges.n == 0) continue;
+
+                        if (nisoforms == 0) { // First isoform
+                            for (int j = 0; j < ranges.n; j++) {
+                                Ranges first = isoforms[j];
+                                Range to_push = kv_A(ranges, j);
+                                kv_push(Range, first, to_push);
+                                nisoforms++;
+                            }
+                        } else { // Extend/duplicate isoforms already created
+                            // Copy over isoforms to add new endings
+                            int prior_n_isoforms = nisoforms;
+                            for (int j = 1; j < ranges.n; j++) {
+                                for (int k = 0; k < nisoforms; k++) {
+                                    Ranges original = isoforms[k];
+                                    Ranges new = isoforms[j * ranges.n + k];
+                                    kv_copy(Range, new, original);
+                                    nisoforms++;
+                                }
+                            }
+                        }
+
+                        for (int j = 0; j < ranges.n; j++) {
+                            for (int k = 0; k < nisoforms; k++) {
+                                Ranges target = isoforms[j * ranges.n + k];
+                                Range to_push = kv_A(ranges, j);
+                                kv_push(Range, target, to_push);
+                            }
+                        }
+                    }
+
+                    log_info("Number of isoforms created: %i", nisoforms);
+                    for (int i = 0; i < nisoforms; i++) {
+                        
+                    }
+
 
                     // Loop over isoforms and splice
                     // Generate sequence
@@ -1899,20 +2025,6 @@ int main(int argc, char *argv[]) {
                 }
             }
 
-
-
-            // Per gene
-
-            // Get haplotype sequence for complete set of records
-            // Create isoforms per transcript
-            // Splice haplotype sequence using isoforms
-
-            // Check direction of transcript, generate complementary sequence if needed
-
-            // Check for frameshift rescue
-            // Check for stopgain rescue
-
-
             kv_destroy(*batch);
             free(batch);
         }
@@ -1926,7 +2038,7 @@ int main(int argc, char *argv[]) {
 
             int has_scores = 0;
             for (int g = 0; g < r->genes->n; g++) {
-                if (g > 0 && has_scores) kputc(',', &s);
+                if (g > 0) kputc(',', &s);
 
                 for (int p = 0; p < NUM_PHASES; p++) {
 
