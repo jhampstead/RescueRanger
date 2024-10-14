@@ -1234,6 +1234,18 @@ int main(int argc, char *argv[]) {
             // Check VEP consequences for rescue triggers
             for (int j = 0; j < r->vep->n; j++) {
                 TscriptCsqs transcript_consequence = kv_A(*r->vep, j);
+
+                int is_non_coding = 0;
+                for (int k = 0; k < transcript_consequence.num_consequences; k++) {
+                    const char *consequence = transcript_consequence.consequences[k];
+                    if (strcmp(consequence, "non_coding_transcript_variant") == 0 ||
+                        strcmp(consequence, "NMD_transcript_variant") == 0) {
+                        is_non_coding = 1;
+                    }
+                }
+
+                if (is_non_coding) continue;
+
                 for (int k = 0; k < transcript_consequence.num_consequences; k++) {
                     const char *consequence = transcript_consequence.consequences[k];
 
