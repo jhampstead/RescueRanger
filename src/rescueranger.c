@@ -183,7 +183,6 @@ void predict_for_seq(Model *models, const char *seq, int seq_len, int strand, fl
     if (predict(models, enc_len, 1, &ohe, num_predictions, predictions)) {
         log_info("Predict failed.");
 
-
         return;
     }
     free(ohe);
@@ -1081,125 +1080,252 @@ int check_proximity(uint32_t predicted_position, uint32_t canonical_site_positio
     return abs((int32_t)predicted_position - (int32_t)canonical_site_position) <= PROXIMITY_THRESHOLD;
 }
 
-
-
-void assign_prediction_to_splice_sites(const SpliceProbability prediction, const size_t num_predictions, SpliceSites *splice_sites) {
-    if (prediction.type == DONOR && prediction.posterior_probability > 0) {
-        // Store canonical donor site
-        if (splice_sites->canonical_donors[0].gff_canonical && prediction.posterior_probability == 1 && prediction.position == splice_sites->canonical_donors[0].position) { // If canonical exists and is the only splice site within the window
-            splice_sites->canonical_donors[0].predicted = 1;
-            splice_sites->canonical_donors[0].prior_probability = prediction.prior_probability;
-            splice_sites->canonical_donors[0].posterior_probability = prediction.posterior_probability;
-        } else if (splice_sites->canonical_donors[0].gff_canonical && check_proximity(prediction.position, splice_sites->canonical_donors[0].position)) { // If canonical exists and site is compensatory for canonical
-            // Check if prediction position already exists as a canonical donor site
-            int canonical_donor_exists = 0;
-            int canonical_donor_predicted = 0;
-            for (int i = 0; i < splice_sites->n_canonical_donors; i++) {
-                if (splice_sites->canonical_donors[i].position == prediction.position) {
-                    canonical_donor_exists = 1;
-                    if (splice_sites->canonical_donors[i].predicted) {
-                        canonical_donor_predicted = 1;
-                    }
-                    break;
-                }
-            }
-
-            if (canonical_donor_exists & canonical_donor_predicted) return;
-            if (canonical_donor_exists & !canonical_donor_predicted) {
+void store_splice_sites(SpliceProbability prediction, int predict_for_pair, int predict_for_competitor, SpliceSites splice_sites) {
+    if (prediction.type == DONOR & prediction.posterior_probability > 0) {
+        if (splice_sites->canonical_donors[0].gff_canonical & prediction.posterior_probability == 1 & prediction.position == splice_sites->canonical_donors[0].position) { // If canonical exists and is the only splice site within the window
+                splice_sites->canonical_donors[0].predicted = 1;
+                splice_sites->canonical_donors[0].prior_probability = prediction.prior_probability;
+                splice_sites->canonical_donors[0].posterior_probability = prediction.posterior_probability;
+            } else if (splice_sites->canonical_donors[0].gff_canonical & check_proximity(prediction.position, splice_sites->canonical_donors[0].position)) { // If canonical exists and site is compensatory for canonical
+                // Check if prediction position already exists as a canonical donor site
+                int canonical_donor_exists = 0;
+                int canonical_donor_predicted = 0;
                 for (int i = 0; i < splice_sites->n_canonical_donors; i++) {
                     if (splice_sites->canonical_donors[i].position == prediction.position) {
-                        splice_sites->canonical_donors[i].predicted = 1;
-                        splice_sites->canonical_donors[i].prior_probability = prediction.prior_probability;
-                        splice_sites->canonical_donors[i].posterior_probability = prediction.posterior_probability;
-                        break;
+                        canonical_donor_exists = 1;
+                        if (splice_sites->canonical_donors[i].predicted == 1) {
+                            canonical_donor_predicted = 1;
+                        }
                     }
                 }
+
+                if (canonical_donor_exists & canonical_donor_predicted) continue;
+                if (canonical_donor_exists & !canonical_donor_predicted) {
+                    predict_for_pair = 1;
+                    for (int i = 0; i < splice_sites->n_canonical_donors; i++) {
+                        if (splice_sites->canonical_donors[i].position == prediction.position) {
+                            splice_sites->canonical_donors[i].predicted = 1;
+                            splice_sites->canonical_donors[i].prior_probability = prediction.prior_probability;
+                            splice_sites->canonical_donors[i].posterior_probability = prediction.posterior_probability;
+                        }
+                    }
+                } else {
+                    predict_for_pair = 1;
+                    if (splice_sites->n_canonical_donors >= splice_sites->m_canonical_donors) {
+                        expand_splice_sites(&splice_sites->canonical_donors, &splice_sites->m_canonical_donors);
+                    }
+                    SpliceSite *canonical_donor = &splice_sites->canonical_donors[splice_sites->n_canonical_donors++];
+                    canonical_donor->predicted = 1;
+                    canonical_donor->position = prediction.position;
+                    canonical_donor->prior_probability = prediction.prior_probability;
+                    canonical_donor->posterior_probability = prediction.posterior_probability; 
+                }
+            // Store cryptic donor site
             } else {
-                if (splice_sites->n_canonical_donors >= splice_sites->m_canonical_donors) {
-                    resize_splice_sites(&splice_sites->canonical_donors, &splice_sites->m_canonical_donors);
-                }
-                SpliceSite site = { prediction.position, 1, 0, prediction.prior_probability, prediction.posterior_probability };
-                splice_sites->canonical_donors[splice_sites->n_canonical_donors++] = site;
-            }
-        // Store cryptic donor site
-        } else {
-            // Check if prediction position already exists as a cryptic donor site
-            int cryptic_donor_exists = 0;
-            for (int i = 0; i < splice_sites->n_cryptic_donors; i++) {
-                if (splice_sites->cryptic_donors[i].position == prediction.position) {
-                    cryptic_donor_exists = 1;
-                    break;
-                }
-            }
-
-            if (!cryptic_donor_exists) {
-                if (splice_sites->n_cryptic_donors >= splice_sites->m_cryptic_donors) {
-                    resize_splice_sites(&splice_sites->cryptic_donors, &splice_sites->m_cryptic_donors);
-                }
-                SpliceSite site = { prediction.position, 1, 0, prediction.prior_probability, prediction.posterior_probability };
-                splice_sites->cryptic_donors[splice_sites->n_cryptic_donors++] = site;
-            }
-        }
-    } else if (prediction.type == ACCEPTOR && prediction.posterior_probability > 0) {
-        // Store canonical acceptor site
-        if (splice_sites->canonical_acceptors[0].gff_canonical && prediction.posterior_probability == 1 && prediction.position == splice_sites->canonical_acceptors[0].position) { // If canonical exists and is the only splice site within the window
-            splice_sites->canonical_acceptors[0].predicted = 1;
-            splice_sites->canonical_acceptors[0].prior_probability = prediction.prior_probability;
-            splice_sites->canonical_acceptors[0].posterior_probability = prediction.posterior_probability;
-        } else if (splice_sites->canonical_acceptors[0].gff_canonical & check_proximity(prediction.position, splice_sites->canonical_acceptors[0].position)) { // If canonical exists and site is compensatory for canonical
-            // Check if prediction position already exists as a canonical acceptor site
-            int canonical_acceptor_exists = 0;
-            int canonical_acceptor_predicted = 0;
-            for (int i = 0; i < splice_sites->n_canonical_acceptors; i++) {
-                if (splice_sites->canonical_acceptors[i].position == prediction.position) {
-                    canonical_acceptor_exists = 1;
-                    if (splice_sites->canonical_acceptors[i].predicted) {
-                        canonical_acceptor_predicted = 1;
+                // Check if prediction position already exists as a cryptic donor site
+                int cryptic_donor_exists = 0;
+                for (int i = 0; i < splice_sites->n_cryptic_donors; i++) {
+                    if (splice_sites->cryptic_donors[i].position == prediction.position) {
+                        cryptic_donor_exists = 1;
                     }
-                    break;
+                }
+
+                if (!cryptic_donor_exists) {
+                    predict_for_competitor = 1;
+                    if (splice_sites->n_cryptic_donors >= splice_sites->m_cryptic_donors) {
+                        expand_splice_sites(&splice_sites->cryptic_donors, &splice_sites->m_cryptic_donors);
+                    }
+                    SpliceSite *cryptic_donor = &splice_sites->canonical_donors[splice_sites->n_canonical_donors++];
+                    cryptic_donor->predicted = 1;
+                    cryptic_donor->position = prediction.position;
+                    cryptic_donor->prior_probability = prediction.prior_probability;
+                    cryptic_donor->posterior_probability = prediction.posterior_probability; 
                 }
             }
-
-            if (canonical_acceptor_exists & canonical_acceptor_predicted) return;
-            if (canonical_acceptor_exists & !canonical_acceptor_predicted) {
+    } else if (prediction.type == ACCEPTOR & prediction.posterior_probability > 0) {
+            // Store canonical acceptor site
+            if (splice_sites->canonical_acceptors[0].gff_canonical & prediction.posterior_probability == 1 & prediction.position == splice_sites->canonical_acceptors[0].position) { // If canonical exists and is the only splice site within the window
+                splice_sites->canonical_acceptors[0].predicted = 1;
+                splice_sites->canonical_acceptors[0].prior_probability = prediction.prior_probability;
+                splice_sites->canonical_acceptors[0].posterior_probability = prediction.posterior_probability;
+            } else if (splice_sites->canonical_acceptors[0].gff_canonical & check_proximity(prediction.position, splice_sites->canonical_acceptors[0].position)) { // If canonical exists and site is compensatory for canonical
+                // Check if prediction position already exists as a canonical acceptor site
+                int canonical_acceptor_exists = 0;
+                int canonical_acceptor_predicted = 0;
                 for (int i = 0; i < splice_sites->n_canonical_acceptors; i++) {
                     if (splice_sites->canonical_acceptors[i].position == prediction.position) {
-                        splice_sites->canonical_acceptors[i].predicted = 1;
-                        splice_sites->canonical_acceptors[i].prior_probability = prediction.prior_probability;
-                        splice_sites->canonical_acceptors[i].posterior_probability = prediction.posterior_probability;
-                        break;
+                        canonical_acceptor_exists = 1;
+                        if (splice_sites->canonical_acceptors[i].predicted == 1) {
+                            canonical_acceptor_predicted = 1;
+                        }
                     }
                 }
+
+                if (canonical_acceptor_exists & canonical_acceptor_predicted) continue;
+                if (canonical_acceptor_exists & !canonical_acceptor_predicted) {
+                    predict_for_pair = 1;
+                    for (int i = 0; i < splice_sites->n_canonical_acceptors; i++) {
+                        if (splice_sites->canonical_acceptors[i].position == prediction.position) {
+                            splice_sites->canonical_acceptors[i].predicted = 1;
+                            splice_sites->canonical_acceptors[i].prior_probability = prediction.prior_probability;
+                            splice_sites->canonical_acceptors[i].posterior_probability = prediction.posterior_probability;
+                        }
+                    }
+                } else {
+                    predict_for_pair = 1;
+                    if (splice_sites->n_canonical_acceptors >= splice_sites->m_canonical_acceptors) {
+                        expand_splice_sites(&splice_sites->canonical_acceptors, &splice_sites->m_canonical_acceptors);
+                    }
+                    SpliceSite *canonical_acceptor = &splice_sites->canonical_acceptors[splice_sites->n_canonical_acceptors++];
+                    canonical_acceptor->predicted = 1;
+                    canonical_acceptor->position = prediction.position;
+                    canonical_acceptor->prior_probability = prediction.prior_probability;
+                    canonical_acceptor->posterior_probability = prediction.posterior_probability; 
+                }
+            // Store cryptic acceptor site
             } else {
-                if (splice_sites->n_canonical_acceptors >= splice_sites->m_canonical_acceptors) {
-                    resize_splice_sites(&splice_sites->canonical_acceptors, &splice_sites->m_canonical_acceptors);
+                // Check if prediction position already exists as a cryptic acceptor site
+                int cryptic_acceptor_exists = 0;
+                for (int i = 0; i < splice_sites->n_cryptic_acceptors; i++) {
+                    if (splice_sites->cryptic_acceptors[i].position == prediction.position) {
+                        cryptic_acceptor_exists = 1;
+                    }
                 }
 
-                SpliceSite site = { prediction.position, 1, 0, prediction.prior_probability, prediction.posterior_probability };
-                splice_sites->canonical_acceptors[splice_sites->n_canonical_acceptors++] = site;
-            }
-        // Store cryptic acceptor site
-        } else {
-            // Check if prediction position already exists as a cryptic acceptor site
-            int cryptic_acceptor_exists = 0;
-            for (int i = 0; i < splice_sites->n_cryptic_acceptors; i++) {
-                if (splice_sites->cryptic_acceptors[i].position == prediction.position) {
-                    cryptic_acceptor_exists = 1;
-                    break;
+                if (!cryptic_acceptor_exists) {
+                    predict_for_competitor = 1;
+                    if (splice_sites->n_cryptic_acceptors >= splice_sites->m_cryptic_acceptors) {
+                        expand_splice_sites(&splice_sites->cryptic_acceptors, &splice_sites->m_cryptic_acceptors);
+                    }
+                    SpliceSite *cryptic_acceptor = &splice_sites->cryptic_acceptors[splice_sites->n_cryptic_acceptors++];
+                    cryptic_acceptor->predicted = 1;
+                    cryptic_acceptor->position = prediction.position;
+                    cryptic_acceptor->prior_probability = prediction.prior_probability;
+                    cryptic_acceptor->posterior_probability = prediction.posterior_probability; 
                 }
             }
-
-            if (!cryptic_acceptor_exists) {
-                if (splice_sites->n_cryptic_acceptors >= splice_sites->m_cryptic_acceptors) {
-                    resize_splice_sites(&splice_sites->cryptic_acceptors, &splice_sites->m_cryptic_acceptors);
-                }
-
-                SpliceSite site = { prediction.position, 1, 0, prediction.prior_probability, prediction.posterior_probability };
-                splice_sites->cryptic_acceptors[splice_sites->n_cryptic_acceptors++] = site;
-            }
-        }
     }
 }
+
+
+
+// void assign_prediction_to_splice_sites(const SpliceProbability prediction, const size_t num_predictions, SpliceSites *splice_sites) {
+//     if (prediction.type == DONOR && prediction.posterior_probability > 0) {
+//         // Store canonical donor site
+//         if (splice_sites->canonical_donors[0].gff_canonical && prediction.posterior_probability == 1 && prediction.position == splice_sites->canonical_donors[0].position) { // If canonical exists and is the only splice site within the window
+//             splice_sites->canonical_donors[0].predicted = 1;
+//             splice_sites->canonical_donors[0].prior_probability = prediction.prior_probability;
+//             splice_sites->canonical_donors[0].posterior_probability = prediction.posterior_probability;
+//         } else if (splice_sites->canonical_donors[0].gff_canonical && check_proximity(prediction.position, splice_sites->canonical_donors[0].position)) { // If canonical exists and site is compensatory for canonical
+//             // Check if prediction position already exists as a canonical donor site
+//             int canonical_donor_exists = 0;
+//             int canonical_donor_predicted = 0;
+//             for (int i = 0; i < splice_sites->n_canonical_donors; i++) {
+//                 if (splice_sites->canonical_donors[i].position == prediction.position) {
+//                     canonical_donor_exists = 1;
+//                     if (splice_sites->canonical_donors[i].predicted) {
+//                         canonical_donor_predicted = 1;
+//                     }
+//                     break;
+//                 }
+//             }
+
+//             if (canonical_donor_exists & canonical_donor_predicted) return;
+//             if (canonical_donor_exists & !canonical_donor_predicted) {
+//                 for (int i = 0; i < splice_sites->n_canonical_donors; i++) {
+//                     if (splice_sites->canonical_donors[i].position == prediction.position) {
+//                         splice_sites->canonical_donors[i].predicted = 1;
+//                         splice_sites->canonical_donors[i].prior_probability = prediction.prior_probability;
+//                         splice_sites->canonical_donors[i].posterior_probability = prediction.posterior_probability;
+//                         break;
+//                     }
+//                 }
+//             } else {
+//                 if (splice_sites->n_canonical_donors >= splice_sites->m_canonical_donors) {
+//                     resize_splice_sites(&splice_sites->canonical_donors, &splice_sites->m_canonical_donors);
+//                 }
+//                 SpliceSite site = { prediction.position, 1, 0, prediction.prior_probability, prediction.posterior_probability };
+//                 splice_sites->canonical_donors[splice_sites->n_canonical_donors++] = site;
+//             }
+//         // Store cryptic donor site
+//         } else {
+//             // Check if prediction position already exists as a cryptic donor site
+//             int cryptic_donor_exists = 0;
+//             for (int i = 0; i < splice_sites->n_cryptic_donors; i++) {
+//                 if (splice_sites->cryptic_donors[i].position == prediction.position) {
+//                     cryptic_donor_exists = 1;
+//                     break;
+//                 }
+//             }
+
+//             if (!cryptic_donor_exists) {
+//                 if (splice_sites->n_cryptic_donors >= splice_sites->m_cryptic_donors) {
+//                     resize_splice_sites(&splice_sites->cryptic_donors, &splice_sites->m_cryptic_donors);
+//                 }
+//                 SpliceSite site = { prediction.position, 1, 0, prediction.prior_probability, prediction.posterior_probability };
+//                 splice_sites->cryptic_donors[splice_sites->n_cryptic_donors++] = site;
+//             }
+//         }
+//     } else if (prediction.type == ACCEPTOR && prediction.posterior_probability > 0) {
+//         // Store canonical acceptor site
+//         if (splice_sites->canonical_acceptors[0].gff_canonical && prediction.posterior_probability == 1 && prediction.position == splice_sites->canonical_acceptors[0].position) { // If canonical exists and is the only splice site within the window
+//             splice_sites->canonical_acceptors[0].predicted = 1;
+//             splice_sites->canonical_acceptors[0].prior_probability = prediction.prior_probability;
+//             splice_sites->canonical_acceptors[0].posterior_probability = prediction.posterior_probability;
+//         } else if (splice_sites->canonical_acceptors[0].gff_canonical & check_proximity(prediction.position, splice_sites->canonical_acceptors[0].position)) { // If canonical exists and site is compensatory for canonical
+//             // Check if prediction position already exists as a canonical acceptor site
+//             int canonical_acceptor_exists = 0;
+//             int canonical_acceptor_predicted = 0;
+//             for (int i = 0; i < splice_sites->n_canonical_acceptors; i++) {
+//                 if (splice_sites->canonical_acceptors[i].position == prediction.position) {
+//                     canonical_acceptor_exists = 1;
+//                     if (splice_sites->canonical_acceptors[i].predicted) {
+//                         canonical_acceptor_predicted = 1;
+//                     }
+//                     break;
+//                 }
+//             }
+
+//             if (canonical_acceptor_exists & canonical_acceptor_predicted) return;
+//             if (canonical_acceptor_exists & !canonical_acceptor_predicted) {
+//                 for (int i = 0; i < splice_sites->n_canonical_acceptors; i++) {
+//                     if (splice_sites->canonical_acceptors[i].position == prediction.position) {
+//                         splice_sites->canonical_acceptors[i].predicted = 1;
+//                         splice_sites->canonical_acceptors[i].prior_probability = prediction.prior_probability;
+//                         splice_sites->canonical_acceptors[i].posterior_probability = prediction.posterior_probability;
+//                         break;
+//                     }
+//                 }
+//             } else {
+//                 if (splice_sites->n_canonical_acceptors >= splice_sites->m_canonical_acceptors) {
+//                     resize_splice_sites(&splice_sites->canonical_acceptors, &splice_sites->m_canonical_acceptors);
+//                 }
+
+//                 SpliceSite site = { prediction.position, 1, 0, prediction.prior_probability, prediction.posterior_probability };
+//                 splice_sites->canonical_acceptors[splice_sites->n_canonical_acceptors++] = site;
+//             }
+//         // Store cryptic acceptor site
+//         } else {
+//             // Check if prediction position already exists as a cryptic acceptor site
+//             int cryptic_acceptor_exists = 0;
+//             for (int i = 0; i < splice_sites->n_cryptic_acceptors; i++) {
+//                 if (splice_sites->cryptic_acceptors[i].position == prediction.position) {
+//                     cryptic_acceptor_exists = 1;
+//                     break;
+//                 }
+//             }
+
+//             if (!cryptic_acceptor_exists) {
+//                 if (splice_sites->n_cryptic_acceptors >= splice_sites->m_cryptic_acceptors) {
+//                     resize_splice_sites(&splice_sites->cryptic_acceptors, &splice_sites->m_cryptic_acceptors);
+//                 }
+
+//                 SpliceSite site = { prediction.position, 1, 0, prediction.prior_probability, prediction.posterior_probability };
+//                 splice_sites->cryptic_acceptors[splice_sites->n_cryptic_acceptors++] = site;
+//             }
+//         }
+//     }
+// }
 
 int main(int argc, char *argv[]) {
     log_set_level(2);
@@ -1661,11 +1787,10 @@ int main(int argc, char *argv[]) {
 
                             if (t == NULL) continue;
                             for (int si = 0; si < num_splice_probabilities; si++) {
-                                SpliceProbability probability = splice_probabilities[si];
-                                Range splice_position = (Range) { probability.position, probability.position+1 };
+                                SpliceProbability prediction = splice_probabilities[si];
+                                Range splice_position = (Range) { prediction.position, prediction.position+1 };
                                 for (int ei = 0; ei < t->nexons; ei++) {
                                     Exon *e = t->exons[ei];
-
 
                                     int direction = 0;
                                     if (t->strand == STRAND_FWD) direction = 1;
@@ -1673,7 +1798,7 @@ int main(int argc, char *argv[]) {
                                     if (t->strand == STRAND_UNK) continue;
 
                                     Range positions;
-                                    if (probability.type == DONOR) {
+                                    if (prediction.type == DONOR) {
                                         if (ei == t->nexons-1 && t->strand == STRAND_FWD) continue; // Last exon, cannot form a pair with a downstream acceptor
                                         if (ei == 0 && t->strand == STRAND_REV) continue;
                                         positions = (Range) { e->bounds->start + 1, t->exons[ei + direction]->bounds->start };
@@ -1686,7 +1811,157 @@ int main(int argc, char *argv[]) {
                                     Range intersection;
                                     if (!intersect_ranges(splice_position, positions, &intersection) || !range_len(intersection)) continue;
 
-                                    assign_prediction_to_splice_sites(probability, num_splice_probabilities, e->splice_sites);
+                                    int predict_for_pair = 0;
+                                    int predict_for_competitor = 0;
+                                    store_splice_sites(prediction, predict_for_pair, predict_for_competitor, e->splice_sites);
+
+                                    if (predict_for_pair) {
+                                        if (prediction.type == DONOR) {
+                                            int pi = ei + direction;
+                                            if (pi < 0 || pi >= t->nexons) continue;
+                                            SpliceSite pair = t->exons[pi]->splice_sites.canonical_acceptors[0];
+
+                                            if (pair.predicted) continue;
+
+                                            float *pair_predictions = predict_on_sequence(models, hap_alt.s, pair.position, gene->coords, gene->strand, hap_in);
+                                            filter_to_most_likely_prediction(WIDTH, &pair_predictions);
+
+                                            SpliceProbability pair_probabilities;
+                                            int num_pair_probabilities = create_splice_probabilities(pair.position, WIDTH, pair_predictions, &pair_probabilities);
+                                            for (int pi = 0; pi < num_pair_probabilities; pi++) {
+                                                SpliceProbability pair_prediction = pair_probabilities[pi];
+
+                                                for (int ei = 0; ei < t->nexons; ei++) {
+                                                    Exon *e = t->exons[ei];
+
+                                                    Range positions;
+                                                    if (prediction.type == DONOR) {
+                                                        if (ei == t->nexons-1 && t->strand == STRAND_FWD) continue; // Last exon, cannot form a pair with a downstream acceptor
+                                                        if (ei == 0 && t->strand == STRAND_REV) continue;
+                                                        positions = (Range) { e->bounds->start + 1, t->exons[ei + direction]->bounds->start };
+                                                    } else { // ACCEPTOR
+                                                        if (ei == 0 && t->strand == STRAND_FWD) continue;
+                                                        if (ei == t->nexons-1 && t->strand == STRAND_REV) continue;
+                                                        positions = (Range) { t->exons[ei - direction]->bounds->end, e->bounds->end - 1 };
+                                                    }
+
+                                                    Range intersection;
+                                                    if (!intersect_ranges(splice_position, positions, &intersection) || !range_len(intersection)) continue;
+
+                                                    store_splice_sites(pair_prediction, predict_for_pair, predict_for_competitor, e->splice_sites);
+                                                }
+                                            }
+                                        } else { // ACCEPTOR
+                                            int pi = ei - direction;
+                                            if (pi < 0 || pi >= t->nexons) continue;
+                                            SpliceSite pair = t->exons[pi]->splice_sites.canonical_donors[0];
+
+                                            if (pair.predicted) continue;
+
+                                            float *pair_predictions = predict_on_sequence(models, hap_alt.s, pair.position, gene->coords, gene->strand, hap_in);
+                                            filter_to_most_likely_prediction(WIDTH, &pair_predictions);
+
+                                            SpliceProbability pair_probabilities;
+                                            int num_pair_probabilities = create_splice_probabilities(pair.position, WIDTH, pair_predictions, &pair_probabilities);
+                                            for (int pi = 0; pi < num_pair_probabilities; pi++) {
+                                                SpliceProbability pair_prediction = pair_probabilities[pi];
+
+                                                for (int ei = 0; ei < t->nexons; ei++) {
+                                                    Exon *e = t->exons[ei];
+
+                                                    Range positions;
+                                                    if (prediction.type == DONOR) {
+                                                        if (ei == t->nexons-1 && t->strand == STRAND_FWD) continue; // Last exon, cannot form a pair with a downstream acceptor
+                                                        if (ei == 0 && t->strand == STRAND_REV) continue;
+                                                        positions = (Range) { e->bounds->start + 1, t->exons[ei + direction]->bounds->start };
+                                                    } else { // ACCEPTOR
+                                                        if (ei == 0 && t->strand == STRAND_FWD) continue;
+                                                        if (ei == t->nexons-1 && t->strand == STRAND_REV) continue;
+                                                        positions = (Range) { t->exons[ei - direction]->bounds->end, e->bounds->end - 1 };
+                                                    }
+
+                                                    Range intersection;
+                                                    if (!intersect_ranges(splice_position, positions, &intersection) || !range_len(intersection)) continue;
+
+                                                    store_splice_sites(pair_prediction, predict_for_pair, predict_for_competitor, e->splice_sites);
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    if (predict_for_competitor) {
+                                        if (prediction.type == DONOR) {
+                                            int ci = ei - direction;
+                                            if (ci < 0 || ci >= t->nexons) continue;
+                                            SpliceSite competitor = t->exons[ci]->splice_sites.canonical_donors[0];
+
+                                            if (competitor.predicted) continue;
+
+                                            float *competitor_predictions = predict_on_sequence(models, hap_alt.s, competitor.position, gene->coords, gene->strand, hap_in);
+                                            filter_to_most_likely_prediction(WIDTH, &competitor_predictions);
+
+                                            SpliceProbability competitor_probabilities;
+                                            int num_competitor_probabilities = create_splice_probabilities(competitor.position, WIDTH, competitor_predictions, &competitor_probabilities);
+                                            for (int ci = 0; ci < num_competitor_probabilities; ci++) {
+                                                SpliceProbability competitor_prediction = competitor_probabilities[ci];
+
+                                                for (int ei = 0; ei < t->nexons; ei++) {
+                                                    Exon *e = t->exons[ei];
+
+                                                    Range positions;
+                                                    if (prediction.type == DONOR) {
+                                                        if (ei == t->nexons-1 && t->strand == STRAND_FWD) continue; // Last exon, cannot form a pair with a downstream acceptor
+                                                        if (ei == 0 && t->strand == STRAND_REV) continue;
+                                                        positions = (Range) { e->bounds->start + 1, t->exons[ei + direction]->bounds->start };
+                                                    } else { // ACCEPTOR
+                                                        if (ei == 0 && t->strand == STRAND_FWD) continue;
+                                                        if (ei == t->nexons-1 && t->strand == STRAND_REV) continue;
+                                                        positions = (Range) { t->exons[ei - direction]->bounds->end, e->bounds->end - 1 };
+                                                    }
+
+                                                    Range intersection;
+                                                    if (!intersect_ranges(splice_position, positions, &intersection) || !range_len(intersection)) continue;
+
+                                                    store_splice_sites(competitor_prediction, predict_for_pair, predict_for_competitor, e->splice_sites);
+                                                }
+                                            }
+                                        } else { // ACCEPTOR
+                                            int ci = ei + direction;
+                                            if (ci < 0 || ci >= t->nexons) continue;
+                                            SpliceSite competitor = t->exons[ci]->splice_sites.canonical_acceptors[0];
+
+                                            if (competitor.predicted) continue;
+
+                                            float *competitor_predictions = predict_on_sequence(models, hap_alt.s, competitor.position, gene->coords, gene->strand, hap_in);
+                                            filter_to_most_likely_prediction(WIDTH, &competitor_predictions);
+
+                                            SpliceProbability competitor_probabilities;
+                                            int num_competitor_probabilities = create_splice_probabilities(competitor.position, WIDTH, competitor_predictions, &competitor_probabilities);
+                                            for (int ci = 0; ci < num_competitor_probabilities; ci++) {
+                                                SpliceProbability competitor_prediction = competitor_probabilities[ci];
+
+                                                for (int ei = 0; ei < t->nexons; ei++) {
+                                                    Exon *e = t->exons[ei];
+
+                                                    Range positions;
+                                                    if (prediction.type == DONOR) {
+                                                        if (ei == t->nexons-1 && t->strand == STRAND_FWD) continue; // Last exon, cannot form a pair with a downstream acceptor
+                                                        if (ei == 0 && t->strand == STRAND_REV) continue;
+                                                        positions = (Range) { e->bounds->start + 1, t->exons[ei + direction]->bounds->start };
+                                                    } else { // ACCEPTOR
+                                                        if (ei == 0 && t->strand == STRAND_FWD) continue;
+                                                        if (ei == t->nexons-1 && t->strand == STRAND_REV) continue;
+                                                        positions = (Range) { t->exons[ei - direction]->bounds->end, e->bounds->end - 1 };
+                                                    }
+
+                                                    Range intersection;
+                                                    if (!intersect_ranges(splice_position, positions, &intersection) || !range_len(intersection)) continue;
+
+                                                    store_splice_sites(competitor_prediction, predict_for_pair, predict_for_competitor, e->splice_sites);
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
