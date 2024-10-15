@@ -1080,9 +1080,9 @@ int check_proximity(uint32_t predicted_position, uint32_t canonical_site_positio
     return abs((int32_t)predicted_position - (int32_t)canonical_site_position) <= PROXIMITY_THRESHOLD;
 }
 
-void store_splice_sites(SpliceProbability prediction, int predict_for_pair, int predict_for_competitor, SpliceSites splice_sites) {
+void store_splice_sites(SpliceProbability prediction, int predict_for_pair, int predict_for_competitor, SpliceSites *splice_sites) {
     if (prediction.type == DONOR & prediction.posterior_probability > 0) {
-        if (splice_sites->canonical_donors[0].gff_canonical & prediction.posterior_probability == 1 & prediction.position == splice_sites->canonical_donors[0].position) { // If canonical exists and is the only splice site within the window
+        if (splice_sites->canonical_donors[0].gff_canonical && prediction.posterior_probability && prediction.position == splice_sites->canonical_donors[0].position) { // If canonical exists and is the only splice site within the window
                 splice_sites->canonical_donors[0].predicted = 1;
                 splice_sites->canonical_donors[0].prior_probability = prediction.prior_probability;
                 splice_sites->canonical_donors[0].posterior_probability = prediction.posterior_probability;
@@ -1099,7 +1099,7 @@ void store_splice_sites(SpliceProbability prediction, int predict_for_pair, int 
                     }
                 }
 
-                if (canonical_donor_exists & canonical_donor_predicted) continue;
+                if (canonical_donor_exists & canonical_donor_predicted) return;
                 if (canonical_donor_exists & !canonical_donor_predicted) {
                     predict_for_pair = 1;
                     for (int i = 0; i < splice_sites->n_canonical_donors; i++) {
@@ -1112,7 +1112,7 @@ void store_splice_sites(SpliceProbability prediction, int predict_for_pair, int 
                 } else {
                     predict_for_pair = 1;
                     if (splice_sites->n_canonical_donors >= splice_sites->m_canonical_donors) {
-                        expand_splice_sites(&splice_sites->canonical_donors, &splice_sites->m_canonical_donors);
+                        resize_splice_sites(&splice_sites->canonical_donors, &splice_sites->m_canonical_donors);
                     }
                     SpliceSite *canonical_donor = &splice_sites->canonical_donors[splice_sites->n_canonical_donors++];
                     canonical_donor->predicted = 1;
@@ -1133,7 +1133,7 @@ void store_splice_sites(SpliceProbability prediction, int predict_for_pair, int 
                 if (!cryptic_donor_exists) {
                     predict_for_competitor = 1;
                     if (splice_sites->n_cryptic_donors >= splice_sites->m_cryptic_donors) {
-                        expand_splice_sites(&splice_sites->cryptic_donors, &splice_sites->m_cryptic_donors);
+                        resize_splice_sites(&splice_sites->cryptic_donors, &splice_sites->m_cryptic_donors);
                     }
                     SpliceSite *cryptic_donor = &splice_sites->canonical_donors[splice_sites->n_canonical_donors++];
                     cryptic_donor->predicted = 1;
@@ -1161,7 +1161,7 @@ void store_splice_sites(SpliceProbability prediction, int predict_for_pair, int 
                     }
                 }
 
-                if (canonical_acceptor_exists & canonical_acceptor_predicted) continue;
+                if (canonical_acceptor_exists & canonical_acceptor_predicted) return;
                 if (canonical_acceptor_exists & !canonical_acceptor_predicted) {
                     predict_for_pair = 1;
                     for (int i = 0; i < splice_sites->n_canonical_acceptors; i++) {
@@ -1174,7 +1174,7 @@ void store_splice_sites(SpliceProbability prediction, int predict_for_pair, int 
                 } else {
                     predict_for_pair = 1;
                     if (splice_sites->n_canonical_acceptors >= splice_sites->m_canonical_acceptors) {
-                        expand_splice_sites(&splice_sites->canonical_acceptors, &splice_sites->m_canonical_acceptors);
+                        resize_splice_sites(&splice_sites->canonical_acceptors, &splice_sites->m_canonical_acceptors);
                     }
                     SpliceSite *canonical_acceptor = &splice_sites->canonical_acceptors[splice_sites->n_canonical_acceptors++];
                     canonical_acceptor->predicted = 1;
@@ -1195,7 +1195,7 @@ void store_splice_sites(SpliceProbability prediction, int predict_for_pair, int 
                 if (!cryptic_acceptor_exists) {
                     predict_for_competitor = 1;
                     if (splice_sites->n_cryptic_acceptors >= splice_sites->m_cryptic_acceptors) {
-                        expand_splice_sites(&splice_sites->cryptic_acceptors, &splice_sites->m_cryptic_acceptors);
+                        resize_splice_sites(&splice_sites->cryptic_acceptors, &splice_sites->m_cryptic_acceptors);
                     }
                     SpliceSite *cryptic_acceptor = &splice_sites->cryptic_acceptors[splice_sites->n_cryptic_acceptors++];
                     cryptic_acceptor->predicted = 1;
@@ -1819,14 +1819,14 @@ int main(int argc, char *argv[]) {
                                         if (prediction.type == DONOR) {
                                             int pi = ei + direction;
                                             if (pi < 0 || pi >= t->nexons) continue;
-                                            SpliceSite pair = t->exons[pi]->splice_sites.canonical_acceptors[0];
+                                            SpliceSite pair = t->exons[pi]->splice_sites->canonical_acceptors[0];
 
                                             if (pair.predicted) continue;
 
                                             float *pair_predictions = predict_on_sequence(models, hap_alt.s, pair.position, gene->coords, gene->strand, hap_in);
                                             filter_to_most_likely_prediction(WIDTH, &pair_predictions);
 
-                                            SpliceProbability pair_probabilities;
+                                            SpliceProbability *pair_probabilities;
                                             int num_pair_probabilities = create_splice_probabilities(pair.position, WIDTH, pair_predictions, &pair_probabilities);
                                             for (int pi = 0; pi < num_pair_probabilities; pi++) {
                                                 SpliceProbability pair_prediction = pair_probabilities[pi];
@@ -1854,14 +1854,14 @@ int main(int argc, char *argv[]) {
                                         } else { // ACCEPTOR
                                             int pi = ei - direction;
                                             if (pi < 0 || pi >= t->nexons) continue;
-                                            SpliceSite pair = t->exons[pi]->splice_sites.canonical_donors[0];
+                                            SpliceSite pair = t->exons[pi]->splice_sites->canonical_donors[0];
 
                                             if (pair.predicted) continue;
 
                                             float *pair_predictions = predict_on_sequence(models, hap_alt.s, pair.position, gene->coords, gene->strand, hap_in);
                                             filter_to_most_likely_prediction(WIDTH, &pair_predictions);
 
-                                            SpliceProbability pair_probabilities;
+                                            SpliceProbability *pair_probabilities;
                                             int num_pair_probabilities = create_splice_probabilities(pair.position, WIDTH, pair_predictions, &pair_probabilities);
                                             for (int pi = 0; pi < num_pair_probabilities; pi++) {
                                                 SpliceProbability pair_prediction = pair_probabilities[pi];
@@ -1893,14 +1893,14 @@ int main(int argc, char *argv[]) {
                                         if (prediction.type == DONOR) {
                                             int ci = ei - direction;
                                             if (ci < 0 || ci >= t->nexons) continue;
-                                            SpliceSite competitor = t->exons[ci]->splice_sites.canonical_donors[0];
+                                            SpliceSite competitor = t->exons[ci]->splice_sites->canonical_donors[0];
 
                                             if (competitor.predicted) continue;
 
                                             float *competitor_predictions = predict_on_sequence(models, hap_alt.s, competitor.position, gene->coords, gene->strand, hap_in);
                                             filter_to_most_likely_prediction(WIDTH, &competitor_predictions);
 
-                                            SpliceProbability competitor_probabilities;
+                                            SpliceProbability *competitor_probabilities;
                                             int num_competitor_probabilities = create_splice_probabilities(competitor.position, WIDTH, competitor_predictions, &competitor_probabilities);
                                             for (int ci = 0; ci < num_competitor_probabilities; ci++) {
                                                 SpliceProbability competitor_prediction = competitor_probabilities[ci];
@@ -1928,14 +1928,14 @@ int main(int argc, char *argv[]) {
                                         } else { // ACCEPTOR
                                             int ci = ei + direction;
                                             if (ci < 0 || ci >= t->nexons) continue;
-                                            SpliceSite competitor = t->exons[ci]->splice_sites.canonical_acceptors[0];
+                                            SpliceSite competitor = t->exons[ci]->splice_sites->canonical_acceptors[0];
 
                                             if (competitor.predicted) continue;
 
                                             float *competitor_predictions = predict_on_sequence(models, hap_alt.s, competitor.position, gene->coords, gene->strand, hap_in);
                                             filter_to_most_likely_prediction(WIDTH, &competitor_predictions);
 
-                                            SpliceProbability competitor_probabilities;
+                                            SpliceProbability *competitor_probabilities;
                                             int num_competitor_probabilities = create_splice_probabilities(competitor.position, WIDTH, competitor_predictions, &competitor_probabilities);
                                             for (int ci = 0; ci < num_competitor_probabilities; ci++) {
                                                 SpliceProbability competitor_prediction = competitor_probabilities[ci];
