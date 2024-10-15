@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
 
 #include <klib/kvec.h>
 #include <klib/kstring.h>
@@ -74,7 +75,7 @@
 #define SPLICEAI_HAP_DESC "##INFO=<ID=SpliceAI_Haplotype,Number=.,Type=String,Description=\"CpliceAIv1.0 haplotype variant annotation from reference to complete haplotype. These include delta scores (DS) and delta positions (DP) for acceptor gain (AG), acceptor loss (AL), donor gain (DG), and donor loss (DL). Format: ALLELE|SYMBOL|DS_AG|DS_AL|DS_DG|DS_DL|DP_AG|DP_AL|DP_DG|DP_DL\">"
 
 #define CS_TAG "CS"
-#define CS_DESC "##INFO=<ID=CS,Number=.,Type=String,Description=\"Change in splicing between haplotype ref and haplotype alt at positions DP_AG, DP_AL, DP_DG, DP_DL. Format: CS_AG|CS_AL|CS_DG|CS_DL|CS_SUM\">"
+#define CS_DESC "##INFO=<ID=CS,Number=.,Type=String,Description=\"Change in splicing between haplotype + variant and haplotype at positions DP_AG, DP_AL, DP_DG, DP_DL. Format: CS_AG|CS_AL|CS_DG|CS_DL|CS_SUM\">"
 
 #define RESCUE_TAG "RESCUE"
 #define RESCUE_DESC "##INFO=<ID=RESCUE,Number=.,Type=String,Description=\"Boolean rescue prediction\">"
@@ -182,7 +183,6 @@ void predict_for_seq(Model *models, const char *seq, int seq_len, int strand, fl
 
     if (predict(models, enc_len, 1, &ohe, num_predictions, predictions)) {
         log_info("Predict failed.");
-
         return;
     }
     free(ohe);
@@ -1369,6 +1369,7 @@ int main(int argc, char *argv[]) {
 
     IRegion batch_region = {-1, -1, -1};
 
+    // Read records from vcf and store into coding/non-coding record blocks
     while (bcf_read(fp_in, hdr, v) >= 0) {
         bcf_unpack(v, BCF_UN_STR);
 
@@ -1511,6 +1512,9 @@ int main(int argc, char *argv[]) {
 
             r->complete_scores = malloc(r->genes->n * NUM_PHASES * sizeof(Score *));
             for (int i = 0; i < r->genes->n * NUM_PHASES; i++) r->complete_scores[i] = NULL;
+
+            r->cs = malloc(r->genes->n * NUM_PHASES * sizeof(SpliceChange *)); 
+            for (int i = 0; i < r->genes->n * NUM_PHASES; i++) r->cs[i] = NULL;
         }
 
     }
@@ -1530,6 +1534,18 @@ int main(int argc, char *argv[]) {
             // Check VEP consequences for rescue triggers
             for (int j = 0; j < r->vep->n; j++) {
                 TscriptCsqs transcript_consequence = kv_A(*r->vep, j);
+
+                int is_non_coding = 0;
+                for (int k = 0; k < transcript_consequence.num_consequences; k++) {
+                    const char *consequence = transcript_consequence.consequences[k];
+                    if (strcmp(consequence, "non_coding_transcript_variant") == 0 ||
+                        strcmp(consequence, "NMD_transcript_variant") == 0) {
+                        is_non_coding = 1;
+                    }
+                }
+
+                if (is_non_coding) continue;
+
                 for (int k = 0; k < transcript_consequence.num_consequences; k++) {
                     const char *consequence = transcript_consequence.consequences[k];
 
@@ -1725,21 +1741,21 @@ int main(int argc, char *argv[]) {
                         int64_t gene_end = gene->coords.end - haplotype_offset(&hap_ex, gene->coords);
                         int64_t vposition = r->v->pos - haplotype_offset(&hap_ex, (Range) {gene->coords.start, r->v->pos});
 
-                        // int32_t hap_ref_start = VARIANT_POS + (gene_start - vposition);
-                        // int32_t hap_ref_end = VARIANT_POS - (gene_end - vposition) - pred_offset;
-                        //
-                        // char *hap_ref_seq = hap_ref.s - hap_ref_start;
-                        // if (hap_ref_start < 0) hap_ref_start = 0;
-                        // if (hap_ref_end < 0) hap_ref_end = 0;
+                        int32_t hap_ref_start = VARIANT_POS + (gene_start - vposition);
+                        int32_t hap_ref_end = VARIANT_POS - (gene_end - vposition) - pred_offset;
 
-                        // Range hap_ref_boundary = {hap_ref_start, hap_ref_end};
-                        // char *hap_ref_padded = pad_sequence(hap_ref_seq, hap_ref_boundary, WIDTH - pred_offset);
-                        // float *hap_ref_predictions; int num_hap_ref_predictions;
-                        // int hap_ref_len = strlen(hap_ref_padded);
-                        // predict_for_seq(models, hap_ref_padded, hap_ref_len, gene->strand, &hap_ref_predictions, &num_hap_ref_predictions);
-                        // float *corrected_hap_ref_predictions = match_predictions_to_reference(hap_ref_predictions, r->v, &hap_ex, num_ref_predictions);
+                        char *hap_ref_seq = hap_ref.s - hap_ref_start;
+                        if (hap_ref_start < 0) hap_ref_start = 0;
+                        if (hap_ref_end < 0) hap_ref_end = 0;
 
-                        // free(hap_ref_padded);
+                        Range hap_ref_boundary = {hap_ref_start, hap_ref_end};
+                        char *hap_ref_padded = pad_sequence(hap_ref_seq, hap_ref_boundary, WIDTH - pred_offset);
+                        float *hap_ref_predictions; int num_hap_ref_predictions;
+                        int hap_ref_len = strlen(hap_ref_padded);
+                        predict_for_seq(models, hap_ref_padded, hap_ref_len, gene->strand, &hap_ref_predictions, &num_hap_ref_predictions);
+                        float *corrected_hap_ref_predictions = match_predictions_to_reference(hap_ref_predictions, r->v, &hap_ex, num_ref_predictions);
+
+                        free(hap_ref_padded);
 
                         // HAP ALT
                         pred_offset = prediction_offset(r->v, &hap_in);
@@ -1771,6 +1787,21 @@ int main(int argc, char *argv[]) {
 
                         // Calculate scores between ref and hap_alt
                         Score score = calculate_delta_scores(r->v->d.allele[1], gene->name, ref_predictions, corrected_hap_alt_predictions, num_ref_predictions, CAI_DISTANCE);
+
+                        r->cs[g * NUM_PHASES + p] = malloc(sizeof(SpliceChange));
+                        int ag_position = (score.ag_idx + CAI_DISTANCE) * NUM_SCORES + ACCEPTOR_POS;
+                        int al_position = (score.al_idx + CAI_DISTANCE) * NUM_SCORES + ACCEPTOR_POS;
+                        int dg_position = (score.dg_idx + CAI_DISTANCE) * NUM_SCORES + DONOR_POS;
+                        int dl_position = (score.dl_idx + CAI_DISTANCE) * NUM_SCORES + DONOR_POS;
+                        float cs_ag = corrected_hap_alt_predictions[ag_position] - corrected_hap_ref_predictions[ag_position];
+                        float cs_al = corrected_hap_alt_predictions[al_position] - corrected_hap_ref_predictions[al_position];
+                        float cs_dg = corrected_hap_alt_predictions[dg_position] - corrected_hap_ref_predictions[dg_position];
+                        float cs_dl = corrected_hap_alt_predictions[dl_position] - corrected_hap_ref_predictions[dl_position];
+                        *r->cs[g * NUM_PHASES + p] = (SpliceChange) {cs_ag, cs_al, cs_dg, cs_dl, fabs(cs_ag) + fabs(cs_al) + fabs(cs_dg) + fabs(cs_dl) };
+
+                        // Calculate scores between hap_ref and hap_alt
+                        // Score score_hap = calculate_delta_scores(r->v->d.allele[1], gene->name, corrected_hap_ref_predictions, corrected_hap_alt_predictions, num_ref_predictions, CAI_DISTANCE);
+                        // log_info("%s - AG: %f \t AL: %f \t DG: %f \t DL: %f", score_hap.gene, score_hap.ag, score_hap.al, score_hap.dg, score_hap.dl);
 
                         r->complete_scores[g * NUM_PHASES + p] = malloc(sizeof(Score));
                         *r->complete_scores[g * NUM_PHASES + p] = score;
@@ -2196,44 +2227,63 @@ int main(int argc, char *argv[]) {
 
         for (int i = 0; i < block.records->n; i++) {
             Record *r = kv_A(*block.records, i);
+            if (!r->triggers[SPLICE_TRIGGER]) continue;
 
-            kstring_t s = {0};
+            kstring_t splice_scores = {0};
+            kstring_t splice_change = {0};
 
             int has_scores = 0;
             for (int g = 0; g < r->genes->n; g++) {
-                if (g > 0 && has_scores) kputc(',', &s);
+                if (g > 0) {
+                    kputc(',', &splice_scores);
+                    kputc(',', &splice_change);
+                }
 
                 for (int p = 0; p < NUM_PHASES; p++) {
 
+                    if (p > 0) {
+                        kputc('&', &splice_scores);
+                        kputc('&', &splice_change);
+                    }
+
                     Score *score = r->complete_scores[g * NUM_PHASES + p];
-                    if (p > 0) kputc('&', &s);
-                    kputs(r->v->d.allele[1], &s);
+                    kputs(r->v->d.allele[1], &splice_scores);
                     if (score == NULL) {
-                        kputc('|', &s); kputs(kv_A(*r->genes, g)->name, &s);
-                        kputs("|.|.|.|.|.|.|.|.", &s);
+                        kputc('|', &splice_scores); kputs(kv_A(*r->genes, g)->name, &splice_scores);
+                        kputs("|.|.|.|.|.|.|.|.", &splice_scores);
+                        kputs(".|.|.|.|.", &splice_change);
                         continue;
                     }
                     has_scores = 1;
 
-                    kputc('|', &s); kputs(score->gene, &s);
+                    kputc('|', &splice_scores); kputs(score->gene, &splice_scores);
 
                     // Format and append DS scores
                     char ds_scores[20];
                     snprintf(ds_scores, 20, "%.2f|%.2f|%.2f|%.2f", score->ag, score->al, score->dg, score->dl);
-                    kputc('|', &s); kputsn(ds_scores, 19, &s);
+                    kputc('|', &splice_scores); kputsn(ds_scores, 19, &splice_scores);
 
-                    kputc('|', &s); kputw(score->ag_idx, &s);
-                    kputc('|', &s); kputw(score->al_idx, &s);
-                    kputc('|', &s); kputw(score->dg_idx, &s);
-                    kputc('|', &s); kputw(score->dl_idx, &s);
+                    kputc('|', &splice_scores); kputw(score->ag_idx, &splice_scores);
+                    kputc('|', &splice_scores); kputw(score->al_idx, &splice_scores);
+                    kputc('|', &splice_scores); kputw(score->dg_idx, &splice_scores);
+                    kputc('|', &splice_scores); kputw(score->dl_idx, &splice_scores);
+
+                    // Splice change
+                    SpliceChange *change = r->cs[g * NUM_PHASES + p];
+
+                    char change_scores[29];
+                    snprintf(change_scores, 29, "%.2f|%.2f|%.2f|%.2f|%.2f", change->AG, change->AL, change->DG, change->DL, change->sum);
+                    kputsn(change_scores, strlen(change_scores), &splice_change);
                 }
             }
 
-            if (has_scores) log_info(s.s);
+            if (has_scores) log_info(splice_scores.s);
 
-            bcf_update_info_string(hdr, r->v, SPLICEAI_HAP_TAG, s.s);
+            bcf_update_info_string(hdr, r->v, SPLICEAI_HAP_TAG, splice_scores.s);
+            bcf_update_info_string(hdr, r->v, CS_TAG, splice_change.s);
 
-            free(s.s);
+            free(splice_scores.s);
+            free(splice_change.s);
         }
     }
 

@@ -66,7 +66,7 @@ KHASH_MAP_INIT_INT(GeneHash, Gene *);
 KHASH_MAP_INIT_INT(TranscriptHash, Transcript *);
 
 typedef struct ConsequencePredictions {
-    kstring_t **hap_score;
+    // kstring_t **hap_score;
     kstring_t **splice_change;
     kstring_t **is_rescue;
     kstring_t **rescue_type;
@@ -88,13 +88,21 @@ typedef kvec_t(gf_tscript_t *) gf_tscripts;
 
 typedef kvec_t(Transcript *) Transcripts;
 
+typedef struct SpliceChange {
+    float AG;
+    float AL;
+    float DG;
+    float DL;
+    float sum;
+} SpliceChange;
+
 typedef struct Record {
     bcf1_t *v;
     VepCsqs *vep;
     int triggers[3];
     ConsequencePredictions *c;
 
-    Score **hap_scores;
+    SpliceChange **cs;
     Score **complete_scores;
     Transcripts *tscripts;
     Genes *transcript_genes;
