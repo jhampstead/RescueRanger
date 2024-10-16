@@ -1,4 +1,5 @@
 #include "record.h"
+#include <stdlib.h>
 
 const int n_csq_fields = 29;
 const char vcf_delim = ',';
@@ -14,6 +15,21 @@ const char *vep_feature_type = "Feature_type";
 const char *vep_feature = "Feature";
 const char *vep_feature_type_transcript = "Transcript";
 
+
+void init_splice_site(SpliceSite **site, size_t *n, size_t *m) {
+    *m = 1;
+    *n = 0;
+    *site = malloc(sizeof(SpliceSite));
+}
+
+void resize_splice_site(SpliceSite **site, size_t *m) {
+    *m *= 2;
+    *site = realloc(*site, *m * sizeof(SpliceSite));
+}
+
+void destroy_splice_site(SpliceSite *site, size_t n) {
+    free(site);
+}
 
 
 void init_consequence_predictions(ConsequencePredictions **dst, int num_consequences) {
@@ -100,7 +116,7 @@ int *str_split(kstring_t *s, char delim, int *num_splits) {
 *   int id; khash_str2int_get(idHash, "Consequence", &id);
 *   fields[id];
 */
-HdrFormat *parse_csq_format(bcf_hdr_t *hdr) {
+HdrFormat *parse_csq_hdr_fmt(bcf_hdr_t *hdr) {
     char *hdr_info;
     if (bcf_hdr_id2int(hdr, BCF_DT_ID, csq_field) < 0) return NULL;
 
