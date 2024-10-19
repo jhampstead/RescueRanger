@@ -1,10 +1,12 @@
 #include <cpliceai/range.h>
+#include <cpliceai/utils.h>
 #include <htslib/kstring.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
 
 #include <klib/kvec.h>
 #include <klib/kstring.h>
@@ -45,6 +47,7 @@
 #define MAX_FRAMESHIFT_RADIUS 80
 
 #define CAI_DISTANCE 50
+#define PRED_WIDTH 101
 #define WIDTH 10101
 #define VARIANT_POS 5050
 #define SPLICEAI_THRESHOLD 0.8
@@ -74,7 +77,7 @@
 #define SPLICEAI_HAP_DESC "##INFO=<ID=SpliceAI_Haplotype,Number=.,Type=String,Description=\"CpliceAIv1.0 haplotype variant annotation from reference to complete haplotype. These include delta scores (DS) and delta positions (DP) for acceptor gain (AG), acceptor loss (AL), donor gain (DG), and donor loss (DL). Format: ALLELE|SYMBOL|DS_AG|DS_AL|DS_DG|DS_DL|DP_AG|DP_AL|DP_DG|DP_DL\">"
 
 #define CS_TAG "CS"
-#define CS_DESC "##INFO=<ID=CS,Number=.,Type=String,Description=\"Change in splicing between haplotype ref and haplotype alt at positions DP_AG, DP_AL, DP_DG, DP_DL. Format: CS_AG|CS_AL|CS_DG|CS_DL|CS_SUM\">"
+#define CS_DESC "##INFO=<ID=CS,Number=.,Type=String,Description=\"Change in splicing between haplotype + variant and haplotype at positions DP_AG, DP_AL, DP_DG, DP_DL. Format: CS_AG|CS_AL|CS_DG|CS_DL|CS_SUM\">"
 
 #define RESCUE_TAG "RESCUE"
 #define RESCUE_DESC "##INFO=<ID=RESCUE,Number=.,Type=String,Description=\"Boolean rescue prediction\">"
@@ -182,8 +185,6 @@ void predict_for_seq(Model *models, const char *seq, int seq_len, int strand, fl
 
     if (predict(models, enc_len, 1, &ohe, num_predictions, predictions)) {
         log_info("Predict failed.");
-
-
         return;
     }
     free(ohe);
@@ -1029,14 +1030,14 @@ float * predict_on_sequence(Model *models, char *seq, uint32_t position, Range p
     int64_t gene_end = prediction_boundaries.end - haplotype_offset(&rs, prediction_boundaries);
     int64_t vposition = position - haplotype_offset(&rs, (Range) { prediction_boundaries.start, position });
 
-    int32_t start_offset = VARIANT_POS + (gene_start - position);
-    int32_t end_offset = VARIANT_POS - (gene_end - position);
+    int32_t start_offset = VARIANT_POS + (gene_start - vposition);
+    int32_t end_offset = VARIANT_POS - (gene_end - vposition);
 
     char *shifted_seq = seq - start_offset;
     if (start_offset < 0) start_offset = 0;
     if (end_offset < 0) end_offset = 0;
 
-    Range padding_boundary = {start_offset, end_offset};
+    Range padding_boundary = { start_offset, end_offset };
     char *padded_seq = pad_sequence(shifted_seq, padding_boundary, WIDTH);
     float *predictions; int num_predictions;
     predict_for_seq(models, padded_seq, WIDTH, strand, &predictions, &num_predictions);
@@ -1045,20 +1046,56 @@ float * predict_on_sequence(Model *models, char *seq, uint32_t position, Range p
     return predictions;
 }
 
-int create_splice_probabilities(int vposition, int num_hap_alt_predictions, float *hap_alt_predictions, SpliceProbability **splice_probabilities) {
+int create_splice_probabilities(int vposition, Transcripts *transcripts, int num_hap_alt_predictions, float *hap_alt_predictions, SpliceProbability **splice_probabilities) {
     float *posterior_probabilities = calloc(num_hap_alt_predictions, sizeof(float));
     int num_acceptors = transform_to_posterior_probabilities(ACCEPTOR_POS, num_hap_alt_predictions, hap_alt_predictions, &posterior_probabilities);
     int num_donors = transform_to_posterior_probabilities(DONOR_POS, num_hap_alt_predictions, hap_alt_predictions, &posterior_probabilities);
 
     int num_splice_probabilities = num_acceptors + num_donors;
 
+    int canonicals[PRED_WIDTH] = {0};
+    for (int ti = 0; ti < transcripts->n; ti++) {
+        Transcript *t = kv_A(*transcripts, ti);
+
+        if (t == NULL) continue;
+        for (int ei = 0; ei < t->nexons; ei++) {
+            Exon *e = t->exons[ei];
+
+            if (t->strand == STRAND_UNK) continue;
+
+            if (abs(vposition - (int32_t) e->bounds->start) <= CAI_DISTANCE) {
+                int index = abs(vposition - (int32_t) e->bounds->start) + CAI_DISTANCE;
+
+                if(canonicals[index] == 0) num_splice_probabilities++;
+                canonicals[index] = ACCEPTOR;
+            } else if (abs(vposition - (int32_t) e->bounds->end) < CAI_DISTANCE) {
+                int index = abs(vposition - (int32_t) e->bounds->end) + CAI_DISTANCE;
+
+                if(canonicals[index] == 0) num_splice_probabilities++;
+                canonicals[index] = DONOR;
+            }
+        }
+    }
+
     SpliceProbability *probabilities = malloc(num_splice_probabilities * sizeof(SpliceProbability));
     int prob_idx = 0;
     for (int i = 0; i < num_hap_alt_predictions; i++) {
-        if (i % 3 == 0) continue; // Skip predictions for neither
+        if (i % NUM_SCORES == 0) continue; // Skip predictions for neither
 
         float prior_probability = hap_alt_predictions[i];
         float posterior_probability = posterior_probabilities[i];
+        if (canonicals[i / NUM_SCORES] == DONOR && i % NUM_SCORES == DONOR) {
+            int offset_from_variant = ((int) (i / NUM_SCORES)) - CAI_DISTANCE;
+            int prediction_position = vposition + offset_from_variant;
+            probabilities[prob_idx++] = (SpliceProbability) { DONOR, prior_probability, posterior_probability, prediction_position };
+            continue;
+        } else if (canonicals[i / NUM_SCORES] == ACCEPTOR && i % NUM_SCORES == ACCEPTOR) {
+            int offset_from_variant = ((int) (i / NUM_SCORES)) - CAI_DISTANCE;
+            int prediction_position = vposition + offset_from_variant;
+            probabilities[prob_idx++] = (SpliceProbability) { ACCEPTOR, prior_probability, posterior_probability, prediction_position };
+            continue;
+        }
+
         if (posterior_probability == 0) continue; // Skip null predictions
 
         int type = i % 3;
@@ -1081,12 +1118,9 @@ int check_proximity(uint32_t predicted_position, uint32_t canonical_site_positio
     return abs((int32_t)predicted_position - (int32_t)canonical_site_position) <= PROXIMITY_THRESHOLD;
 }
 
-
-
-void assign_prediction_to_splice_sites(const SpliceProbability prediction, const size_t num_predictions, SpliceSites *splice_sites) {
-    if (prediction.type == DONOR && prediction.posterior_probability > 0) {
-        // Store canonical donor site
-        if (splice_sites->canonical_donors[0].gff_canonical && prediction.posterior_probability == 1 && prediction.position == splice_sites->canonical_donors[0].position) { // If canonical exists and is the only splice site within the window
+void store_splice_sites(SpliceProbability prediction, int *predict_for_pair, int *predict_for_competitor, SpliceSites *splice_sites) {
+    if (prediction.type == DONOR & prediction.posterior_probability > 0) {
+        if (splice_sites->canonical_donors[0].gff_canonical && prediction.posterior_probability && prediction.position == splice_sites->canonical_donors[0].position) { // If canonical exists and is the only splice site within the window
             splice_sites->canonical_donors[0].predicted = 1;
             splice_sites->canonical_donors[0].prior_probability = prediction.prior_probability;
             splice_sites->canonical_donors[0].posterior_probability = prediction.posterior_probability;
@@ -1097,24 +1131,24 @@ void assign_prediction_to_splice_sites(const SpliceProbability prediction, const
             for (int i = 0; i < splice_sites->n_canonical_donors; i++) {
                 if (splice_sites->canonical_donors[i].position == prediction.position) {
                     canonical_donor_exists = 1;
-                    if (splice_sites->canonical_donors[i].predicted) {
+                    if (splice_sites->canonical_donors[i].predicted == 1) {
                         canonical_donor_predicted = 1;
                     }
-                    break;
                 }
             }
 
             if (canonical_donor_exists & canonical_donor_predicted) return;
             if (canonical_donor_exists & !canonical_donor_predicted) {
+                *predict_for_pair = 1;
                 for (int i = 0; i < splice_sites->n_canonical_donors; i++) {
                     if (splice_sites->canonical_donors[i].position == prediction.position) {
                         splice_sites->canonical_donors[i].predicted = 1;
                         splice_sites->canonical_donors[i].prior_probability = prediction.prior_probability;
                         splice_sites->canonical_donors[i].posterior_probability = prediction.posterior_probability;
-                        break;
                     }
                 }
             } else {
+                *predict_for_pair = 1;
                 if (splice_sites->n_canonical_donors >= splice_sites->m_canonical_donors) {
                     resize_splice_sites(&splice_sites->canonical_donors, &splice_sites->m_canonical_donors);
                 }
@@ -1128,11 +1162,11 @@ void assign_prediction_to_splice_sites(const SpliceProbability prediction, const
             for (int i = 0; i < splice_sites->n_cryptic_donors; i++) {
                 if (splice_sites->cryptic_donors[i].position == prediction.position) {
                     cryptic_donor_exists = 1;
-                    break;
                 }
             }
 
             if (!cryptic_donor_exists) {
+                *predict_for_competitor = 1;
                 if (splice_sites->n_cryptic_donors >= splice_sites->m_cryptic_donors) {
                     resize_splice_sites(&splice_sites->cryptic_donors, &splice_sites->m_cryptic_donors);
                 }
@@ -1140,9 +1174,9 @@ void assign_prediction_to_splice_sites(const SpliceProbability prediction, const
                 splice_sites->cryptic_donors[splice_sites->n_cryptic_donors++] = site;
             }
         }
-    } else if (prediction.type == ACCEPTOR && prediction.posterior_probability > 0) {
+    } else if (prediction.type == ACCEPTOR & prediction.posterior_probability > 0) {
         // Store canonical acceptor site
-        if (splice_sites->canonical_acceptors[0].gff_canonical && prediction.posterior_probability == 1 && prediction.position == splice_sites->canonical_acceptors[0].position) { // If canonical exists and is the only splice site within the window
+        if (splice_sites->canonical_acceptors[0].gff_canonical && prediction.posterior_probability && prediction.position == splice_sites->canonical_acceptors[0].position) { // If canonical exists and is the only splice site within the window
             splice_sites->canonical_acceptors[0].predicted = 1;
             splice_sites->canonical_acceptors[0].prior_probability = prediction.prior_probability;
             splice_sites->canonical_acceptors[0].posterior_probability = prediction.posterior_probability;
@@ -1153,28 +1187,27 @@ void assign_prediction_to_splice_sites(const SpliceProbability prediction, const
             for (int i = 0; i < splice_sites->n_canonical_acceptors; i++) {
                 if (splice_sites->canonical_acceptors[i].position == prediction.position) {
                     canonical_acceptor_exists = 1;
-                    if (splice_sites->canonical_acceptors[i].predicted) {
+                    if (splice_sites->canonical_acceptors[i].predicted == 1) {
                         canonical_acceptor_predicted = 1;
                     }
-                    break;
                 }
             }
 
             if (canonical_acceptor_exists & canonical_acceptor_predicted) return;
             if (canonical_acceptor_exists & !canonical_acceptor_predicted) {
+                *predict_for_pair = 1;
                 for (int i = 0; i < splice_sites->n_canonical_acceptors; i++) {
                     if (splice_sites->canonical_acceptors[i].position == prediction.position) {
                         splice_sites->canonical_acceptors[i].predicted = 1;
                         splice_sites->canonical_acceptors[i].prior_probability = prediction.prior_probability;
                         splice_sites->canonical_acceptors[i].posterior_probability = prediction.posterior_probability;
-                        break;
                     }
                 }
             } else {
+                *predict_for_pair = 1;
                 if (splice_sites->n_canonical_acceptors >= splice_sites->m_canonical_acceptors) {
                     resize_splice_sites(&splice_sites->canonical_acceptors, &splice_sites->m_canonical_acceptors);
                 }
-
                 SpliceSite site = { prediction.position, 1, 0, prediction.prior_probability, prediction.posterior_probability };
                 splice_sites->canonical_acceptors[splice_sites->n_canonical_acceptors++] = site;
             }
@@ -1185,15 +1218,14 @@ void assign_prediction_to_splice_sites(const SpliceProbability prediction, const
             for (int i = 0; i < splice_sites->n_cryptic_acceptors; i++) {
                 if (splice_sites->cryptic_acceptors[i].position == prediction.position) {
                     cryptic_acceptor_exists = 1;
-                    break;
                 }
             }
 
             if (!cryptic_acceptor_exists) {
+                *predict_for_competitor = 1;
                 if (splice_sites->n_cryptic_acceptors >= splice_sites->m_cryptic_acceptors) {
                     resize_splice_sites(&splice_sites->cryptic_acceptors, &splice_sites->m_cryptic_acceptors);
                 }
-
                 SpliceSite site = { prediction.position, 1, 0, prediction.prior_probability, prediction.posterior_probability };
                 splice_sites->cryptic_acceptors[splice_sites->n_cryptic_acceptors++] = site;
             }
@@ -1243,6 +1275,7 @@ int main(int argc, char *argv[]) {
 
     IRegion batch_region = {-1, -1, -1};
 
+    // Read records from vcf and store into coding/non-coding record blocks
     while (bcf_read(fp_in, hdr, v) >= 0) {
         bcf_unpack(v, BCF_UN_STR);
 
@@ -1385,6 +1418,9 @@ int main(int argc, char *argv[]) {
 
             r->complete_scores = malloc(r->genes->n * NUM_PHASES * sizeof(Score *));
             for (int i = 0; i < r->genes->n * NUM_PHASES; i++) r->complete_scores[i] = NULL;
+
+            r->cs = malloc(r->genes->n * NUM_PHASES * sizeof(SpliceChange *)); 
+            for (int i = 0; i < r->genes->n * NUM_PHASES; i++) r->cs[i] = NULL;
         }
 
     }
@@ -1404,6 +1440,18 @@ int main(int argc, char *argv[]) {
             // Check VEP consequences for rescue triggers
             for (int j = 0; j < r->vep->n; j++) {
                 TscriptCsqs transcript_consequence = kv_A(*r->vep, j);
+
+                int is_non_coding = 0;
+                for (int k = 0; k < transcript_consequence.num_consequences; k++) {
+                    const char *consequence = transcript_consequence.consequences[k];
+                    if (strcmp(consequence, "non_coding_transcript_variant") == 0 ||
+                        strcmp(consequence, "NMD_transcript_variant") == 0) {
+                        is_non_coding = 1;
+                    }
+                }
+
+                if (is_non_coding) continue;
+
                 for (int k = 0; k < transcript_consequence.num_consequences; k++) {
                     const char *consequence = transcript_consequence.consequences[k];
 
@@ -1502,11 +1550,11 @@ int main(int argc, char *argv[]) {
 
                         if (t->strand == STRAND_FWD) {
                             if (ei > 0) sites->canonical_acceptors[sites->n_canonical_acceptors++] = (SpliceSite) { exon_hap_start, 0, kept_start, 1.0, 1.0 };
-                            if (ei < hap_in.n-1) sites->canonical_donors[sites->n_canonical_donors++] = (SpliceSite) { exon_hap_end, 0, kept_end, 1.0, 1.0 };
+                            if (ei < t->nexons-1) sites->canonical_donors[sites->n_canonical_donors++] = (SpliceSite) { exon_hap_end, 0, kept_end, 1.0, 1.0 };
 
                             *e->bounds = (Range) {exon_hap_start, exon_hap_end};
                         } else if (t->strand == STRAND_REV) {
-                            if (ei < hap_in.n-1) sites->canonical_acceptors[sites->n_canonical_acceptors++] = (SpliceSite) { exon_hap_end, 0, kept_end, 1.0, 1.0 };
+                            if (ei < t->nexons-1) sites->canonical_acceptors[sites->n_canonical_acceptors++] = (SpliceSite) { exon_hap_end, 0, kept_end, 1.0, 1.0 };
                             if (ei > 0) sites->canonical_donors[sites->n_canonical_donors++] = (SpliceSite) { exon_hap_start, 0, kept_start, 1.0, 1.0 };
 
                             *e->bounds = (Range) {exon_hap_end, exon_hap_start};
@@ -1529,7 +1577,7 @@ int main(int argc, char *argv[]) {
             for (int i = 0; i < batch->n; i++) {
                 Record *r = kv_A(*batch, i);
 
-                if (!r->triggers[SPLICE_TRIGGER]) continue;
+                if (r->triggers[SPLICE_TRIGGER] == 0) continue;
 
                 if (strlen(r->v->d.allele[1]) > CAI_DISTANCE) {
                     log_warn("Skipping on %s:%li, insertion is too long", bcf_hdr_id2name(hdr, r->v->rid), r->v->pos);
@@ -1583,217 +1631,278 @@ int main(int argc, char *argv[]) {
                     get_haplotype_sequence(gene->seq, &hap_in, gene->coords, &hap_alt);
 
 
-                    if (r->triggers[SPLICE_TRIGGER]) {
-                        // REF
-                        int32_t start = VARIANT_POS - (r->v->pos - gene->coords.start);
-                        int32_t end = VARIANT_POS - (gene->coords.end - (r->v->pos+1)); // Open ended, so + 1
+                    // REF
+                    int32_t start = VARIANT_POS - (r->v->pos - gene->coords.start);
+                    int32_t end = VARIANT_POS - (gene->coords.end - (r->v->pos+1)); // Open ended, so + 1
 
-                        char *ref_seq = gene->seq.s - start; // Pointer to existing memory, no free necessary
-                        if (start < 0) start = 0;
-                        if (end < 0) end = 0;
+                    char *ref_seq = gene->seq.s - start; // Pointer to existing memory, no free necessary
+                    if (start < 0) start = 0;
+                    if (end < 0) end = 0;
 
-                        Range ref_boundary = { start, end };
-                        char *ref_padded = pad_sequence(ref_seq, ref_boundary, WIDTH);
-                        float *ref_predictions; int num_ref_predictions;
-                        int ref_len = strlen(ref_padded);
-                        predict_for_seq(models, ref_padded, ref_len, gene->strand, &ref_predictions, &num_ref_predictions);
-                        free(ref_padded);
+                    Range ref_boundary = { start, end };
+                    char *ref_padded = pad_sequence(ref_seq, ref_boundary, WIDTH);
+                    float *ref_predictions; int num_ref_predictions;
+                    int ref_len = strlen(ref_padded);
+                    predict_for_seq(models, ref_padded, ref_len, gene->strand, &ref_predictions, &num_ref_predictions);
+                    free(ref_padded);
 
-                        // HAP REF
-                        int pred_offset = prediction_offset(r->v, &hap_ex);
+                    // HAP REF
+                    int pred_offset = prediction_offset(r->v, &hap_ex);
 
-                        int64_t gene_start = gene->coords.start;
-                        int64_t gene_end = gene->coords.end - haplotype_offset(&hap_ex, gene->coords);
-                        int64_t vposition = r->v->pos - haplotype_offset(&hap_ex, (Range) {gene->coords.start, r->v->pos});
+                    int64_t gene_start = gene->coords.start;
+                    int64_t gene_end = gene->coords.end - haplotype_offset(&hap_ex, gene->coords);
+                    int64_t vposition = r->v->pos - haplotype_offset(&hap_ex, (Range) {gene->coords.start, r->v->pos});
 
-                        // int32_t hap_ref_start = VARIANT_POS + (gene_start - vposition);
-                        // int32_t hap_ref_end = VARIANT_POS - (gene_end - vposition) - pred_offset;
-                        //
-                        // char *hap_ref_seq = hap_ref.s - hap_ref_start;
-                        // if (hap_ref_start < 0) hap_ref_start = 0;
-                        // if (hap_ref_end < 0) hap_ref_end = 0;
+                    int32_t hap_ref_start = VARIANT_POS + (gene_start - vposition);
+                    int32_t hap_ref_end = VARIANT_POS - (gene_end - vposition) - pred_offset;
 
-                        // Range hap_ref_boundary = {hap_ref_start, hap_ref_end};
-                        // char *hap_ref_padded = pad_sequence(hap_ref_seq, hap_ref_boundary, WIDTH - pred_offset);
-                        // float *hap_ref_predictions; int num_hap_ref_predictions;
-                        // int hap_ref_len = strlen(hap_ref_padded);
-                        // predict_for_seq(models, hap_ref_padded, hap_ref_len, gene->strand, &hap_ref_predictions, &num_hap_ref_predictions);
-                        // float *corrected_hap_ref_predictions = match_predictions_to_reference(hap_ref_predictions, r->v, &hap_ex, num_ref_predictions);
+                    char *hap_ref_seq = hap_ref.s - hap_ref_start;
+                    if (hap_ref_start < 0) hap_ref_start = 0;
+                    if (hap_ref_end < 0) hap_ref_end = 0;
 
-                        // free(hap_ref_padded);
+                    Range hap_ref_boundary = {hap_ref_start, hap_ref_end};
+                    char *hap_ref_padded = pad_sequence(hap_ref_seq, hap_ref_boundary, WIDTH - pred_offset);
+                    float *hap_ref_predictions; int num_hap_ref_predictions;
+                    int hap_ref_len = strlen(hap_ref_padded);
+                    predict_for_seq(models, hap_ref_padded, hap_ref_len, gene->strand, &hap_ref_predictions, &num_hap_ref_predictions);
+                    float *corrected_hap_ref_predictions = match_predictions_to_reference(hap_ref_predictions, r->v, &hap_ex, num_ref_predictions);
 
-                        // HAP ALT
-                        pred_offset = prediction_offset(r->v, &hap_in);
-                        gene_end -= allele_offset(r->v, 0, 1, gene->coords);
-                        int hap_alt_pred_offset = prediction_offset(r->v, &hap_in);
+                    free(hap_ref_padded);
 
-                        int32_t hap_alt_start = VARIANT_POS + (gene_start - vposition);
-                        int32_t hap_alt_end = VARIANT_POS - (gene_end - vposition) - pred_offset;
+                    // HAP ALT
+                    pred_offset = prediction_offset(r->v, &hap_in);
+                    gene_end -= allele_offset(r->v, 0, 1, gene->coords);
+                    int hap_alt_pred_offset = prediction_offset(r->v, &hap_in);
 
-                        char *hap_alt_seq = hap_alt.s - hap_alt_start;
-                        if (hap_alt_start < 0) hap_alt_start = 0;
-                        if (hap_alt_end < 0) hap_alt_end = 0;
+                    int32_t hap_alt_start = VARIANT_POS + (gene_start - vposition);
+                    int32_t hap_alt_end = VARIANT_POS - (gene_end - vposition) - pred_offset;
 
-                        Range hap_alt_boundary = {hap_alt_start, hap_alt_end};
-                        char *hap_alt_padded = pad_sequence(hap_alt_seq, hap_alt_boundary, WIDTH - pred_offset);
-                        float *hap_alt_predictions; int num_hap_alt_predictions;
-                        int hap_alt_len = strlen(hap_alt_padded);
-                        predict_for_seq(models, hap_alt_padded, hap_alt_len, gene->strand, &hap_alt_predictions, &num_hap_alt_predictions);
-                        float *corrected_hap_alt_predictions = match_predictions_to_reference(hap_alt_predictions, r->v, &hap_in, num_ref_predictions);
-                        free(hap_alt_padded);
+                    char *hap_alt_seq = hap_alt.s - hap_alt_start;
+                    if (hap_alt_start < 0) hap_alt_start = 0;
+                    if (hap_alt_end < 0) hap_alt_end = 0;
 
-                        // kstring_t s = {0};
-                        // for (int i = 0; i < num_hap_alt_predictions; i++) {
-                        //     kputd(hap_alt_predictions[i], &s);
-                        //     if (i+1 < num_hap_alt_predictions) kputc('\t', &s);
-                        // }
-                        // fprintf(raw_scores, "%s\t%i\t%s\t%i\t%s\n", bcf_hdr_id2name(hdr, r->v->rid), r->v->pos+1, gene->name, p, s.s);
-                        // free(s.s);
+                    Range hap_alt_boundary = {hap_alt_start, hap_alt_end};
+                    char *hap_alt_padded = pad_sequence(hap_alt_seq, hap_alt_boundary, WIDTH - pred_offset);
+                    float *hap_alt_predictions; int num_hap_alt_predictions;
+                    int hap_alt_len = strlen(hap_alt_padded);
+                    predict_for_seq(models, hap_alt_padded, hap_alt_len, gene->strand, &hap_alt_predictions, &num_hap_alt_predictions);
+                    float *corrected_hap_alt_predictions = match_predictions_to_reference(hap_alt_predictions, r->v, &hap_in, num_ref_predictions);
+                    free(hap_alt_padded);
 
-                        // Calculate scores between ref and hap_alt
-                        Score score = calculate_delta_scores(r->v->d.allele[1], gene->name, ref_predictions, corrected_hap_alt_predictions, num_ref_predictions, CAI_DISTANCE);
+                    // Calculate scores between ref and hap_alt
+                    Score score = calculate_delta_scores(r->v->d.allele[1], gene->name, ref_predictions, corrected_hap_alt_predictions, num_ref_predictions, CAI_DISTANCE);
 
-                        r->complete_scores[g * NUM_PHASES + p] = malloc(sizeof(Score));
-                        *r->complete_scores[g * NUM_PHASES + p] = score;
+                    r->cs[g * NUM_PHASES + p] = malloc(sizeof(SpliceChange));
+                    int ag_position = (score.ag_idx + CAI_DISTANCE) * NUM_SCORES + ACCEPTOR_POS;
+                    int al_position = (score.al_idx + CAI_DISTANCE) * NUM_SCORES + ACCEPTOR_POS;
+                    int dg_position = (score.dg_idx + CAI_DISTANCE) * NUM_SCORES + DONOR_POS;
+                    int dl_position = (score.dl_idx + CAI_DISTANCE) * NUM_SCORES + DONOR_POS;
+                    float cs_ag = corrected_hap_alt_predictions[ag_position] - corrected_hap_ref_predictions[ag_position];
+                    float cs_al = corrected_hap_alt_predictions[al_position] - corrected_hap_ref_predictions[al_position];
+                    float cs_dg = corrected_hap_alt_predictions[dg_position] - corrected_hap_ref_predictions[dg_position];
+                    float cs_dl = corrected_hap_alt_predictions[dl_position] - corrected_hap_ref_predictions[dl_position];
+                    *r->cs[g * NUM_PHASES + p] = (SpliceChange) {cs_ag, cs_al, cs_dg, cs_dl, fabs(cs_ag) + fabs(cs_al) + fabs(cs_dg) + fabs(cs_dl) };
 
-                        // Remove predictions that are most likely to be neutral
-                        filter_to_most_likely_prediction(num_hap_alt_predictions, &hap_alt_predictions);
+                    r->complete_scores[g * NUM_PHASES + p] = malloc(sizeof(Score));
+                    *r->complete_scores[g * NUM_PHASES + p] = score;
 
-                        // Scale donor/acceptor probabilities by their prior
-                        SpliceProbability *splice_probabilities;
-                        int num_splice_probabilities = create_splice_probabilities(vposition, num_hap_alt_predictions, hap_alt_predictions, &splice_probabilities);
+                    // Remove predictions that are most likely to be neutral
+                    filter_to_most_likely_prediction(num_hap_alt_predictions, &hap_alt_predictions);
 
-                        for (int i = 0; i < r->tscripts->n; i++) {
-                            Transcript *t = kv_A(*r->tscripts, i);
+                    // Scale donor/acceptor probabilities by their prior
+                    SpliceProbability *splice_probabilities;
+                    int num_splice_probabilities = create_splice_probabilities(vposition, r->tscripts, num_hap_alt_predictions, hap_alt_predictions, &splice_probabilities);
 
-                            if (t == NULL) continue;
-                            for (int si = 0; si < num_splice_probabilities; si++) {
-                                SpliceProbability probability = splice_probabilities[si];
-                                Range splice_position = (Range) { probability.position, probability.position+1 };
-                                for (int ei = 0; ei < t->nexons; ei++) {
-                                    Exon *e = t->exons[ei];
+                    for (int i = 0; i < r->tscripts->n; i++) {
+                        Transcript *t = kv_A(*r->tscripts, i);
+                        Gene *tgene = kv_A(*r->transcript_genes, i);
 
+                        if (t == NULL || tgene->gff_id != gene->gff_id) continue;
+                        for (int si = 0; si < num_splice_probabilities; si++) {
+                            SpliceProbability prediction = splice_probabilities[si];
+                            Range splice_position = (Range) { prediction.position, prediction.position+1 };
+                            for (int ei = 0; ei < t->nexons; ei++) {
+                                Exon *e = t->exons[ei];
 
-                                    int direction = 0;
-                                    if (t->strand == STRAND_FWD) direction = 1;
-                                    if (t->strand == STRAND_REV) direction = -1;
-                                    if (t->strand == STRAND_UNK) continue;
+                                int direction = 0;
+                                if (t->strand == STRAND_FWD) direction = 1;
+                                if (t->strand == STRAND_REV) direction = -1;
+                                if (t->strand == STRAND_UNK) continue;
 
-                                    Range positions;
-                                    if (probability.type == DONOR) {
-                                        if (ei == t->nexons-1 && t->strand == STRAND_FWD) continue; // Last exon, cannot form a pair with a downstream acceptor
-                                        if (ei == 0 && t->strand == STRAND_REV) continue;
-                                        positions = (Range) { e->bounds->start + 1, t->exons[ei + direction]->bounds->start };
+                                Range positions;
+                                if (prediction.type == DONOR) {
+                                    if (ei == t->nexons-1 && t->strand == STRAND_FWD) continue; // Last exon, cannot form a pair with a downstream acceptor
+                                    if (ei == 0 && t->strand == STRAND_REV) continue;
+                                    positions = (Range) { e->bounds->start + 1, t->exons[ei + direction]->bounds->start };
+                                } else { // ACCEPTOR
+                                    if (ei == 0 && t->strand == STRAND_FWD) continue;
+                                    if (ei == t->nexons-1 && t->strand == STRAND_REV) continue;
+                                    positions = (Range) { t->exons[ei - direction]->bounds->end, e->bounds->end - 1 };
+                                }
+
+                                Range intersection;
+                                if (!intersect_ranges(splice_position, positions, &intersection) || !range_len(intersection)) continue;
+
+                                int predict_for_pair = 0;
+                                int predict_for_competitor = 1;
+                                store_splice_sites(prediction, &predict_for_pair, &predict_for_competitor, e->splice_sites);
+
+                                if (predict_for_pair) {
+                                    if (prediction.type == DONOR) {
+                                        int pi = ei + direction;
+                                        if (pi < 0 || pi >= t->nexons) continue;
+                                        SpliceSite pair = t->exons[pi]->splice_sites->canonical_acceptors[0];
+
+                                        if (pair.predicted) continue;
+
+                                        float *pair_predictions = predict_on_sequence(models, hap_alt.s, pair.position, tgene->coords, tgene->strand, hap_in);
+                                        filter_to_most_likely_prediction(PRED_WIDTH * NUM_SCORES, &pair_predictions);
+
+                                        SpliceProbability *pair_probabilities;
+                                        int num_pair_probabilities = create_splice_probabilities(pair.position, r->tscripts, PRED_WIDTH, pair_predictions, &pair_probabilities);
+                                        for (int pi = 0; pi < num_pair_probabilities; pi++) {
+                                            SpliceProbability pair_prediction = pair_probabilities[pi];
+
+                                            for (int ei = 0; ei < t->nexons; ei++) {
+                                                Exon *e = t->exons[ei];
+
+                                                Range positions;
+                                                if (prediction.type == DONOR) {
+                                                    if (ei == t->nexons-1 && t->strand == STRAND_FWD) continue; // Last exon, cannot form a pair with a downstream acceptor
+                                                    if (ei == 0 && t->strand == STRAND_REV) continue;
+                                                    positions = (Range) { e->bounds->start + 1, t->exons[ei + direction]->bounds->start };
+                                                } else { // ACCEPTOR
+                                                    if (ei == 0 && t->strand == STRAND_FWD) continue;
+                                                    if (ei == t->nexons-1 && t->strand == STRAND_REV) continue;
+                                                    positions = (Range) { t->exons[ei - direction]->bounds->end, e->bounds->end - 1 };
+                                                }
+
+                                                Range intersection;
+                                                if (!intersect_ranges(splice_position, positions, &intersection) || !range_len(intersection)) continue;
+
+                                                store_splice_sites(pair_prediction, &predict_for_pair, &predict_for_competitor, e->splice_sites);
+                                            }
+                                        }
                                     } else { // ACCEPTOR
-                                        if (ei == 0 && t->strand == STRAND_FWD) continue;
-                                        if (ei == t->nexons-1 && t->strand == STRAND_REV) continue;
-                                        positions = (Range) { t->exons[ei - direction]->bounds->end, e->bounds->end - 1 };
+                                        int pi = ei - direction;
+                                        if (pi < 0 || pi >= t->nexons) continue;
+                                        SpliceSite pair = t->exons[pi]->splice_sites->canonical_donors[0];
+
+                                        if (pair.predicted) continue;
+
+                                        float *pair_predictions = predict_on_sequence(models, hap_alt.s, pair.position, tgene->coords, tgene->strand, hap_in);
+                                        filter_to_most_likely_prediction(PRED_WIDTH * NUM_SCORES, &pair_predictions);
+
+                                        SpliceProbability *pair_probabilities;
+                                        int num_pair_probabilities = create_splice_probabilities(pair.position, r->tscripts, PRED_WIDTH, pair_predictions, &pair_probabilities);
+                                        for (int pi = 0; pi < num_pair_probabilities; pi++) {
+                                            SpliceProbability pair_prediction = pair_probabilities[pi];
+
+                                            for (int ei = 0; ei < t->nexons; ei++) {
+                                                Exon *e = t->exons[ei];
+
+                                                Range positions;
+                                                if (prediction.type == DONOR) {
+                                                    if (ei == t->nexons-1 && t->strand == STRAND_FWD) continue; // Last exon, cannot form a pair with a downstream acceptor
+                                                    if (ei == 0 && t->strand == STRAND_REV) continue;
+                                                    positions = (Range) { e->bounds->start + 1, t->exons[ei + direction]->bounds->start };
+                                                } else { // ACCEPTOR
+                                                    if (ei == 0 && t->strand == STRAND_FWD) continue;
+                                                    if (ei == t->nexons-1 && t->strand == STRAND_REV) continue;
+                                                    positions = (Range) { t->exons[ei - direction]->bounds->end, e->bounds->end - 1 };
+                                                }
+
+                                                Range intersection;
+                                                if (!intersect_ranges(splice_position, positions, &intersection) || !range_len(intersection)) continue;
+
+                                                store_splice_sites(pair_prediction, &predict_for_pair, &predict_for_competitor, e->splice_sites);
+                                            }
+                                        }
                                     }
+                                }
 
-                                    Range intersection;
-                                    if (!intersect_ranges(splice_position, positions, &intersection) || !range_len(intersection)) continue;
+                                if (predict_for_competitor) {
+                                    if (prediction.type == DONOR) {
+                                        int ci = ei - direction;
+                                        if (ci < 0 || ci >= t->nexons) continue;
+                                        SpliceSite competitor = t->exons[ci]->splice_sites->canonical_donors[0];
 
-                                    assign_prediction_to_splice_sites(probability, num_splice_probabilities, e->splice_sites);
+                                        if (competitor.predicted) continue;
+
+                                        float *competitor_predictions = predict_on_sequence(models, hap_alt.s, competitor.position, tgene->coords, tgene->strand, hap_in);
+                                        filter_to_most_likely_prediction(PRED_WIDTH * NUM_SCORES, &competitor_predictions);
+
+                                        SpliceProbability *competitor_probabilities;
+                                        int num_competitor_probabilities = create_splice_probabilities(competitor.position, r->tscripts, PRED_WIDTH, competitor_predictions, &competitor_probabilities);
+                                        for (int ci = 0; ci < num_competitor_probabilities; ci++) {
+                                            SpliceProbability competitor_prediction = competitor_probabilities[ci];
+
+                                            for (int ei = 0; ei < t->nexons; ei++) {
+                                                Exon *e = t->exons[ei];
+
+                                                Range positions;
+                                                if (prediction.type == DONOR) {
+                                                    if (ei == t->nexons-1 && t->strand == STRAND_FWD) continue; // Last exon, cannot form a pair with a downstream acceptor
+                                                    if (ei == 0 && t->strand == STRAND_REV) continue;
+                                                    positions = (Range) { e->bounds->start + 1, t->exons[ei + direction]->bounds->start };
+                                                } else { // ACCEPTOR
+                                                    if (ei == 0 && t->strand == STRAND_FWD) continue;
+                                                    if (ei == t->nexons-1 && t->strand == STRAND_REV) continue;
+                                                    positions = (Range) { t->exons[ei - direction]->bounds->end, e->bounds->end - 1 };
+                                                }
+
+                                                Range intersection;
+                                                if (!intersect_ranges(splice_position, positions, &intersection) || !range_len(intersection)) continue;
+
+                                                store_splice_sites(competitor_prediction, &predict_for_pair, &predict_for_competitor, e->splice_sites);
+                                            }
+                                        }
+                                    } else { // ACCEPTOR
+                                        int ci = ei + direction;
+                                        if (ci < 0 || ci >= t->nexons) continue;
+                                        SpliceSite competitor = t->exons[ci]->splice_sites->canonical_acceptors[0];
+
+                                        if (competitor.predicted) continue;
+
+                                        float *competitor_predictions = predict_on_sequence(models, hap_alt.s, competitor.position, tgene->coords, tgene->strand, hap_in);
+                                        filter_to_most_likely_prediction(PRED_WIDTH * NUM_SCORES, &competitor_predictions);
+
+                                        SpliceProbability *competitor_probabilities;
+                                        int num_competitor_probabilities = create_splice_probabilities(competitor.position, r->tscripts, PRED_WIDTH, competitor_predictions, &competitor_probabilities);
+                                        for (int ci = 0; ci < num_competitor_probabilities; ci++) {
+                                            SpliceProbability competitor_prediction = competitor_probabilities[ci];
+
+                                            for (int ei = 0; ei < t->nexons; ei++) {
+                                                Exon *e = t->exons[ei];
+
+                                                Range positions;
+                                                if (prediction.type == DONOR) {
+                                                    if (ei == t->nexons-1 && t->strand == STRAND_FWD) continue; // Last exon, cannot form a pair with a downstream acceptor
+                                                    if (ei == 0 && t->strand == STRAND_REV) continue;
+                                                    positions = (Range) { e->bounds->start + 1, t->exons[ei + direction]->bounds->start };
+                                                } else { // ACCEPTOR
+                                                    if (ei == 0 && t->strand == STRAND_FWD) continue;
+                                                    if (ei == t->nexons-1 && t->strand == STRAND_REV) continue;
+                                                    positions = (Range) { t->exons[ei - direction]->bounds->end, e->bounds->end - 1 };
+                                                }
+
+                                                Range intersection;
+                                                if (!intersect_ranges(splice_position, positions, &intersection) || !range_len(intersection)) continue;
+
+                                                store_splice_sites(competitor_prediction, &predict_for_pair, &predict_for_competitor, e->splice_sites);
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
-
-
-
-
-                        // if (r->triggers[SPLICE_TRIGGER] == CANONICAL_SPLICE_VALUE) { // A wild canonical splice site has been found!
-                        //     for (int i = 0; i < r->tscripts->n; i++) {
-                        //         Transcript *t = kv_A(*r->tscripts, i);
-                        //
-                        //         if (t == NULL) continue;
-                        //         for (int si = 0; si < num_splice_probabilities; si++) {
-                        //             SpliceProbability probability = splice_probabilities[si];
-                        //             // If position is canonical splice site, no splice change has occurred, and posterior is 1, set and continue
-                        //             int is_canonical = 0, is_compensatory;
-                        //             enum SpliceType splice_site_type;
-                        //             SpliceSite target;
-                        //
-                        //             if (probability.type == ACCEPTOR) {
-                        //                 for (int ei = 1; ei < t->nexons; ei++) {
-                        //                     Exon *e = t->exons[ei];
-                        //                     SpliceSite acceptor = e->splice_sites->canonical_acceptors[0]; // 0 is the only possible gff_canonical
-                        //                     if (!acceptor.gff_canonical) continue; // If in deletion it can lose gff_canonical
-                        //
-                        //                     SpliceSite donor = t->exons[ei-1]->splice_sites->canonical_donors[0];
-                        //
-                        //                     if (probability.probability == 1 &&
-                        //                         probability.position == acceptor.position &&
-                        //                         acceptor.posterior_probability == 1) continue;
-                        //
-                        //                     if (acceptor.gff_canonical && 
-                        //                         acceptor.position > probability.position ? 
-                        //                         acceptor.position - probability.position : 
-                        //                         probability.position - acceptor.position <= 15) {
-                        //                         if (!donor.predicted && donor.gff_canonical) {
-                        //                             log_error("Additional prediction!");
-                        //                             float *predictions = predict_on_sequence(models, hap_alt.s, donor.position, gene->coords, gene->strand, hap_in);
-                        //                             // If compensatory gain on pair: add gain(s) as canonical splice sites
-                        //                             // Else if gain is too far or acceptor, add as cryptic splice site
-                        //                             /// Get downstream canonical acceptor, if it exists, predict for it
-                        //                             /// If compensatory gain on competitor: add gain(s) as canonical splice sites
-                        //                             /// Else if gain is too far or acceptor, add as cryptic splice site
-                        //
-                        //                             // free(predictions);
-                        //                         }
-                        //                     }
-                        //                 }
-                        //             } else if (probability.type == DONOR) {
-                        //                 // for (int ei = 0; ei < t->nexons-1; ei++) {
-                        //                 //     Exon *e = t->exons[ei];
-                        //                 //     for (int ai = 0; ai < e->splice_sites->n_canonical_donors; ai++) {
-                        //                 //         SpliceSite donor = e->splice_sites->canonical_donors[ai];
-                        //                 //         if (probability.probability == 1 &&
-                        //                 //             probability.position == donor.position &&
-                        //                 //             donor.gff_canonical &&
-                        //                 //             donor.posterior_probability == 1) continue;
-                        //                 //     }
-                        //                 // }
-                        //             }
-                        //         }
-                        //     }
-                        // }
-
-                        // if (r->triggers[SPLICE_TRIGGER] == CRYPTIC_SPLICE_VALUE) { // Cryptic splicing has occurred!
-                        //     for (int i = 0; i < r->tscripts->n; i++) {
-                        //         Transcript *t = kv_A(*r->tscripts, i);
-                        //
-                        //         for (int si = 0; si < num_splice_probabilities; si++) {
-                        //             SpliceProbability probability = splice_probabilities[si];
-                        //
-                        //             // Predict for closest canonical competitor
-                        //
-                        //             Exon *target = NULL;
-                        //             for (int ei = 0; ei < t->ncds; ei++) {
-                        //                 Exon *exon = t->exons[ei];
-                        //
-                        //
-                        //                 if (probability.type == ACCEPTOR) {
-                        //                     if (exon->bounds->end >= probability.position) continue; // INFO: We make the assumption that a donor HAS to be upstream
-                        //                     if (target == NULL || target->bounds->end < exon->bounds->end) target = exon;
-                        //                 } else { // DONOR
-                        //
-                        //                 }
-                        //
-                        //             }
-                        //
-                        //         }
-                        //
-                        //     }
-                        // } 
-
-                        free(ref_predictions);
-                        // free(hap_ref_predictions);
-                        // free(corrected_hap_ref_predictions);
-                        free(hap_alt_predictions);
-                        free(corrected_hap_alt_predictions);
-                    } else {
-                        log_info("No splice trigger found, skipping splice prediction");
                     }
+
+                    free(ref_predictions);
+                    free(hap_ref_predictions);
+                    free(corrected_hap_ref_predictions);
+                    free(hap_alt_predictions);
+                    free(corrected_hap_alt_predictions);
 
                     free(hap_ref.s);
                     free(hap_alt.s);
@@ -1857,14 +1966,21 @@ int main(int argc, char *argv[]) {
                                 kv_push(Range, nc_regions[n_nc_regions], ncr);
                                 n_nc_regions++;
                             }
-                            if (n_nc_regions > 0 && range_len(*e->bounds) != range_len(*e->cds) && e->bounds->end != e->cds->end) { // 3' UTR
+
+                            if (n_nc_regions > 0 && range_len(*e->bounds) != range_len(*e->cds) && e->bounds->end != e->cds->end && e->bounds->end+1 != e->cds->end && e->bounds->end+2 != e->cds->end) { // 3' UTR
                                 Range ncr = { e->cds->end,  gene->coords.end };
                                 kv_push(Range, nc_regions[n_nc_regions], ncr);
                                 n_nc_regions++;
                                 break; // End of transcript
                             }
 
-                            if (e->splice_sites->canonical_donors[0].gff_canonical == 0 && e->splice_sites->n_cryptic_donors == 0) continue; // No donors, skip
+                            if (e->splice_sites->canonical_donors[0].gff_canonical == 0 && e->splice_sites->n_cryptic_donors == 0) {
+                                Range ncr = { e->cds->start, e->cds->start };
+                                kv_push(Range, nc_regions[n_nc_regions], ncr);
+                                n_nc_regions++;
+                                continue;
+                            } // No donors, skip
+
                             int lost_canonical_acceptor = e->splice_sites->canonical_acceptors[0].gff_canonical == 0 && e->splice_sites->n_cryptic_acceptors == 0;
 
                             // Get the exon in which the search for the acceptor will be performed
@@ -1877,11 +1993,32 @@ int main(int argc, char *argv[]) {
 
                             // TODO: Add a way to handle missing canonical donor sites, and the possible exon skipped that would be induced
 
-                            for (int di = 0; di < e->splice_sites->n_canonical_donors; di++) {
+                            for (int di = 0; di < e->splice_sites->n_canonical_donors; di++) { // Always at least 1 canonical donor, and 1 canonical acceptor
                                 uint32_t donor_pos = e->splice_sites->canonical_donors[di].position;
 
                                 if (target == NULL) {
-                                    Range ncr = { donor_pos, gene->coords.end };
+                                    Range ncr = { donor_pos, donor_pos }; // No splicing happens for this donor
+                                    kv_push(Range, nc_regions[n_nc_regions], ncr);
+                                    continue;
+                                }
+
+                                for (int ai = 0; ai < target->splice_sites->n_canonical_acceptors; ai++) {
+                                    if (ai == 0 && !e->splice_sites->canonical_acceptors[0].gff_canonical) continue; // Canonical acceptor is lost, can't be used
+                                    Range ncr = { donor_pos, target->splice_sites->canonical_acceptors[ai].position };
+                                    kv_push(Range, nc_regions[n_nc_regions], ncr);
+                                }
+
+                                for (int ai = 0; ai < target->splice_sites->n_cryptic_acceptors; ai++) {
+                                    Range ncr = { donor_pos, target->splice_sites->cryptic_acceptors[ai].position };
+                                    kv_push(Range, nc_regions[n_nc_regions], ncr);
+                                }
+                            }
+
+                            for (int di = 0; di < e->splice_sites->n_cryptic_donors; di++) {
+                                uint32_t donor_pos = e->splice_sites->cryptic_donors[di].position;
+
+                                if (target == NULL) {
+                                    Range ncr = { donor_pos, donor_pos }; // No splicing happens for this donor
                                     kv_push(Range, nc_regions[n_nc_regions], ncr);
                                     continue;
                                 }
@@ -1907,18 +2044,24 @@ int main(int argc, char *argv[]) {
                             is_coding = 1;
 
                             if (n_nc_regions == 0 && range_len(*e->bounds) != range_len(*e->cds) && e->bounds->start != e->cds->start) { // 5' UTR
-                                Range ncr = { gene->coords.start, e->cds->start };
+                                Range ncr = { gene->coords.end, e->cds->start };
                                 kv_push(Range, nc_regions[n_nc_regions], ncr);
                                 n_nc_regions++;
                             }
-                            if (n_nc_regions > 0 && range_len(*e->bounds) != range_len(*e->cds) && e->bounds->end != e->cds->end) { // 3' UTR
-                                Range ncr = { e->cds->end,  gene->coords.end };
+                            if (n_nc_regions > 0 && range_len(*e->bounds) != range_len(*e->cds) && e->bounds->end != e->cds->end && e->bounds->end+1 != e->cds->end && e->bounds->end+2 != e->cds->start) { // 3' UTR
+                                Range ncr = { e->cds->end,  gene->coords.start };
                                 kv_push(Range, nc_regions[n_nc_regions], ncr);
                                 n_nc_regions++;
                                 break; // End of transcript
                             }
 
-                            if (e->splice_sites->canonical_donors[0].gff_canonical == 0 && e->splice_sites->n_cryptic_donors == 0) continue; // No donors, skip
+                            if (e->splice_sites->canonical_donors[0].gff_canonical == 0 && e->splice_sites->n_cryptic_donors == 0) {
+                                Range ncr = { e->cds->start, e->cds->start };
+                                kv_push(Range, nc_regions[n_nc_regions], ncr);
+                                n_nc_regions++;
+                                continue;
+                            } // No donors, intron_retention, check TODO for exon skipping
+
                             int lost_canonical_acceptor = e->splice_sites->canonical_acceptors[0].gff_canonical == 0 && e->splice_sites->n_cryptic_acceptors == 0;
 
                             // Get the exon in which the search for the acceptor will be performed
@@ -1931,11 +2074,32 @@ int main(int argc, char *argv[]) {
 
                             // TODO: Add a way to handle missing canonical donor sites, and the possible exon skipped that would be induced
 
-                            for (int di = 0; di < e->splice_sites->n_canonical_donors; di++) {
+                            for (int di = 0; di < e->splice_sites->n_canonical_donors; di++) { // Always at least 1 canonical donor, and 1 canonical acceptor
                                 uint32_t donor_pos = e->splice_sites->canonical_donors[di].position;
 
                                 if (target == NULL) {
-                                    Range ncr = { donor_pos, gene->coords.end };
+                                    Range ncr = { donor_pos, donor_pos }; // No splicing happens for this donor
+                                    kv_push(Range, nc_regions[n_nc_regions], ncr);
+                                    continue;
+                                }
+
+                                for (int ai = 0; ai < target->splice_sites->n_canonical_acceptors; ai++) {
+                                    if (ai == 0 && !e->splice_sites->canonical_acceptors[0].gff_canonical) continue; // Canonical acceptor is lost, can't be used
+                                    Range ncr = { donor_pos, target->splice_sites->canonical_acceptors[ai].position };
+                                    kv_push(Range, nc_regions[n_nc_regions], ncr);
+                                }
+
+                                for (int ai = 0; ai < target->splice_sites->n_cryptic_acceptors; ai++) {
+                                    Range ncr = { donor_pos, target->splice_sites->cryptic_acceptors[ai].position };
+                                    kv_push(Range, nc_regions[n_nc_regions], ncr);
+                                }
+                            }
+
+                            for (int di = 0; di < e->splice_sites->n_cryptic_donors; di++) {
+                                uint32_t donor_pos = e->splice_sites->cryptic_donors[di].position;
+
+                                if (target == NULL) {
+                                    Range ncr = { donor_pos, donor_pos }; // No splicing happens for this donor
                                     kv_push(Range, nc_regions[n_nc_regions], ncr);
                                     continue;
                                 }
@@ -1956,7 +2120,7 @@ int main(int argc, char *argv[]) {
                         }
                     }
 
-                    if (!is_coding) continue; // Transcript is not protein-coding!
+                    if (!is_coding) continue; // Transcript is not protein-coding after all!
 
                     int nisoforms = 0, misoforms = 1;
                     for (int i = 0; i < n_nc_regions; i++) {
@@ -1966,9 +2130,10 @@ int main(int argc, char *argv[]) {
                         misoforms *= ranges.n;
                     }
 
-                    Ranges *isoforms = malloc(misoforms * sizeof(Ranges));
+                    Ranges **isoforms = malloc(misoforms * sizeof(Ranges *));
                     for (int i = 0; i < misoforms; i++) {
-                        kv_init(isoforms[i]);
+                        isoforms[i] = malloc(sizeof(Ranges));
+                        kv_init(*isoforms[i]);
                     }
 
                     for (int i = 0; i < n_nc_regions; i++) {
@@ -1977,36 +2142,92 @@ int main(int argc, char *argv[]) {
 
                         if (nisoforms == 0) { // First isoform
                             for (int j = 0; j < ranges.n; j++) {
-                                Ranges first = isoforms[j];
+                                Ranges *first = isoforms[j];
                                 Range to_push = kv_A(ranges, j);
-                                kv_push(Range, first, to_push);
+                                kv_push(Range, *first, to_push);
                                 nisoforms++;
                             }
                         } else { // Extend/duplicate isoforms already created
                             // Copy over isoforms to add new endings
                             int prior_n_isoforms = nisoforms;
                             for (int j = 1; j < ranges.n; j++) {
-                                for (int k = 0; k < nisoforms; k++) {
-                                    Ranges original = isoforms[k];
-                                    Ranges new = isoforms[j * ranges.n + k];
-                                    kv_copy(Range, new, original);
+                                for (int k = 0; k < prior_n_isoforms; k++) {
+                                    Ranges *original = isoforms[k];
+                                    Ranges *new = isoforms[j * prior_n_isoforms + k];
+                                    kv_copy(Range, *new, *original);
                                     nisoforms++;
                                 }
                             }
-                        }
 
-                        for (int j = 0; j < ranges.n; j++) {
-                            for (int k = 0; k < nisoforms; k++) {
-                                Ranges target = isoforms[j * ranges.n + k];
-                                Range to_push = kv_A(ranges, j);
-                                kv_push(Range, target, to_push);
+                            for (int j = 0; j < ranges.n; j++) {
+                                for (int k = 0; k < prior_n_isoforms; k++) {
+                                    Ranges *target = isoforms[j * prior_n_isoforms + k];
+                                    Range to_push = kv_A(ranges, j);
+                                    kv_push(Range, *target, to_push);
+                                }
                             }
                         }
                     }
 
-                    log_info("Number of isoforms created: %i", nisoforms);
+                    kstring_t hap_seq;
+                    get_haplotype_sequence(gene->seq, &hap_in, gene->coords, &hap_seq);
+
+                    log_info("Number of isoforms: %i", nisoforms);
                     for (int i = 0; i < nisoforms; i++) {
-                        
+                        Ranges *ncrs = isoforms[i];
+                        kstring_t spliced_seq = {0};
+                        int seq_idx = 0;
+                        log_info("Processing isoform: %i", i);
+                        log_info("Gene length is: %i", hap_seq.l);
+
+                        int gene_start = gene->coords.start;
+                        if (t->strand == STRAND_FWD) {
+                            int length = 0;
+                            for (int j = 0; j < ncrs->n; j++) {
+                                Range ncr = kv_A(*ncrs, j);
+                                int start = ncr.start - gene_start;
+                                int end = ncr.end - gene_start;
+                                if (start < seq_idx) {
+                                    continue;
+                                }
+
+                                log_info("Adding region %i, %i:%i to isoform %i", j, seq_idx, start, i);
+                                length += start - seq_idx;
+
+                                kputsn(hap_seq.s + seq_idx, start - seq_idx, &spliced_seq);
+                                seq_idx = end;
+                            }
+                            log_info("Lengths: %i - %i", spliced_seq.l, length);
+                            kputsn(hap_seq.s + seq_idx, hap_seq.l - seq_idx, &spliced_seq);
+                        } else if (t->strand == STRAND_REV) {
+                            int length = 0;
+                            for (int j = ncrs->n-1; j >= 0; j--) {
+                                Range ncr = kv_A(*ncrs, j);
+                                int start = ncr.end - gene_start;
+                                int end = ncr.start - gene_start;
+                                if (start < seq_idx) {
+                                    continue;
+                                }
+
+                                log_info("Adding region %i, %i:%i to isoform %i", j, seq_idx, start, i);
+                                length += start - seq_idx;
+                                kputsn(hap_seq.s + seq_idx, start - seq_idx, &spliced_seq);
+                                seq_idx = end;
+                            }
+                            log_info("Lengths: %i - %i", spliced_seq.l, length);
+                            kputsn(hap_seq.s + seq_idx, hap_seq.l - seq_idx, &spliced_seq);
+                        }
+
+                        for (int ri = 0; ri < batch->n; ri++) {
+                            
+                        }
+
+                        // Frameshift check
+                        // Stop gain check
+
+
+
+                        // if (spliced_seq.s != NULL) free(spliced_seq.s);
                     }
 
 
@@ -2016,9 +2237,6 @@ int main(int argc, char *argv[]) {
                     // Walk over sequence while keeping track of records that are responsible for changes
                     // Look for frameshift rescues
                     // Consider stop gains
-
-                    kstring_t hap_seq;
-                    get_haplotype_sequence(gene->seq, &hap_in, gene->coords, &hap_seq);
 
                     kv_destroy(hap_in);
                     free(hap_seq.s);
@@ -2033,44 +2251,63 @@ int main(int argc, char *argv[]) {
 
         for (int i = 0; i < block.records->n; i++) {
             Record *r = kv_A(*block.records, i);
+            if (!r->triggers[SPLICE_TRIGGER]) continue;
 
-            kstring_t s = {0};
+            kstring_t splice_scores = {0};
+            kstring_t splice_change = {0};
 
             int has_scores = 0;
             for (int g = 0; g < r->genes->n; g++) {
-                if (g > 0) kputc(',', &s);
+                if (g > 0) {
+                    kputc(',', &splice_scores);
+                    kputc(',', &splice_change);
+                }
 
                 for (int p = 0; p < NUM_PHASES; p++) {
 
+                    if (p > 0) {
+                        kputc('&', &splice_scores);
+                        kputc('&', &splice_change);
+                    }
+
                     Score *score = r->complete_scores[g * NUM_PHASES + p];
-                    if (p > 0) kputc('&', &s);
-                    kputs(r->v->d.allele[1], &s);
+                    kputs(r->v->d.allele[1], &splice_scores);
                     if (score == NULL) {
-                        kputc('|', &s); kputs(kv_A(*r->genes, g)->name, &s);
-                        kputs("|.|.|.|.|.|.|.|.", &s);
+                        kputc('|', &splice_scores); kputs(kv_A(*r->genes, g)->name, &splice_scores);
+                        kputs("|.|.|.|.|.|.|.|.", &splice_scores);
+                        kputs(".|.|.|.|.", &splice_change);
                         continue;
                     }
                     has_scores = 1;
 
-                    kputc('|', &s); kputs(score->gene, &s);
+                    kputc('|', &splice_scores); kputs(score->gene, &splice_scores);
 
                     // Format and append DS scores
                     char ds_scores[20];
                     snprintf(ds_scores, 20, "%.2f|%.2f|%.2f|%.2f", score->ag, score->al, score->dg, score->dl);
-                    kputc('|', &s); kputsn(ds_scores, 19, &s);
+                    kputc('|', &splice_scores); kputsn(ds_scores, 19, &splice_scores);
 
-                    kputc('|', &s); kputw(score->ag_idx, &s);
-                    kputc('|', &s); kputw(score->al_idx, &s);
-                    kputc('|', &s); kputw(score->dg_idx, &s);
-                    kputc('|', &s); kputw(score->dl_idx, &s);
+                    kputc('|', &splice_scores); kputw(score->ag_idx, &splice_scores);
+                    kputc('|', &splice_scores); kputw(score->al_idx, &splice_scores);
+                    kputc('|', &splice_scores); kputw(score->dg_idx, &splice_scores);
+                    kputc('|', &splice_scores); kputw(score->dl_idx, &splice_scores);
+
+                    // Splice change
+                    SpliceChange *change = r->cs[g * NUM_PHASES + p];
+
+                    char change_scores[29];
+                    snprintf(change_scores, 29, "%.2f|%.2f|%.2f|%.2f|%.2f", change->AG, change->AL, change->DG, change->DL, change->sum);
+                    kputsn(change_scores, strlen(change_scores), &splice_change);
                 }
             }
 
-            if (has_scores) log_info(s.s);
+            if (has_scores) log_info(splice_scores.s);
 
-            bcf_update_info_string(hdr, r->v, SPLICEAI_HAP_TAG, s.s);
+            bcf_update_info_string(hdr, r->v, SPLICEAI_HAP_TAG, splice_scores.s);
+            bcf_update_info_string(hdr, r->v, CS_TAG, splice_change.s);
 
-            free(s.s);
+            free(splice_scores.s);
+            free(splice_change.s);
         }
     }
 

@@ -7,7 +7,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/build)
 add_executable(rescueranger rescueranger.c)
 
 # Link external libraries
-#target_link_libraries(rescueranger asan)
+# target_link_libraries(rescueranger asan)
 target_link_libraries(rescueranger ${HTSLIB_LIBRARIES})
 target_link_libraries(rescueranger ${CPLICEAI_LIBRARIES})
 
