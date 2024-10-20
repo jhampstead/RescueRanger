@@ -15,7 +15,9 @@
 
 
 typedef struct SpliceSite {
+    void *record_ptr; // Circular dependency?
     uint32_t position;
+    uint32_t canonical_position;
     uint32_t predicted; // whether haplotype prediction has been run for the splice site
     uint32_t gff_canonical; // whether the splice site is canonical in the GFF
     float prior_probability; // raw SpliceAI probability
@@ -58,7 +60,14 @@ typedef struct Gene {
     uint32_t strand;
 } Gene;
 
+typedef struct NonCodingRegion {
+    Range coords;
+    Range canonical_coords;
+    SpliceSite *donor, *acceptor;
+} NonCodingRegion;
+
 typedef kvec_t(Range) Ranges;
+typedef kvec_t(NonCodingRegion) NonCodingRegions;
 typedef kvec_t(Gene *) Genes;
 
 KHASH_MAP_INIT_INT64(RangeHash, Range *);
