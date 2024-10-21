@@ -73,6 +73,9 @@
 #define STOP_CODONS {"TAG", "TGA", "TAA"}
 #define COMPLEMENTARY_STOP_CODONS {"ATC", "ACT", "ATT"}
 
+#define SEQUENCE_OFFSET 0
+#define REINITIATION_OFFSET -3
+
 #define SPLICEAI_HAP_TAG "SpliceAI_Haplotype"
 #define SPLICEAI_HAP_DESC "##INFO=<ID=SpliceAI_Haplotype,Number=.,Type=String,Description=\"CpliceAIv1.0 haplotype variant annotation from reference to complete haplotype. These include delta scores (DS) and delta positions (DP) for acceptor gain (AG), acceptor loss (AL), donor gain (DG), and donor loss (DL). Format: ALLELE|SYMBOL|DS_AG|DS_AL|DS_DG|DS_DL|DP_AG|DP_AL|DP_DG|DP_DL\">"
 
@@ -479,6 +482,146 @@ static void get_haplotype_sequence(const kstring_t reference_sequence, const Rec
     haplotype_sequence.s[haplotype_sequence.l] = '\0';
  
     *out_hap = haplotype_sequence;
+}
+
+void generate_spliced_isoform_sequence(NonCodingRegions *ncrs, Transcript *t, Gene *gene, kstring_t hap_seq, kstring_t *spliced_seq, Range **isoform_bounds, int offset) {
+    int gene_start = gene->start + offset;  // Adjust gene start by the offset, if any
+    int seq_idx = 0;
+    *isoform_bounds = NULL;
+    spliced_seq->l = 0;
+
+    if (t->strand == STRAND_FWD) {
+        int length = 0;
+        for (int j = 0; j < ncrs->n; j++) {
+            NonCodingRegion ncr = ncrs->ncrs[j];
+            int intron_start = ncr.coords.start - gene_start;  // Adjust by the offset, if any
+            int intron_end = ncr.coords.end - gene_start;      // Adjust by the offset, if any
+
+            if (intron_start < seq_idx) {
+                continue;
+            }
+
+            length += intron_start - seq_idx;
+
+            if (length > 0 && isoform_bounds == NULL) {
+                isoform_bounds = malloc(sizeof(Range));
+                (*isoform_bounds)->start = seq_idx;
+            }
+            if (length > 0) (*isoform_bounds)->end = intron_start;
+
+            kputsn(hap_seq.s + seq_idx, intron_start - seq_idx, spliced_seq);
+            seq_idx = intron_end;
+        }
+
+        if (isoform_bounds == NULL) {
+            isoform_bounds = malloc(sizeof(Range));
+            (*isoform_bounds)->start = 0;
+        }
+        if (hap_seq.l != seq_idx) (*isoform_bounds)->end = hap_seq.l;
+        kputsn(hap_seq.s + seq_idx, hap_seq.l - seq_idx, spliced_seq);
+    } else if (t->strand == STRAND_REV) {
+        int length = 0;
+        for (int j = ncrs->n - 1; j >= 0; j--) {
+            NonCodingRegion ncr = ncrs->ncrs[j];
+            int intron_start = ncr.coords.end - gene_start;  // Adjust by the offset, if any
+            int intron_end = ncr.coords.start - gene_start;  // Adjust by the offset, if any
+
+            if (intron_start < seq_idx) {
+                continue;
+            }
+
+            length += intron_start - seq_idx;
+
+            if (length > 0 && isoform_bounds == NULL) {
+                isoform_bounds = malloc(sizeof(Range));
+                (*isoform_bounds)->end = seq_idx;
+            }
+            if (length > 0) (*isoform_bounds)->start = intron_start;
+
+            kputsn(hap_seq.s + seq_idx, intron_start - seq_idx, spliced_seq);
+            seq_idx = intron_end;
+        }
+
+        if (isoform_bounds == NULL) {
+            isoform_bounds = malloc(sizeof(Range));
+            (*isoform_bounds)->end = 0;
+        }
+        if (hap_seq.l != seq_idx) (*isoform_bounds)->start = hap_seq.l;
+        kputsn(hap_seq.s + seq_idx, hap_seq.l - seq_idx, spliced_seq);
+    }
+
+    // Convert to complementary sequence for reverse strand
+    if (t->strand == STRAND_REV) {
+        for (int si = 0; si < spliced_seq->l; si++) {
+            switch (spliced_seq->s[si]) {
+                case 'A':
+                    spliced_seq->s[si] = 'T';
+                    break;
+                case 'C':
+                    spliced_seq->s[si] = 'G';
+                    break;
+                case 'G':
+                    spliced_seq->s[si] = 'C';
+                    break;
+                case 'T':
+                    spliced_seq->s[si] = 'A';
+                    break;
+            }
+        }
+    }
+
+    if (*isoform_bounds != NULL) {
+        free(*isoform_bounds);
+    }
+}
+
+int is_purine(char base) {
+    return base == 'A' || base == 'G';
+}
+
+int calculate_kozak_strength(char* sequence, int pos, int length) {
+    int score = 0;
+
+    if (pos >= 3 && is_purine(toupper(sequence[pos - 3]))) {
+        score += 1;  // Give a point for purine at -3
+    }
+
+    if (pos + 3 < length && toupper(sequence[pos + 3]) == 'G') {
+        score += 1;  // Give a point for G at +4
+    }
+
+    return score;
+}
+
+int32_t* find_possible_reinitiation_positions(char* reinitiation_sequence, int* count, int** kozak_strengths, int offset) {
+    int length = strlen(reinitiation_sequence);
+    char codon[4] = {0}; // Buffer to hold codon (3 bases + null terminator)
+    int32_t* reinitiation_positions = NULL;
+    *kozak_strengths = NULL;
+    int allocated_size = 0;
+    *count = 0;
+
+    for (int i = 0; i < length; i += 3) {
+        codon[0] = reinitiation_sequence[i];
+        codon[1] = reinitiation_sequence[i + 1];
+        codon[2] = reinitiation_sequence[i + 2];
+        codon[3] = '\0';
+
+        if (strcmp(codon, START_CODON) == 0) {
+            int strength = calculate_kozak_strength(reinitiation_sequence, i, length);
+
+            if (*count >= allocated_size) {
+                allocated_size = (allocated_size == 0) ? 1 : allocated_size * 2;
+                reinitiation_positions = realloc(reinitiation_positions, allocated_size * sizeof(int32_t));
+                *kozak_strengths = realloc(*kozak_strengths, allocated_size * sizeof(int));
+            }
+
+            reinitiation_positions[*count] = i + 1 + offset; // Store 1-based position in the actual sequence (i + 1 + offset)
+            (*kozak_strengths)[*count] = strength;
+            (*count)++;
+        }
+    }
+    return reinitiation_positions;
 }
 
 static int get_position_in_isoform(const int64_t position, const NonCodingRegions *ncrs, const Records *rs, const int strand, const Range bounds, int64_t *out_position) {
@@ -2333,92 +2476,22 @@ int main(int argc, char *argv[]) {
                     for (int i = 0; i < nisoforms; i++) {
                         NonCodingRegions *ncrs = isoforms[i];
                         kstring_t spliced_seq = {0};
-                        int seq_idx = 0;
-                        log_debug("Processing isoform: %i", i);
-                        log_debug("Gene length is: %i", hap_seq.l);
-
                         Range *isoform_bounds = NULL;
 
-                        int gene_start = gene->coords.start;
-                        if (t->strand == STRAND_FWD) {
-                            int length = 0;
-                            for (int j = 0; j < ncrs->n; j++) {
-                                NonCodingRegion ncr = kv_A(*ncrs, j);
-                                int intron_start = ncr.coords.start - gene_start;
-                                int intron_end = ncr.coords.end - gene_start;
-                                if (intron_start < seq_idx) {
-                                    continue;
-                                }
+                        generate_spliced_isoform_sequence(&ncrs, &t, &gene, hap_seq, &spliced_seq, REINITIATION_OFFSET);
 
-                                log_debug("Adding region %i, %i:%i to isoform %i", j, seq_idx, intron_start, i);
-                                length += intron_start - seq_idx;
-
-                                if (length > 0 && isoform_bounds == NULL) {
-                                    isoform_bounds = malloc(sizeof(Range));
-                                    isoform_bounds->start = seq_idx;
-                                }
-                                if (length > 0) isoform_bounds->end = intron_start;
-
-                                kputsn(hap_seq.s + seq_idx, intron_start - seq_idx, &spliced_seq);
-                                seq_idx = intron_end;
-                            }
-
-                            if (isoform_bounds == NULL) {
-                                isoform_bounds = malloc(sizeof(Range));
-                                isoform_bounds->start = 0;
-                            }
-                            if (hap_seq.l != seq_idx) isoform_bounds->end = hap_seq.l;
-                            kputsn(hap_seq.s + seq_idx, hap_seq.l - seq_idx, &spliced_seq);
-                        } else if (t->strand == STRAND_REV) {
-                            int length = 0;
-                            for (int j = ncrs->n-1; j >= 0; j--) {
-                                NonCodingRegion ncr = kv_A(*ncrs, j);
-                                int intron_start = ncr.coords.end - gene_start;
-                                int intron_end = ncr.coords.start - gene_start;
-                                if (intron_start < seq_idx) {
-                                    continue;
-                                }
-
-                                log_debug("Adding region %i, %i:%i to isoform %i", j, seq_idx, intron_start, i);
-                                length += intron_start - seq_idx;
-
-                                if (length > 0 && isoform_bounds == NULL) {
-                                    isoform_bounds = malloc(sizeof(Range));
-                                    isoform_bounds->end = seq_idx;
-                                }
-                                if (length > 0) isoform_bounds->start = intron_start;
-
-                                kputsn(hap_seq.s + seq_idx, intron_start - seq_idx, &spliced_seq);
-                                seq_idx = intron_end;
-                            }
-
-                            if (isoform_bounds == NULL) {
-                                isoform_bounds = malloc(sizeof(Range));
-                                isoform_bounds->end = 0;
-                            }
-                            if (hap_seq.l != seq_idx) isoform_bounds->start = hap_seq.l;
-                            kputsn(hap_seq.s + seq_idx, hap_seq.l - seq_idx, &spliced_seq);
+                        int count = 0;
+                        int* kozak_strengths = NULL;
+                        int32_t* possible_reinitiation_positions = find_possible_reinitiation_positions(spliced_seq, &count, &kozak_strengths, REINITIATION_OFFSET);
+                        free(possible_reinitiation_positions);
+                        free(kozak_strengths);
+                        free(spliced_seq.s);
+                        if (isoform_bounds != NULL) {
+                            free(isoform_bounds);
                         }
 
-                        // Convert strand to complementary, if necessary (keeps direction the same)
-                        if (t->strand == STRAND_REV) {
-                            for (int si = 0; si < spliced_seq.l; si++) {
-                                switch (spliced_seq.s[si]) {
-                                    case 'A':
-                                        spliced_seq.s[si] = 'T';
-                                        break;
-                                    case 'C':
-                                        spliced_seq.s[si] = 'G';
-                                        break;
-                                    case 'G':
-                                        spliced_seq.s[si] = 'C';
-                                        break;
-                                    case 'T':
-                                        spliced_seq.s[si] = 'A';
-                                        break;
-                                }
-                            }
-                        }
+                        kstring_t spliced_seq = {0};
+                        generate_spliced_isoform_sequence(&ncrs, &t, &gene, hap_seq, &spliced_seq, SEQUENCE_OFFSET);
 
                         Range shifted_isoform = {
                             isoform_bounds->start < isoform_bounds->end ? isoform_bounds->start + gene->coords.start : isoform_bounds->end + gene->coords.start,
