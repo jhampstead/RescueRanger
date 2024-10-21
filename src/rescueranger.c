@@ -502,16 +502,16 @@ static int get_position_in_isoform(const int64_t position, const NonCodingRegion
         for (int i = ncrs->n-1; i >= 0; i--) {
             NonCodingRegion ncr = kv_A(*ncrs, i);
 
-            if (position > ncr.coords.start) break; // Approaches from other end (3' <-- 5')
+            if (position < ncr.coords.end) break; // Approaches from other end (3' <-- 5')
 
-            if (position < ncr.coords.end) {
+            if (position > ncr.coords.start) {
                 skipped_bases += range_len(ncr.coords);
                 continue;
             }
 
             return 1; // Variant falls within a non-coding region
         }
-        isoform_position += skipped_bases;
+        isoform_position -= skipped_bases;
     }
 
     *out_position = isoform_position;
@@ -1093,7 +1093,9 @@ int create_splice_probabilities(int vposition, Record *r, Transcripts *transcrip
 
     int num_splice_probabilities = num_acceptors + num_donors;
 
-    int canonicals[PRED_WIDTH] = {0};
+    int pred_width = num_hap_alt_predictions / NUM_SCORES;
+    int canonicals[pred_width];
+    for (int i = 0; i < pred_width; i++) canonicals[i] = 0;
     for (int ti = 0; ti < transcripts->n; ti++) {
         Transcript *t = kv_A(*transcripts, ti);
 
@@ -1623,6 +1625,7 @@ int main(int argc, char *argv[]) {
             for (int i = 0; i < batch->n; i++) {
                 Record *r = kv_A(*batch, i);
 
+                log_info("%d:%d", r->v->rid, r->v->pos);
                 if (r->triggers[SPLICE_TRIGGER] == 0) continue;
 
                 if (strlen(r->v->d.allele[1]) > CAI_DISTANCE) {
@@ -1666,8 +1669,6 @@ int main(int argc, char *argv[]) {
                             }
                         }
                     }
-
-                    log_info("%d:%d", r->v->rid, r->v->pos);
 
                     // Haplotype ref/alt sequences
                     kstring_t hap_ref;
@@ -1807,7 +1808,7 @@ int main(int argc, char *argv[]) {
                                         filter_to_most_likely_prediction(PRED_WIDTH * NUM_SCORES, &pair_predictions);
 
                                         SpliceProbability *pair_probabilities;
-                                        int num_pair_probabilities = create_splice_probabilities(pair.position, r, r->tscripts, PRED_WIDTH, pair_predictions, &pair_probabilities);
+                                        int num_pair_probabilities = create_splice_probabilities(pair.position, r, r->tscripts, PRED_WIDTH * NUM_SCORES, pair_predictions, &pair_probabilities);
                                         for (int pi = 0; pi < num_pair_probabilities; pi++) {
                                             SpliceProbability pair_prediction = pair_probabilities[pi];
 
@@ -1844,7 +1845,7 @@ int main(int argc, char *argv[]) {
                                         filter_to_most_likely_prediction(PRED_WIDTH * NUM_SCORES, &pair_predictions);
 
                                         SpliceProbability *pair_probabilities;
-                                        int num_pair_probabilities = create_splice_probabilities(pair.position, r, r->tscripts, PRED_WIDTH, pair_predictions, &pair_probabilities);
+                                        int num_pair_probabilities = create_splice_probabilities(pair.position, r, r->tscripts, PRED_WIDTH * NUM_SCORES, pair_predictions, &pair_probabilities);
                                         for (int pi = 0; pi < num_pair_probabilities; pi++) {
                                             SpliceProbability pair_prediction = pair_probabilities[pi];
 
@@ -1885,7 +1886,7 @@ int main(int argc, char *argv[]) {
                                         filter_to_most_likely_prediction(PRED_WIDTH * NUM_SCORES, &competitor_predictions);
 
                                         SpliceProbability *competitor_probabilities;
-                                        int num_competitor_probabilities = create_splice_probabilities(competitor.position, r, r->tscripts, PRED_WIDTH, competitor_predictions, &competitor_probabilities);
+                                        int num_competitor_probabilities = create_splice_probabilities(competitor.position, r, r->tscripts, PRED_WIDTH * NUM_SCORES, competitor_predictions, &competitor_probabilities);
                                         for (int ci = 0; ci < num_competitor_probabilities; ci++) {
                                             SpliceProbability competitor_prediction = competitor_probabilities[ci];
 
@@ -1922,7 +1923,7 @@ int main(int argc, char *argv[]) {
                                         filter_to_most_likely_prediction(PRED_WIDTH * NUM_SCORES, &competitor_predictions);
 
                                         SpliceProbability *competitor_probabilities;
-                                        int num_competitor_probabilities = create_splice_probabilities(competitor.position, r, r->tscripts, PRED_WIDTH, competitor_predictions, &competitor_probabilities);
+                                        int num_competitor_probabilities = create_splice_probabilities(competitor.position, r, r->tscripts, PRED_WIDTH * NUM_SCORES, competitor_predictions, &competitor_probabilities);
                                         for (int ci = 0; ci < num_competitor_probabilities; ci++) {
                                             SpliceProbability competitor_prediction = competitor_probabilities[ci];
 
@@ -2425,6 +2426,7 @@ int main(int argc, char *argv[]) {
                         };
                         // Get isoform position for each record
                         int64_t **record_positions = malloc(hap_in.n * sizeof(int64_t *));
+                        int64_t variant_offsets[hap_in.n];
                         for (int i = 0; i < hap_in.n; i++) {
                             Record *hap_r = kv_A(hap_in, i);
                             int64_t haplotype_sequence_position = hap_r->v->pos;
@@ -2437,37 +2439,89 @@ int main(int argc, char *argv[]) {
 
                             record_positions[i] = malloc(sizeof(int64_t));
                             *(record_positions[i]) = isoform_position;
+                            variant_offsets[i] = allele_offset(hap_r->v, 0, 1, shifted_isoform);
                         }
 
                         // Get isoform position for splice site changes
-                        // int64_t **splice_positions = malloc(ncrs->n * sizeof(int64_t *));
-                        // int64_t offsets[ncrs->n];
-                        // if (t->strand == STRAND_FWD) {
-                        //     for (int i = 0; i < ncrs->n; i++) {
-                        //         NonCodingRegion ncr = kv_A(*ncrs, i);
-                        //         int64_t isoform_position;
-                        //         if (get_position_in_isoform(ncr.coords.start, ncrs, &hap_in, t->strand, shifted_isoform, &isoform_position) != 0) {
-                        //             record_positions[i] = NULL;
-                        //             continue;
-                        //         }
-                        //         splice_positions[i] = malloc(sizeof(int64_t));
-                        //         *(splice_positions[i]) = isoform_position;
-                        //         offsets[i] = range_len(ncr.canonical_coords) - range_len(ncr.coords);
-                        //     }
-                        // } else if (t->strand == STRAND_REV) {
-                        //     for (int i = ncrs->n-1; i >= 0; i--) {
-                        //         NonCodingRegion ncr = kv_A(*ncrs, i);
-                        //         int64_t isoform_position;
-                        //         if (get_position_in_isoform(ncr.coords.end, ncrs, &hap_in, t->strand, shifted_isoform, &isoform_position) != 0) {
-                        //             record_positions[i] = NULL;
-                        //             continue;
-                        //         }
-                        //         splice_positions[i] = malloc(sizeof(int64_t));
-                        //         *(splice_positions[i]) = isoform_position;
-                        //         offsets[i] = range_len(ncr.canonical_coords) - range_len(ncr.coords);
-                        //     }
-                        // }
+                        int64_t **splice_positions = malloc(ncrs->n * sizeof(int64_t *));
+                        int64_t splice_offsets[ncrs->n];
+                        if (t->strand == STRAND_FWD) {
+                            for (int i = 0; i < ncrs->n; i++) {
+                                NonCodingRegion ncr = kv_A(*ncrs, i);
+                                int64_t isoform_position;
+                                if (get_position_in_isoform(ncr.coords.start, ncrs, &hap_in, t->strand, shifted_isoform, &isoform_position) != 0) {
+                                    splice_positions[i] = NULL;
+                                    continue;
+                                }
+                                splice_positions[i] = malloc(sizeof(int64_t));
+                                *(splice_positions[i]) = isoform_position;
+                                splice_offsets[i] = range_len(ncr.canonical_coords) - range_len(ncr.coords);
+                            }
+                        } else if (t->strand == STRAND_REV) {
+                            for (int i = ncrs->n-1; i >= 0; i--) {
+                                NonCodingRegion ncr = kv_A(*ncrs, i);
+                                int64_t isoform_position;
+                                if (get_position_in_isoform(ncr.coords.end, ncrs, &hap_in, t->strand, shifted_isoform, &isoform_position) != 0) {
+                                    splice_positions[i] = NULL;
+                                    continue;
+                                }
+                                splice_positions[i] = malloc(sizeof(int64_t));
+                                *(splice_positions[i]) = isoform_position - gene->coords.start;
+                                splice_offsets[i] = range_len(ncr.canonical_coords) - range_len(ncr.coords);
+                            }
+                        }
 
+                        // Forward
+                        int record_index = 0;
+                        int last_splice_index = 0;
+
+                        int upstream_ptv = 0;
+                        const char stop_codons[3][3] = STOP_CODONS;
+
+                        Record *iso_r = NULL;
+                        for (int si = 0; si < spliced_seq.l; si += 3) {
+
+                            // Find next possible record
+                            while (record_positions[record_index] == NULL || *record_positions[record_index] - shifted_isoform.start < si) {
+                                record_index++;
+                            }
+                            iso_r = kv_A(hap_in, record_index);
+
+                            int sequence_position = *record_positions[record_index] - shifted_isoform.start;
+                            int shift = variant_offsets[record_index];
+
+                            if (r->triggers[FRAMESHIFT_TRIGGER]) {
+                                if (shift % 3 == 0) {
+                                    // Frameshift is in phase, rescued
+                                }
+
+                                // Store frameshift
+                            }
+
+
+
+                            // Get coding codon from spliced isoform sequence
+                            const char *codon = spliced_seq.s + si;
+
+                            // Check if the current codon codes for a stop
+                            int is_stop = 0;
+                            for (int i = 0; i < 3; i++) {
+                                const char *stop = stop_codons[i];
+                                if (!(codon[0] == stop[0] && codon[1] == stop[1] && codon[2] == stop[2])) continue;
+
+                                is_stop = 1;
+                                break;
+                            }
+
+                            if (!is_stop && r->triggers[STOP_TRIGGER]) {
+                                // Rescued stop
+                            }
+
+                            if (is_stop && r->triggers[FRAMESHIFT_TRIGGER]) {
+                                // Induced stop
+                            }
+
+                        }
 
                         // Forward
                         // int phase = 0;

@@ -3,8 +3,11 @@ set(CMAKE_C_FLAGS_DEBUG_INIT "-Wall -g -DLOG_USE_COLOR")
 set(CMAKE_CXX_FLAGS_RELEASE_INIT "-O3")
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/build)
 
+find_package(Sanitizers)
+
 # Create executable
 add_executable(rescueranger rescueranger.c)
+add_sanitizers(rescueranger)
 
 # Link external libraries
 # target_link_libraries(rescueranger asan)
