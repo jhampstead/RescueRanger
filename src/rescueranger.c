@@ -1645,20 +1645,40 @@ int main(int argc, char *argv[]) {
 
                 for (int k = 0; k < transcript_consequence.num_consequences; k++) {
                     const char *consequence = transcript_consequence.consequences[k];
+                    const char *consequence_transcript = transcript_consequence.tid[k];
+           
+                    for (int l = 0; l < r->tscripts->n; l++) {
+                        const char *transcript = r->tscripts[l]->id;
 
-                    if (strcmp(consequence, SPLICE_DONOR_VARIANT) == 0 ||
-                        strcmp(consequence, SPLICE_ACCEPTOR_VARIANT) == 0) {
-                        r->triggers[SPLICE_TRIGGER] = CANONICAL_SPLICE_VALUE;
+                        if (strcmp(transcript, consequence_transcript) == 0) {
+
+                            if (strcmp(consequence, SPLICE_DONOR_VARIANT) == 0 ||
+                                strcmp(consequence, SPLICE_ACCEPTOR_VARIANT) == 0) {
+                                r->tscripts[l]->triggers[SPLICE_TRIGGER] = CANONICAL_SPLICE_VALUE;
+                                break;
+                            }
+                            if (strcmp(consequence, FRAMESHIFT_VARIANT) == 0) {
+                                r->tscripts[l]->triggers[FRAMESHIFT_TRIGGER] = 1;
+                            }
+                            if (strcmp(consequence, STOP_GAINED_VARIANT) == 0) {
+                                r->tscripts[l]->triggers[STOP_TRIGGER] = 1;
+                            }       
+                        }
                     }
+
+                    // if (strcmp(consequence, SPLICE_DONOR_VARIANT) == 0 ||
+                    //     strcmp(consequence, SPLICE_ACCEPTOR_VARIANT) == 0) {
+                    //     r->triggers[SPLICE_TRIGGER] = CANONICAL_SPLICE_VALUE;
+                    // }
                     // if (strcmp(consequence, SPLICE_REGION_VARIANT) == 0) {
                     //     r->triggers[SPLICE_TRIGGER] = 1;
                     // }
-                    if (strcmp(consequence, FRAMESHIFT_VARIANT) == 0) {
-                        r->triggers[FRAMESHIFT_TRIGGER] = 1;
-                    }
-                    if (strcmp(consequence, STOP_GAINED_VARIANT) == 0) {
-                        r->triggers[STOP_TRIGGER] = 1;
-                    }
+                    // if (strcmp(consequence, FRAMESHIFT_VARIANT) == 0) {
+                    //     r->triggers[FRAMESHIFT_TRIGGER] = 1;
+                    // }
+                    // if (strcmp(consequence, STOP_GAINED_VARIANT) == 0) {
+                    //     r->triggers[STOP_TRIGGER] = 1;
+                    // }
                 }
             }
 

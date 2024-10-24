@@ -44,6 +44,7 @@ typedef struct Exon {
 typedef struct Transcript {
     uint32_t id;        // transcript id
     uint32_t start, end;   // transcript's start and end coordinate (ref strand, 0-based, inclusive)
+    int triggers[3];    // prediction triggers for transcript
     uint32_t strand:2,  // STRAND_REV,FWD,UNK
              ncds:30,   // number of exon coding regions
              mcds;
@@ -108,7 +109,7 @@ typedef struct SpliceChange {
 typedef struct Record {
     bcf1_t *v;
     VepCsqs *vep;
-    int triggers[3];
+    //int triggers[3];
     ConsequencePredictions *c;
 
     SpliceChange **cs;
