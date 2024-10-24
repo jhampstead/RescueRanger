@@ -50,6 +50,7 @@ typedef struct Transcript {
     Range *cds;     // ordered list of exon coding regions
     size_t nexons, mexons;
     Exon **exons;
+    int triggers[3];
 } Transcript;
 
 typedef struct Gene {
@@ -64,6 +65,8 @@ typedef struct NonCodingRegion {
     Range coords;
     Range canonical_coords;
     SpliceSite *donor, *acceptor;
+    void *record_ptr;
+    int is_utr;
 } NonCodingRegion;
 
 typedef kvec_t(Range) Ranges;
@@ -89,9 +92,10 @@ typedef struct TscriptCsqs {
     char *tid;
     int num_consequences;
     char **consequences;
+    int triggers[3];
 } TscriptCsqs;
 
-typedef kvec_t(TscriptCsqs) VepCsqs;
+typedef kvec_t(TscriptCsqs *) VepCsqs;
 
 typedef kvec_t(gf_tscript_t *) gf_tscripts;
 
@@ -108,7 +112,6 @@ typedef struct SpliceChange {
 typedef struct Record {
     bcf1_t *v;
     VepCsqs *vep;
-    int triggers[3];
     ConsequencePredictions *c;
 
     SpliceChange **cs;
