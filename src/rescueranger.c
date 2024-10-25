@@ -54,6 +54,8 @@
 #define SPLICEAI_RESCUE_THRESHOLD 0.2
 #define SPLICEAI_CRYPTIC_SPLICE_THRESHOLD 0.5
 
+#define AF_THRESHOLD 0.01
+
 #define SPLICEAI_DS_AG_INDEX 2  // Index of DS_AG in the INFO/SpliceAI field
 #define SPLICEAI_DS_AL_INDEX 3  // Index of DS_AL in the INFO/SpliceAI field
 #define SPLICEAI_DS_DG_INDEX 4  // Index of DS_DG in the INFO/SpliceAI field
@@ -573,6 +575,32 @@ void generate_spliced_isoform_sequence(NonCodingRegions *ncrs, Transcript *t, Ge
     if (*isoform_bounds != NULL) {
         free(*isoform_bounds);
     }
+}
+
+// TODO: Modify to check records with more than one variant within the SpliceAI prediction window
+int set_af_trigger(bcf1_t *record, bcf_hdr_t *header) {
+    int af_below_threshold = 1;
+    float af_value = 0.0;
+    
+    // Set based on gnomAD
+    int gnomad_af_id = bcf_hdr_id2int(header, BCF_DT_INFO, bcf_hdr_int2id(header, BCF_DT_ID, "GNOMAD_AF"));
+    if (bcf_get_info_float(header, record, "GNOMAD_AF", &af_value, NULL) > 0) {
+        if (af_value > AF_THRESHOLD) {
+            af_below_threshold = 0;
+            return af_below_threshold;
+        }
+    }
+
+    // Set based on cohort
+    int cohort_af_id = bcf_hdr_id2int(header, BCF_DT_INFO, bcf_hdr_int2id(header, BCF_DT_ID, "COHORT_AF"));
+    if (bcf_get_info_float(header, record, "COHORT_AF", &af_value, NULL) > 0) {
+        if (af_value > AF_THRESHOLD) {
+            af_below_threshold = 0;
+            return af_below_threshold;
+        }
+    }
+
+    return af_below_threshold;
 }
 
 int is_purine(char base) {
