@@ -557,6 +557,7 @@ void calculate_rescue_probabilities(Isoforms *isoforms_struct) {
     rescue_probs->n_isoforms = malloc(isoforms_struct->m_rescue_types * sizeof(int32_t));
     rescue_probs->rescue_types = malloc(isoforms_struct->m_rescue_types * sizeof(char*));
     rescue_probs->rescue_probabilities = malloc(isoforms_struct->m_rescue_types * sizeof(float));
+    rescue_probs->affected_bases = malloc(isoforms_struct->m_rescue_types * sizeof(int32_t));
     
     for (int i = 0; i < isoforms_struct->m_rescue_types; i++) {
         rescue_probs->n_isoforms[i] = 0;
@@ -615,7 +616,7 @@ void calculate_rescue_probabilities(Isoforms *isoforms_struct) {
 
 }
 
-char* generate_rescue_type_tag(Isoforms *isoforms_struct) {
+char* generate_rescue_type_tag(Isoforms *isoforms_struct) { // INFO/RESCUE_TYPE rescue_type|probability|affected_bases
     // Calculate total length for allocation
     size_t tag_size = 0;
     for (int i = 0; i < isoforms_struct->n_rescue_types; i++) {
