@@ -616,6 +616,35 @@ void calculate_rescue_probabilities(Isoforms *isoforms_struct) {
 
 }
 
+void calculate_ptv_probabilities(Isoforms *isoforms_struct) {
+    float ptv_probability = 0.0;
+    float stop_gained_probability = 0.0;
+    float frameshift_variant_probability = 0.0;
+
+    for (int i = 0; i < isoforms_struct->n_isoforms; i++) {
+        if (isoforms_struct->isoforms[i]->ptv == 1) {
+            ptv_probability += isoform->probability;
+
+            if (strcmp(isoforms_struct->isoforms[i]->ptv_type, "stop_gained") == 0) {
+                stop_gained_probability += isoforms_struct->isoforms[i]->probability;
+            } else if (strcmp(isoforms_struct->isoforms[i]->ptv_type, "frameshift_variant") == 0) {
+                frameshift_variant_probability += isoforms_struct->isoforms[i]->probability;
+            }
+        }
+    }
+
+    isoforms_struct->ptv_probability = ptv_probability;
+    isoforms_struct->ptv = (isoforms_struct->ptv_probability > 0.5) ? 1 : 0;
+
+    if (stop_gained_probability > frameshift_variant_probability) {
+        isoforms_struct->ptv_type = "stop_gained";
+    } else if (frameshift_variant_probability > stop_gained_probability) {
+        isoforms_struct->ptv_type = "frameshift_variant";
+    } else {
+        isoforms_struct->ptv_type = NULL; // tie or no PTV
+    }
+}
+
 char* generate_rescue_type_tag(Isoforms *isoforms_struct) { // INFO/RESCUE_TYPE rescue_type|probability|affected_bases
     // Calculate total length for allocation
     size_t tag_size = 0;

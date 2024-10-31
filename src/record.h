@@ -20,6 +20,8 @@ typedef struct Isoform {
     uint8_t rescue; // 0 = not rescued, 1 = rescued
     char *rescue_type; // character string representing the type of rescue event predicted (e.g. partial_exon_skipping)
     uint32_t affected_bases; // number of bases offset/excluded/included within the isoform sequence
+    uint8_t ptv; // 0 = no non-canonical PTV on isoform, 1 = non-canonical PTV on isoform
+    char *ptv_type; // character string representing the type of non-canonical PTV predicted (stop_gained or frameshift_variant)
 } Isoform;
 
 typedef struct RescueProbabilities {
@@ -36,8 +38,12 @@ typedef struct Isoforms {
     uint32_t m_rescue_types; // capacity for unique rescue types
     uint8_t rescue; // overall rescue prediction (0 = not rescued, 1 = rescued)
     float rescue_probability; // total rescue probability
+    uint8_t ptv; // prediction of new PTV created by non-PTV variant
+    float ptv_probability; // cumulative probability of new PTV
+    char *ptv_type; // type of new PTV, one of stop_gained or frameshift_variant
     Isoform **isoforms; // array of pointers to Isoform structs
     RescueProbabilities *rescue_type_probabilities; // pointer to RescueProbabilities struct
+    char **flags; // array of prediction flags
 } Isoforms;
 
 typedef struct SpliceSite {
