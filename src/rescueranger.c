@@ -610,25 +610,16 @@ void calculate_rescue_probabilities(Isoforms *isoforms_struct) {
         }
     }
 
-    isoforms_struct->rescue_type_probabilities = rescue_probs; // assign back to the struct
+    isoforms_struct->rescue = (isoforms_struct->rescue_probability > 0.5) ? 1 : 0; // set rescue value on the basis of rescue_probability
+    isoforms_struct->rescue_type_probabilities = rescue_probs; // assign probabilities per rescue type back to struct
+
 }
 
-char** generate_rescue_tags(Isoforms *isoforms_struct) {
-    char **tags = malloc(3 * sizeof(char*));
-
-    // INFO/RESCUE
-    const char *rescue_value = (isoforms_struct->rescue_probability > 0.5) ? "1" : "0";
-    size_t rescue_tag_size = strlen("RESCUE=") + strlen(rescue_value) + 1; // +1 for null terminator
-    tags[0] = malloc(rescue_tag_size);
-    snprintf(tags[0], rescue_tag_size, "RESCUE=%s", rescue_value);
-
-    // INFO/RESCUE_PROB
-    size_t rescue_prob_tag_size = strlen("RESCUE_PROB=") + 10; // 4 decimal places float precision + null terminator
-    tags[1] = malloc(rescue_prob_tag_size);
-    snprintf(tags[1], rescue_prob_tag_size, "RESCUE_PROB=%.4f", isoforms_struct->rescue_probability);
+char** generate_rescue_type_tag(Isoforms *isoforms_struct) {
+    char *tag = malloc(sizeof(char*));
 
     // INFO/RESCUE_TYPE: rescue_type|probability|affected_bases
-    size_t rescue_type_tag_size = strlen("RESCUE_TYPE=");
+    size_t rescue_type_tag_size = 0;
     for (int i = 0; i < isoforms_struct->n_rescue_types; i++) {
         rescue_type_tag_size += strlen(isoforms_struct->rescue_type_probabilities->rescue_types[i]) + 10;
     }

@@ -19,6 +19,7 @@ typedef struct Isoform {
     float probability; // probability of the isoform
     uint8_t rescue; // 0 = not rescued, 1 = rescued
     char *rescue_type; // character string representing the type of rescue event predicted (e.g. partial_exon_skipping)
+    uint32_t affected_bases; // number of bases offset/excluded/included within the isoform sequence
 } Isoform;
 
 typedef struct RescueProbabilities {
@@ -33,6 +34,7 @@ typedef struct Isoforms {
     uint32_t m_isoforms; // capacity for isoforms
     uint32_t n_rescue_types; // count of unique rescue types
     uint32_t m_rescue_types; // capacity for unique rescue types
+    uint8_t rescue; // overall rescue prediction (0 = not rescued, 1 = rescued)
     float rescue_probability; // total rescue probability
     Isoform **isoforms; // array of pointers to Isoform structs
     RescueProbabilities *rescue_type_probabilities; // pointer to RescueProbabilities struct
