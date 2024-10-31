@@ -550,6 +550,130 @@ static int get_position_in_isoform(const int64_t position, const NonCodingRegion
     return 0;
 }
 
+void calculate_rescue_probabilities(Isoforms *isoforms_struct) {
+    isoforms_struct->rescue_probability = 0.0f;
+    RescueProbabilities *rescue_probs = malloc(sizeof(RescueProbabilities));
+    
+    rescue_probs->n_isoforms = malloc(isoforms_struct->m_rescue_types * sizeof(int32_t));
+    rescue_probs->rescue_types = malloc(isoforms_struct->m_rescue_types * sizeof(char*));
+    rescue_probs->rescue_probabilities = malloc(isoforms_struct->m_rescue_types * sizeof(float));
+    
+    for (int i = 0; i < isoforms_struct->m_rescue_types; i++) {
+        rescue_probs->n_isoforms[i] = 0;
+        rescue_probs->rescue_probabilities[i] = 0.0f;
+        rescue_probs->rescue_types[i] = NULL; // initialise with NULL
+        rescue_probs->affected_bases[i] = 0;
+    }
+
+    for (int i = 0; i < isoforms_struct->n_isoforms; i++) {
+        Isoform *isoform = isoforms_struct->isoforms[i];
+
+        // If rescue is predicted on the isoform, add isoform probability to the rescue probability [INFO/RESCUE_PROB]
+        if (isoform->rescue == 1) {
+            isoforms_struct->rescue_probability += isoform->probability;
+        }
+
+        // Get probabilities by rescue type [INFO/RESCUE_TYPE]. If the rescue type is already recorded, add the isoform and sum the probability
+        int found = 0;
+        for (int j = 0; j < isoforms_struct->n_rescue_types; j++) {
+            if (rescue_probs->rescue_types[j] != NULL && strcmp(rescue_probs->rescue_types[j], isoform->rescue_type) == 0) {
+                rescue_probs->n_isoforms[j] += 1;
+                rescue_probs->rescue_probabilities[j] += isoform->probability;
+                // TODO: Update rescue_probs->affected_bases[j] to correct value
+                found = 1;
+                break;
+            }
+        }
+
+        // If rescue type isn't found, add a new rescue type, dynamically reallocating memory if necessary
+        if (!found) {
+            if (isoforms_struct->n_rescue_types >= isoforms_struct->m_rescue_types) {
+                isoforms_struct->m_rescue_types *= 2; // double the size
+                rescue_probs->n_isoforms = realloc(rescue_probs->n_isoforms, isoforms_struct->m_rescue_types * sizeof(int32_t));
+                rescue_probs->rescue_probabilities = realloc(rescue_probs->rescue_probabilities, isoforms_struct->m_rescue_types * sizeof(float));
+                rescue_probs->rescue_types = realloc(rescue_probs->rescue_types, isoforms_struct->m_rescue_types * sizeof(char*));
+                rescue_probs->affected_bases = realloc(rescue_probs->affected_bases, isoforms_struct->m_rescue_types * sizeof(int32_t));
+
+                for (int k = isoforms_struct->n_rescue_types; k < isoforms_struct->m_rescue_types; k++) {
+                    rescue_probs->n_isoforms[k] = 0;
+                    rescue_probs->rescue_probabilities[k] = 0.0f;
+                    rescue_probs->rescue_types[k] = NULL; // initialise with NULL
+                    rescue_probs->affected_bases[k] = 0;
+                }
+            }
+
+            rescue_probs->rescue_types[isoforms_struct->n_rescue_types] = strdup(isoform->rescue_type);
+            rescue_probs->n_isoforms[isoforms_struct->n_rescue_types] = 1;
+            rescue_probs->rescue_probabilities[isoforms_struct->n_rescue_types] = isoform->probability;
+            // TODO: Update rescue_probs->affected_baes[isoforms_struct->n_rescue_types] to correct value
+            isoforms_struct->n_rescue_types++;
+        }
+    }
+
+    isoforms_struct->rescue_type_probabilities = rescue_probs; // assign back to the struct
+}
+
+char** generate_rescue_tags(Isoforms *isoforms_struct) {
+    char **tags = malloc(3 * sizeof(char*));
+
+    // INFO/RESCUE
+    const char *rescue_value = (isoforms_struct->rescue_probability > 0.5) ? "1" : "0";
+    size_t rescue_tag_size = strlen("RESCUE=") + strlen(rescue_value) + 1; // +1 for null terminator
+    tags[0] = malloc(rescue_tag_size);
+    snprintf(tags[0], rescue_tag_size, "RESCUE=%s", rescue_value);
+
+    // INFO/RESCUE_PROB
+    size_t rescue_prob_tag_size = strlen("RESCUE_PROB=") + 10; // 4 decimal places float precision + null terminator
+    tags[1] = malloc(rescue_prob_tag_size);
+    snprintf(tags[1], rescue_prob_tag_size, "RESCUE_PROB=%.4f", isoforms_struct->rescue_probability);
+
+    // INFO/RESCUE_TYPE: rescue_type|probability|affected_bases
+    size_t rescue_type_tag_size = strlen("RESCUE_TYPE=");
+    for (int i = 0; i < isoforms_struct->n_rescue_types; i++) {
+        rescue_type_tag_size += strlen(isoforms_struct->rescue_type_probabilities->rescue_types[i]) + 10;
+    }
+
+    tags[2] = malloc(rescue_type_tag_size);
+    strcpy(tags[2], "RESCUE_TYPE=");
+
+    // Append each rescue type and its probability to the tag
+    for (int i = 0; i < isoforms_struct->n_rescue_types; i++) {
+        char tmp[50];
+        snprintf(tmp, sizeof(tmp), "%s|%.4f|%d", isoforms_struct->rescue_type_probabilities->rescue_types[i], isoforms_struct->rescue_type_probabilities->rescue_probabilities[i], isoforms_struct->rescue_type_probabilities->affected_bases[i]);
+        
+        if (i > 0) {
+            strcat(tags[2], ","); // concatenate multiple rescue_types with a comma
+        }
+        strcat(tags[2], tmp);
+    }
+
+    return tags;
+}
+
+void free_rescue_tags(char **tags) {
+    for (int i = 0; i < 3; i++) {
+        free(tags[i]);
+    }
+    free(tags);
+}
+
+void free_isoforms(Isoforms *isoforms_struct) {
+    for (int i = 0; i < isoforms_struct->n_isoforms; i++) {
+        free(isoforms_struct->isoforms[i]->rescue_type);
+        free(isoforms_struct->isoforms[i]);
+    }
+    free(isoforms_struct->isoforms);
+
+    for (int i = 0; i < isoforms_struct->n_rescue_types; i++) {
+        free(isoforms_struct->rescue_type_probabilities->rescue_types[i]);
+    }
+    free(isoforms_struct->rescue_type_probabilities->rescue_types);
+    free(isoforms_struct->rescue_type_probabilities->n_isoforms);
+    free(isoforms_struct->rescue_type_probabilities->rescue_probabilities);
+    free(isoforms_struct->rescue_type_probabilities->affected_bases);
+    free(isoforms_struct->rescue_type_probabilities);
+}
+
 // int64_t get_position_in_spliced_haplotype(bcf1_t *v, Variants *vs, Transcript *t) {
 //     int positions_skipped = 0;
 //     int previous_exon_end = t->definition->beg;

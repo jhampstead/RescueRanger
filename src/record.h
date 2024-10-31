@@ -14,6 +14,30 @@
 #include "cpliceai/utils.h"
 
 
+typedef struct Isoform {
+    NonCodingRegion *ncrs; // non-coding regions defining the spliced boundaries of this isoform
+    float probability; // probability of the isoform
+    uint8_t rescue; // 0 = not rescued, 1 = rescued
+    char *rescue_type; // character string representing the type of rescue event predicted (e.g. partial_exon_skipping)
+} Isoform;
+
+typedef struct RescueProbabilities {
+    uint32_t *n_isoforms; // counts of isoforms supporting each rescue type
+    char **rescue_types; // rescue types
+    float *rescue_probabilities; // cumulative probability for each rescue type
+    uint32_t *affected_bases; // counts of affected bases
+} RescueProbabilities;
+
+typedef struct Isoforms {
+    uint32_t n_isoforms; // number of isoforms
+    uint32_t m_isoforms; // capacity for isoforms
+    uint32_t n_rescue_types; // count of unique rescue types
+    uint32_t m_rescue_types; // capacity for unique rescue types
+    float rescue_probability; // total rescue probability
+    Isoform **isoforms; // array of pointers to Isoform structs
+    RescueProbabilities *rescue_type_probabilities; // pointer to RescueProbabilities struct
+} Isoforms;
+
 typedef struct SpliceSite {
     void *record_ptr; // Circular dependency?
     uint32_t position;
