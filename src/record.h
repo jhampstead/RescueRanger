@@ -38,8 +38,8 @@ typedef struct Isoforms {
     uint32_t m_rescue_types; // capacity for unique rescue types
     uint8_t rescue; // overall rescue prediction (0 = not rescued, 1 = rescued)
     float rescue_probability; // total rescue probability
-    uint8_t ptv; // prediction of new PTV created by non-PTV variant
-    float ptv_probability; // cumulative probability of new PTV
+    uint8_t ptv; // prediction of non-canonical PTV
+    float ptv_probability; // cumulative probability of non-canonical PTV
     char *ptv_type; // type of new PTV, one of stop_gained or frameshift_variant
     Isoform **isoforms; // array of pointers to Isoform structs
     RescueProbabilities *rescue_type_probabilities; // pointer to RescueProbabilities struct
