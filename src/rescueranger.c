@@ -642,7 +642,7 @@ char** generate_rescue_tags(Isoforms *isoforms_struct) {
         snprintf(tmp, sizeof(tmp), "%s|%.4f|%d", isoforms_struct->rescue_type_probabilities->rescue_types[i], isoforms_struct->rescue_type_probabilities->rescue_probabilities[i], isoforms_struct->rescue_type_probabilities->affected_bases[i]);
         
         if (i > 0) {
-            strcat(tags[2], ","); // concatenate multiple rescue_types with a comma
+            strcat(tags[2], "&"); // concatenate multiple rescue_types with a comma
         }
         strcat(tags[2], tmp);
     }
