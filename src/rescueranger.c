@@ -615,37 +615,41 @@ void calculate_rescue_probabilities(Isoforms *isoforms_struct) {
 
 }
 
-char** generate_rescue_type_tag(Isoforms *isoforms_struct) {
-    char *tag = malloc(sizeof(char*));
-
-    // INFO/RESCUE_TYPE: rescue_type|probability|affected_bases
-    size_t rescue_type_tag_size = 0;
+char* generate_rescue_type_tag(Isoforms *isoforms_struct) {
+    // Calculate total length for allocation
+    size_t tag_size = 0;
     for (int i = 0; i < isoforms_struct->n_rescue_types; i++) {
-        rescue_type_tag_size += strlen(isoforms_struct->rescue_type_probabilities->rescue_types[i]) + 10;
+        tag_size += strlen(isoforms_struct->rescue_type_probabilities->rescue_types[i])
+                + 10  // for probability string, float truncated to 4 decimal places
+                + 32  // for affected bases string; type uint32_t
+                + 2;  // for '|' and '&' or null terminator
     }
 
-    tags[2] = malloc(rescue_type_tag_size);
-    strcpy(tags[2], "RESCUE_TYPE=");
+    char *tag = malloc(tag_size + 1);  // +1 for the final null terminator
+    if (tag == NULL) return NULL;
 
-    // Append each rescue type and its probability to the tag
+    tag[0] = '\0';  // initialise tag as null terminator
+
     for (int i = 0; i < isoforms_struct->n_rescue_types; i++) {
-        char tmp[50];
-        snprintf(tmp, sizeof(tmp), "%s|%.4f|%d", isoforms_struct->rescue_type_probabilities->rescue_types[i], isoforms_struct->rescue_type_probabilities->rescue_probabilities[i], isoforms_struct->rescue_type_probabilities->affected_bases[i]);
-        
-        if (i > 0) {
-            strcat(tags[2], "&"); // concatenate multiple rescue_types with a comma
+        char prob_s[10];
+        char bases_s[32];
+
+        sprintf(prob_s, "%.4f", isoforms_struct->rescue_type_probabilities->rescue_probabilities[i]);
+        sprintf(bases_s, "%d", isoforms_struct->rescue_type_probabilities->affected_bases[i]);
+
+        strcat(tag, isoforms_struct->rescue_type_probabilities->rescue_types[i]);
+        strcat(tag, "|");
+        strcat(tag, prob_s);
+        strcat(tag, "|");
+        strcat(tag, bases_s);
+
+        // Add '&' delimiter if not the last item
+        if (i < isoforms_struct->n_rescue_types - 1) {
+            strcat(tag, "&");
         }
-        strcat(tags[2], tmp);
     }
 
-    return tags;
-}
-
-void free_rescue_tags(char **tags) {
-    for (int i = 0; i < 3; i++) {
-        free(tags[i]);
-    }
-    free(tags);
+    return tag;
 }
 
 void free_isoforms(Isoforms *isoforms_struct) {
