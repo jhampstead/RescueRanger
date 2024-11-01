@@ -378,7 +378,7 @@ int find_gene_region_for_variant(bcf1_t *v, bcf_hdr_t *hdr, gff_t *gff, IRegion 
 int allele_offset(const bcf1_t *v, const int ref_index, const int alt_index, const Range bounds) {
     Range ref = variant_to_range(v, ref_index);
     Range ref_range;
-    if (intersect_ranges(ref, bounds, &ref_range) == 0) {
+    if (intersect_ranges(ref, bounds, &ref_range) == 0 || range_len(ref_range) == 0) {
         return 0;
     }
 
@@ -1138,15 +1138,18 @@ int create_splice_probabilities(int vposition, Record *r, Transcripts *transcrip
         for (int ei = 0; ei < t->nexons; ei++) {
             Exon *e = t->exons[ei];
 
-            if (t->strand == STRAND_UNK) continue;
+            if (t->strand == STRAND_UNK) {
+                log_error("UNKNOWN STRAND!");
+                continue;
+            }
 
             if (abs(vposition - (int32_t) e->bounds->start) <= CAI_DISTANCE) {
-                int index = abs(vposition - (int32_t) e->bounds->start) + CAI_DISTANCE;
+                int index = vposition - (int32_t) e->bounds->start + CAI_DISTANCE;
 
                 if(canonicals[index] == 0) num_splice_probabilities++;
                 canonicals[index] = ACCEPTOR;
             } else if (abs(vposition - (int32_t) e->bounds->end) < CAI_DISTANCE) {
-                int index = abs(vposition - (int32_t) e->bounds->end) + CAI_DISTANCE;
+                int index = vposition - (int32_t) e->bounds->end + CAI_DISTANCE;
 
                 if(canonicals[index] == 0) num_splice_probabilities++;
                 canonicals[index] = DONOR;
@@ -2438,7 +2441,7 @@ int main(int argc, char *argv[]) {
 
                     kstring_t hap_seq;
                     get_haplotype_sequence(gene->seq, &hap_in, gene->coords, &hap_seq);
-                    log_info("%s:%li (num_isoforms=%i)", bcf_hdr_id2name(hdr, r->v->rid), r->v->pos, nisoforms); 
+                    // log_info("%s:%li (num_isoforms=%i)", bcf_hdr_id2name(hdr, r->v->rid), r->v->pos, nisoforms); 
 
                     for (int i = 0; i < nisoforms; i++) {
                         NonCodingRegions *ncrs = isoforms[i];
@@ -2461,7 +2464,7 @@ int main(int argc, char *argv[]) {
                                     continue;
                                 }
 
-                                log_info("Adding region %i, %i:%i - %i:%i to isoform %i", j, seq_idx, intron_start, ncr.coords.start, ncr.coords.end, i);
+                                // log_info("Adding region %i, %i:%i - %i:%i to isoform %i", j, seq_idx, intron_start, ncr.coords.start, ncr.coords.end, i);
                                 length += intron_start - seq_idx;
 
                                 if (length > 0 && isoform_bounds == NULL) {
@@ -2490,7 +2493,7 @@ int main(int argc, char *argv[]) {
                                     continue;
                                 }
 
-                                log_info("Adding region %i, %i:%i - %i:%i to isoform %i", j, seq_idx, intron_start, ncr.coords.end, ncr.coords.start, i);
+                                // log_info("Adding region %i, %i:%i - %i:%i to isoform %i", j, seq_idx, intron_start, ncr.coords.end, ncr.coords.start, i);
                                 length += intron_start - seq_idx;
 
                                 if (length > 0 && isoform_bounds == NULL) {
@@ -2561,8 +2564,9 @@ int main(int argc, char *argv[]) {
                             if (allele_offset(hap_r->v, 0, 1, shifted_isoform) == 0) continue;
 
                             int is_noncoding = 0;
-                            Range variant = variant_to_range(hap_r->v, 1);
-                            int hap_offset = haplotype_offset(&hap_in, (Range) {gene->coords.start, hap_r->v->pos});
+                            Range variant = variant_to_range(hap_r->v, 0);
+                            int hap_offset = haplotype_offset(&hap_in, (Range) {gene->coords.start, hap_r->v->pos - 1});
+                            shift_range(&variant, -hap_offset);
                             if (!ranges_overlap(shifted_isoform, variant)) continue;
 
                             for (int j = 0; j < ncrs->n; j++) {
@@ -2617,7 +2621,7 @@ int main(int argc, char *argv[]) {
                             for (int i = 0; i < ncrs->n; i++) {
                                 NonCodingRegion ncr = kv_A(*ncrs, i);
                                 int64_t isoform_position;
-                                if (get_position_in_isoform(ncr.coords.start, ncrs, &isoform_indels, t->strand, shifted_isoform, &isoform_position) != 0) {
+                                if (get_position_in_isoform(ncr.coords.start, ncrs, &hap_in, t->strand, gene->coords, &isoform_position) != 0) {
                                     splice_positions[num_splice_sites++] = NULL;
                                 } else {
                                     splice_positions[num_splice_sites] = malloc(sizeof(int64_t));
@@ -2629,7 +2633,7 @@ int main(int argc, char *argv[]) {
                                     num_splice_sites++;
                                 }
 
-                                if (get_position_in_isoform(ncr.coords.end, ncrs, &isoform_indels, t->strand, shifted_isoform, &isoform_position) != 0) {
+                                if (get_position_in_isoform(ncr.coords.end, ncrs, &hap_in, t->strand, gene->coords, &isoform_position) != 0) {
                                     splice_positions[num_splice_sites++] = NULL;
                                 } else {
                                     splice_positions[num_splice_sites] = malloc(sizeof(int64_t));
@@ -2646,7 +2650,7 @@ int main(int argc, char *argv[]) {
                             for (int i = ncrs->n-1; i >= 0; i--) {
                                 NonCodingRegion ncr = kv_A(*ncrs, i);
                                 int64_t isoform_position;
-                                if (get_position_in_isoform(ncr.coords.end, ncrs, &isoform_indels, t->strand, shifted_isoform, &isoform_position) != 0) {
+                                if (get_position_in_isoform(ncr.coords.end, ncrs, &hap_in, t->strand, gene->coords, &isoform_position) != 0) {
                                     splice_positions[num_splice_sites++] = NULL;
                                 } else {
                                     splice_positions[num_splice_sites] = malloc(sizeof(int64_t));
@@ -2658,7 +2662,7 @@ int main(int argc, char *argv[]) {
                                     num_splice_sites++;
                                 }
 
-                                if (get_position_in_isoform(ncr.coords.start, ncrs, &isoform_indels, t->strand, shifted_isoform, &isoform_position) != 0) {
+                                if (get_position_in_isoform(ncr.coords.start, ncrs, &hap_in, t->strand, gene->coords, &isoform_position) != 0) {
                                     splice_positions[num_splice_sites++] = NULL;
                                 } else {
                                     splice_positions[num_splice_sites] = malloc(sizeof(int64_t));
@@ -2722,12 +2726,13 @@ int main(int argc, char *argv[]) {
                             }
                         }
 
-                        // // Forward
+                        // Forward
                         int shift_index = 0;
 
-                        int upstream_ptv = 0;
                         const char stop_codons[3][3] = STOP_CODONS;
 
+                        klist_t(RecordContext) *context = kl_init_RecordContext();
+                        int context_size = 0;
                         for (int ri = 0; ri < shifts.n; ri++) {
                             IsoformFrameshift iso_shift = kv_A(shifts, ri);
                             if (iso_shift.r != r) continue;
@@ -2758,9 +2763,70 @@ int main(int argc, char *argv[]) {
                                 }
 
                                 if (!is_stop) {
-                                    log_error("STOP RESCUED!@!@!@!@!@!@!@!@!@!@!@!");
+                                    log_error("%d:%d t=%i if=%i STOP RESCUE", r->v->rid, r->v->pos, ti, i);
                                 }
                             }
+
+ //                            if (csq->triggers[FRAMESHIFT_TRIGGER] || csq->triggers[SPLICE_TRIGGER]) {
+ //                                for (int si = 0; si < spliced_seq.l; si += 3) {
+ //                                    if (shifts.n > 0) {
+ //                                        while (shift_index < shifts.n && kv_A(shifts, shift_index).seq_pos - shifted_isoform.start < si) {
+ //                                            shift_index++;
+ //                                        }
+ //
+ //                                        IsoformFrameshift shift = kv_A(shifts, shift_index);
+ //                                        Record *iso_r = shift.r;
+ //
+ //                                        if (iso_r == NULL) {}
+ //                                        else if (csq->triggers[SPLICE_TRIGGER] && shift.shift == 0) {
+ //                                            log_error("%d:%d t=%i if=%i COMPLETE SPLICE RESCUE", r->v->rid, r->v->pos, ti, i);
+ //                                        } else if (csq->triggers[SPLICE_TRIGGER] && shift.shift % 3 == 0 & abs(shift.shift) < MAX_FRAMESHIFT_RADIUS) {
+ //                                            log_error("%d:%d t=%i if=%i SPLICE FRAMESHIFT RESCUE", r->v->rid, r->v->pos, ti, i);
+ //                                        } else {
+ //                                            int combined_shift = 0;
+ //                                            if (context_size > 0) {
+ //                                                kliter_t(RecordContext) *it = kl_begin(context), *next_it;
+ //
+ //                                                while (it != kl_end(context)) {
+ //                                                    next_it = kl_next(it);
+ //
+ //                                                    IsoformFrameshift *context_shift = &kl_val(it);
+ //
+ //                                                    // Out of range of rescue, remove from context
+ //                                                    if (context_shift->seq_pos + MAX_FRAMESHIFT_RADIUS < shift.seq_pos) {
+ //                                                        kl_shift_RecordContext(context, NULL);
+ //                                                        it = next_it;
+ //                                                        context_size--;
+ //                                                        continue;
+ //                                                    }
+ //
+ //                                                    combined_shift += context_shift->shift;
+ //                                                    it = next_it;
+ //                                                }
+ //                                            }
+ //
+ //                                            combined_shift += shift.shift;
+ //                                            if (combined_shift % 3 == 0) {
+ //                                                log_error("%d:%d t=%i if=%i FRAMESHIFT SET RESCUE", r->v->rid, r->v->pos, ti, i);
+ //
+ //                                                kliter_t(RecordContext) *it;
+ //                                                while ((it = kl_begin(context)) != kl_end(context)) {
+ //                                                    // Set frameshift to rescued
+ //                                                    kl_shift_RecordContext(context, NULL);
+ //                                                    context_size = 0;
+ //                                                }
+ //                                            } else { // Unrescued
+ //                                                // Store frameshift, to consider with a following shift
+ //                                                *kl_pushp(RecordContext, context) = shift;
+ //                                                context_size++;
+ //                                            }
+ // 
+ //                                        }
+ //                                    }
+ //                                }
+ //                            }
+
+
                         }
 
                         // klist_t(RecordContext) *context = kl_init_RecordContext();
