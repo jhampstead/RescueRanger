@@ -1396,22 +1396,21 @@ int main(int argc, char *argv[]) {
         kv_push(RecordBlock, batches, block);
     }
 
-    // Convert GFF structures to custom format for ease of use and manipulability
-    khash_t(GeneHash) *genes = kh_init_GeneHash();
-    khash_t(TranscriptHash) *transcripts = kh_init_TranscriptHash();
 
     for (int b = 0; b < batches.n; b++) {
         RecordBlock block = kv_A(batches, b);
         if (!block.is_coding) continue;
+
+        khash_t(GeneHash) *genes = kh_init_GeneHash();
+        khash_t(TranscriptHash) *transcripts = kh_init_TranscriptHash();
 
         // Find matching gff transcripts/genes for records in batch
         for (int i = 0; i < block.records->n; i++) {
             Record *r = kv_A(*block.records, i);
             gf_tscripts *tscripts = NULL;
             find_gf_tscripts_for_record(r, hdr, gff, &tscripts);
-            if (tscripts == NULL) continue; // A variant in a coding gene can still have no overlapping coding transcripts
+            if (tscripts == NULL || tscripts->n == 0) continue; // A variant in a coding gene can still have no overlapping coding transcripts
 
-            // Convert tscripts to Transcript
             r->tscripts = malloc(sizeof(Transcripts));
             kv_init(*r->tscripts);
             for (int j = 0; j < tscripts->n; j++) {
@@ -1454,6 +1453,7 @@ int main(int argc, char *argv[]) {
             // Create Genes
             r->transcript_genes = malloc(sizeof(Genes));
             kv_init(*r->transcript_genes);
+
             r->genes = malloc(sizeof(Genes));
             kv_init(*r->genes);
             for (int j = 0; j < tscripts->n; j++) {
@@ -1483,7 +1483,8 @@ int main(int argc, char *argv[]) {
                 Range gene_range = {t->gene->beg, t->gene->end};
 
                 int slen = 0;
-                char *seq = faidx_fetch_seq(fai, bcf_hdr_id2name(hdr, r->v->rid), gene_range.start, gene_range.end, &slen);
+                const char *chr = bcf_hdr_id2name(hdr, r->v->rid);
+                char *seq = faidx_fetch_seq(fai, chr, gene_range.start, gene_range.end, &slen);
                 seq[slen] = '\0';
                 kstring_t s = { slen, slen+1, seq };
 
@@ -1510,18 +1511,13 @@ int main(int argc, char *argv[]) {
             free(tscripts);
 
             r->complete_scores = malloc(r->genes->n * NUM_PHASES * sizeof(Score *));
-            for (int i = 0; i < r->genes->n * NUM_PHASES; i++) r->complete_scores[i] = NULL;
+            for (int k = 0; k < r->genes->n * NUM_PHASES; k++) r->complete_scores[k] = NULL;
 
             r->cs = malloc(r->genes->n * NUM_PHASES * sizeof(SpliceChange *)); 
-            for (int i = 0; i < r->genes->n * NUM_PHASES; i++) r->cs[i] = NULL;
+            for (int k = 0; k < r->genes->n * NUM_PHASES; k++) r->cs[k] = NULL;
         }
-
     }
 
-    bcf_destroy(v);
-    destroy_hdr_fmt(vep_fmt);
-    bcf_close(fp_in);
-    fai_destroy(fai);
 
     for (int b = 0; b < batches.n; b++) {
         RecordBlock block = kv_A(batches, b);
@@ -1577,7 +1573,73 @@ int main(int argc, char *argv[]) {
         PhasedRecords *phased_records = split_records_by_phase(block.records, hdr);
         for (int p = 0; p < NUM_PHASES; p++) {
             Records *batch = kv_A(*phased_records, p);
+
+            // TODO: FIX THIS DISGUSTING THING
+            for (int i = 0; i < batch->n; i++) {
+                Record *r = kv_A(*batch, i);
+
+                if (r->tscripts != NULL) {
+                    kv_destroy(*r->tscripts);
+                    free(r->tscripts);
+                    r->tscripts = NULL;
+                }
+
+            }
+
             remove_unworkable_variants(batch, hdr);
+
+            khash_t(TranscriptHash) *transcripts = kh_init_TranscriptHash();
+
+            for (int i = 0; i < batch->n; i++) {
+                Record *r = kv_A(*batch, i);
+
+                gf_tscripts *tscripts = NULL;
+                find_gf_tscripts_for_record(r, hdr, gff, &tscripts);
+                if (tscripts == NULL) continue; // A variant in a coding gene can still have no overlapping coding transcripts
+
+                // Convert tscripts to Transcript
+                r->tscripts = malloc(sizeof(Transcripts));
+                kv_init(*r->tscripts);
+                for (int j = 0; j < tscripts->n; j++) {
+                    gf_tscript_t *gf_t = kv_A(*tscripts, j);
+                    if (gf_t == NULL) { kv_push(Transcript *, *r->tscripts, NULL); continue; }
+
+                    int key = gf_t->id;
+                    khint32_t hash_index = kh_get_TranscriptHash(transcripts, key);
+                    if (hash_index != kh_end(transcripts)) {
+                        Transcript *t = kh_val(transcripts, hash_index);
+                        kv_push(Transcript *, *r->tscripts, t);
+                        continue;
+                    }
+
+                    Transcript *t = malloc(sizeof(Transcript));
+                    t->id = key;
+                    t->start = gf_t->beg;
+                    t->end = gf_t->end;
+                    t->strand = gf_t->strand;
+
+                    t->mcds = gf_t->mcds;
+                    t->ncds = gf_t->ncds;
+                    t->cds = malloc(t->mcds * sizeof(Range));
+                    for (int k = 0; k < t->ncds; k++) {
+                        uint32_t start = gf_t->cds[k]->beg;
+                        uint32_t end = gf_t->cds[k]->beg + (gf_t->cds[k]->len - 1);
+                        t->cds[k] = (Range) { start, end };
+                    }
+
+                    const char *chr = bcf_hdr_id2name(hdr, r->v->rid);
+                    set_transcript_exons(t, chr, gff);
+
+                    int is_new;
+                    hash_index = kh_put_TranscriptHash(transcripts, key, &is_new);
+                    kh_val(transcripts, hash_index) = t;
+
+                    kv_push(Transcript *, *r->tscripts, t);
+                }
+
+                free(tscripts);
+            }
+
 
             for (int i = 0; i < batch->n; i++) {
                 Record *r = kv_A(*batch, i);
@@ -1596,7 +1658,9 @@ int main(int argc, char *argv[]) {
                     Records hap_in; kv_init(hap_in); // Variants for current allele including current variant
                     for (int j = 0; j < batch->n; j++) {
                         Record *hap_r = kv_A(*batch, j);
-                        Range record_range = variant_to_range(r->v, 0);
+                        Range record_range = variant_to_range(hap_r->v, 0);
+
+                        if (hap_r->genes == NULL) continue;
 
                         for (int gi2 = 0; gi2 < hap_r->genes->n; gi2++) {
                             Gene *gene2 = kv_A(*hap_r->genes, gi2);
@@ -2058,7 +2122,7 @@ int main(int argc, char *argv[]) {
                     Records hap_in; kv_init(hap_in); // Variants for current allele including current variant
                     for (int j = 0; j < batch->n; j++) {
                         Record *hap_r = kv_A(*batch, j);
-                        Range record_range = variant_to_range(r->v, 0);
+                        Range record_range = variant_to_range(hap_r->v, 0);
 
                         for (int gi2 = 0; gi2 < hap_r->genes->n; gi2++) {
                             Gene *gene2 = kv_A(*hap_r->genes, gi2);
@@ -2448,7 +2512,7 @@ int main(int argc, char *argv[]) {
 
                     kstring_t hap_seq;
                     get_haplotype_sequence(gene->seq, &hap_in, gene->coords, &hap_seq);
-                    // log_info("%s:%li (num_isoforms=%i)", bcf_hdr_id2name(hdr, r->v->rid), r->v->pos, nisoforms); 
+                    log_info("%s:%li (num_isoforms=%i)", bcf_hdr_id2name(hdr, r->v->rid), r->v->pos, nisoforms); 
 
                     for (int i = 0; i < nisoforms; i++) {
                         NonCodingRegions *ncrs = isoforms[i];
@@ -2507,9 +2571,11 @@ int main(int argc, char *argv[]) {
                                     isoform_bounds = malloc(sizeof(Range));
                                     isoform_bounds->end = seq_idx;
                                 }
-                                if (length > 0) isoform_bounds->start = intron_start;
 
-                                kputsn(hap_seq.s + seq_idx + 1, intron_start - seq_idx, &spliced_seq);
+                                if (length > 0) { 
+                                    isoform_bounds->start = intron_start;
+                                    kputsn(hap_seq.s + seq_idx + 1, intron_start - seq_idx, &spliced_seq);
+                                }
                                 seq_idx = intron_end - 1;
                             }
 
@@ -2951,7 +3017,7 @@ int main(int argc, char *argv[]) {
                 if (kv_A(*r->vep, j)->triggers[SPLICE_TRIGGER]) splice_triggered = 1;
             }
 
-            if (splice_triggered) continue;
+            if (!splice_triggered) continue;
 
             kstring_t splice_scores = {0};
             kstring_t splice_change = {0};
@@ -3022,14 +3088,14 @@ int main(int argc, char *argv[]) {
 
 
     // Free genes hashmap
-    for (int k = kh_begin(genes); k != kh_end(genes); ++k) {
-        if (kh_exist(genes, k)) {
-            Gene *gene = kh_value(genes, k);
-            free(gene->seq.s);
-            free(gene);
-        }
-    }
-    kh_destroy_GeneHash(genes);
+    // for (int k = kh_begin(genes); k != kh_end(genes); ++k) {
+    //     if (kh_exist(genes, k)) {
+    //         Gene *gene = kh_value(genes, k);
+    //         free(gene->seq.s);
+    //         free(gene);
+    //     }
+    // }
+    // kh_destroy_GeneHash(genes);
 
     // Free CDS ranges
     // for (int k = kh_begin(cds_ranges); k != kh_end(cds_ranges); ++k) {
@@ -3051,6 +3117,11 @@ int main(int argc, char *argv[]) {
         free(block.records);
     }
     kv_destroy(batches);
+
+    bcf_destroy(v);
+    destroy_hdr_fmt(vep_fmt);
+    bcf_close(fp_in);
+    fai_destroy(fai);
 
     // Free raw scores file
     // fclose(raw_scores);

@@ -229,6 +229,7 @@ Record *init_record(bcf1_t *v, VepCsqs *csqs) {
     r->c = NULL;
     r->genes = NULL;
     r->tscripts = NULL;
+    r->transcript_genes = NULL;
     r->vep = NULL;
     r->complete_scores = NULL;
     // r->hap_scores = NULL;
