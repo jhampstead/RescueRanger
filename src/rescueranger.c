@@ -1765,10 +1765,11 @@ int main(int argc, char *argv[]) {
 
                     for (int j = 0; j < batch->n; j++) {
                         Record *hap_r = kv_A(*batch, j);
-                        Range record_range = variant_to_range(r->v, 0);
+                        Range record_range = variant_to_range(hap_r->v, 0);
 
                         for (int g2 = 0; g2 < hap_r->genes->n; g2++) {
                             Gene *gene2 = kv_A(*hap_r->genes, g2);
+
                             if (gene2 == NULL) continue;
 
                             if (gene->gff_id == gene2->gff_id) {
@@ -2123,6 +2124,8 @@ int main(int argc, char *argv[]) {
                     for (int j = 0; j < batch->n; j++) {
                         Record *hap_r = kv_A(*batch, j);
                         Range record_range = variant_to_range(hap_r->v, 0);
+
+                        if (hap_r->genes == NULL) continue;
 
                         for (int gi2 = 0; gi2 < hap_r->genes->n; gi2++) {
                             Gene *gene2 = kv_A(*hap_r->genes, gi2);
@@ -3018,6 +3021,7 @@ int main(int argc, char *argv[]) {
             }
 
             if (!splice_triggered) continue;
+            if (strlen(r->v->d.allele[1]) > CAI_DISTANCE || r->v->rlen > CAI_DISTANCE) continue;
 
             kstring_t splice_scores = {0};
             kstring_t splice_change = {0};
