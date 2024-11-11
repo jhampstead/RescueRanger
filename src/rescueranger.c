@@ -453,6 +453,7 @@ float *match_predictions_to_reference(const float *predictions, const bcf1_t *v,
 
 static void get_haplotype_sequence(const kstring_t reference_sequence, const Records *rs, const Range gene, kstring_t *out_hap) {
     const int sequence_offset = haplotype_offset(rs, gene);
+    const Range haplotype_gene = { gene.start, gene.end - sequence_offset };
 
     // Prepare kstring
     kstring_t haplotype_sequence = {0};
@@ -469,18 +470,18 @@ static void get_haplotype_sequence(const kstring_t reference_sequence, const Rec
         // Get reference position, intersected to gene boundaries to manage start overlap
         Range ref = variant_to_range(r->v, 0);
         Range intersected_ref = {0}; 
-        if (intersect_ranges(ref, gene, &intersected_ref) == 0) continue;
-        shift_range(&ref, -gene.start);
-        shift_range(&intersected_ref, -gene.start);
+        if (intersect_ranges(ref, haplotype_gene, &intersected_ref) == 0) continue;
+        shift_range(&ref, -haplotype_gene.start);
+        shift_range(&intersected_ref, -haplotype_gene.start);
         int ref_segment = intersected_ref.start - ref_idx;
 
         // Get alt position, intersected to gene boundaries
         Range alt = variant_to_range(r->v, 1);
         Range intersected_alt = {0}; 
         int alt_segment = 0, skipped_bases = 0;
-        if (intersect_ranges(alt, gene, &intersected_alt)) {
-            shift_range(&alt, -gene.start);
-            shift_range(&intersected_alt, -gene.start);
+        if (intersect_ranges(alt, haplotype_gene, &intersected_alt)) {
+            shift_range(&alt, -haplotype_gene.start);
+            shift_range(&intersected_alt, -haplotype_gene.start);
 
             alt_segment = range_len(intersected_alt);
             skipped_bases = intersected_alt.start - alt.start; // Only ever non-zero in the case of a deletion overlapping start
@@ -1741,6 +1742,8 @@ int main(int argc, char *argv[]) {
                     if (kv_A(*r->vep, j)->triggers[SPLICE_TRIGGER]) splice_triggered = 1;
                 }
                 if (!splice_triggered) continue;
+                
+                log_info("%s:%li (splice)", bcf_hdr_id2name(hdr, r->v->rid), r->v->pos); 
 
                 if (strlen(r->v->d.allele[1]) > CAI_DISTANCE) {
                     log_warn("Skipping on %s:%li, insertion is too long", bcf_hdr_id2name(hdr, r->v->rid), r->v->pos);
