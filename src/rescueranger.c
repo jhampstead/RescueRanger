@@ -383,9 +383,9 @@ int allele_offset(const bcf1_t *v, const int ref_index, const int alt_index, con
     }
 
     Range alt = variant_to_range(v, alt_index);
-    Range alt_range;
+    Range intersected_alt;
     int alt_len = 0;
-    if (intersect_ranges((Range) {v->pos, v->pos+1}, bounds, &alt_range) != 0) {
+    if (intersect_ranges((Range) {v->pos, v->pos+1}, bounds, &intersected_alt) != 0 && range_len(intersected_alt) > 0) {
         alt_len = range_len(alt);
     }
 
@@ -453,7 +453,6 @@ float *match_predictions_to_reference(const float *predictions, const bcf1_t *v,
 
 static void get_haplotype_sequence(const kstring_t reference_sequence, const Records *rs, const Range gene, kstring_t *out_hap) {
     const int sequence_offset = haplotype_offset(rs, gene);
-    const Range haplotype_gene = { gene.start, gene.end - sequence_offset };
 
     // Prepare kstring
     kstring_t haplotype_sequence = {0};
@@ -470,38 +469,38 @@ static void get_haplotype_sequence(const kstring_t reference_sequence, const Rec
         // Get reference position, intersected to gene boundaries to manage start overlap
         Range ref = variant_to_range(r->v, 0);
         Range intersected_ref = {0}; 
-        if (intersect_ranges(ref, haplotype_gene, &intersected_ref) == 0) continue;
-        shift_range(&ref, -haplotype_gene.start);
-        shift_range(&intersected_ref, -haplotype_gene.start);
+        if (intersect_ranges(ref, gene, &intersected_ref) == 0) continue;
+        shift_range(&ref, -gene.start);
+        shift_range(&intersected_ref, -gene.start);
         int ref_segment = intersected_ref.start - ref_idx;
 
         // Get alt position, intersected to gene boundaries
         Range alt = variant_to_range(r->v, 1);
         Range intersected_alt = {0}; 
-        int alt_segment = 0, skipped_bases = 0;
-        if (intersect_ranges(alt, haplotype_gene, &intersected_alt)) {
-            shift_range(&alt, -haplotype_gene.start);
-            shift_range(&intersected_alt, -haplotype_gene.start);
+        int alt_segment = 0;
+        if (intersect_ranges(alt, gene, &intersected_alt) && range_len(intersected_alt) > 0) {
+            shift_range(&alt, -gene.start);
+            shift_range(&intersected_alt, -gene.start);
 
-            alt_segment = range_len(intersected_alt);
-            skipped_bases = intersected_alt.start - alt.start; // Only ever non-zero in the case of a deletion overlapping start
+            alt_segment = range_len(alt);
         }
 
         // Copy over reference sequence without any variation
-        strncpy(haplotype_sequence.s + hap_idx, reference_sequence.s + ref_idx, ref_segment);
+        if (ref_segment > 0) strncpy(haplotype_sequence.s + hap_idx, reference_sequence.s + ref_idx, ref_segment);
 
         ref_idx += ref_segment;
         hap_idx += ref_segment;
 
         // Copy over variant
-        strncpy(haplotype_sequence.s + hap_idx, r->v->d.allele[1] + skipped_bases, alt_segment);
+        if (alt_segment > 0) strncpy(haplotype_sequence.s + hap_idx, r->v->d.allele[1], alt_segment);
 
         ref_idx += range_len(intersected_ref);
         hap_idx += alt_segment;
     }
 
     // Copy over remaining sequence from reference and complete sequence string
-    strncpy(haplotype_sequence.s + hap_idx, reference_sequence.s + ref_idx, reference_sequence.l - ref_idx);
+    int remainder = reference_sequence.l - ref_idx;
+    if (remainder > 0) strncpy(haplotype_sequence.s + hap_idx, reference_sequence.s + ref_idx, remainder);
     haplotype_sequence.s[haplotype_sequence.l] = '\0';
  
     *out_hap = haplotype_sequence;
