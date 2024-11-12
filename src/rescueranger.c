@@ -1658,9 +1658,8 @@ int main(int argc, char *argv[]) {
                     Records hap_in; kv_init(hap_in); // Variants for current allele including current variant
                     for (int j = 0; j < batch->n; j++) {
                         Record *hap_r = kv_A(*batch, j);
-                        Range record_range = variant_to_range(hap_r->v, 0);
-
                         if (hap_r->genes == NULL) continue;
+                        Range record_range = variant_to_range(hap_r->v, 0);
 
                         for (int gi2 = 0; gi2 < hap_r->genes->n; gi2++) {
                             Gene *gene2 = kv_A(*hap_r->genes, gi2);
@@ -1741,7 +1740,7 @@ int main(int argc, char *argv[]) {
                     if (kv_A(*r->vep, j)->triggers[SPLICE_TRIGGER]) splice_triggered = 1;
                 }
                 if (!splice_triggered) continue;
-                
+
                 log_info("%s:%li (splice)", bcf_hdr_id2name(hdr, r->v->rid), r->v->pos); 
 
                 if (strlen(r->v->d.allele[1]) > CAI_DISTANCE) {
@@ -1767,6 +1766,7 @@ int main(int argc, char *argv[]) {
 
                     for (int j = 0; j < batch->n; j++) {
                         Record *hap_r = kv_A(*batch, j);
+                        if (hap_r->genes == NULL) continue;
                         Range record_range = variant_to_range(hap_r->v, 0);
 
                         for (int g2 = 0; g2 < hap_r->genes->n; g2++) {
@@ -1877,220 +1877,220 @@ int main(int argc, char *argv[]) {
                     SpliceProbability *splice_probabilities;
                     int num_splice_probabilities = create_splice_probabilities(vposition, r, r->tscripts, num_hap_alt_predictions, hap_alt_predictions, &splice_probabilities);
 
-                    // for (int i = 0; i < r->tscripts->n; i++) {
-                    //     Transcript *t = kv_A(*r->tscripts, i);
-                    //     Gene *tgene = kv_A(*r->transcript_genes, i);
-                    //
-                    //     if (t == NULL || tgene->gff_id != gene->gff_id) continue;
-                    //     for (int si = 0; si < num_splice_probabilities; si++) {
-                    //         SpliceProbability prediction = splice_probabilities[si];
-                    //         Range splice_position = (Range) { prediction.position, prediction.position+1 };
-                    //         for (int ei = 0; ei < t->nexons; ei++) {
-                    //             Exon *e = t->exons[ei];
-                    //
-                    //             int direction = 0;
-                    //             if (t->strand == STRAND_FWD) direction = 1;
-                    //             if (t->strand == STRAND_REV) direction = -1;
-                    //             if (t->strand == STRAND_UNK) continue;
-                    //
-                    //             Range positions;
-                    //             if (prediction.type == DONOR) {
-                    //                 if (ei == t->nexons-1 && t->strand == STRAND_FWD) continue; // Last exon, cannot form a pair with a downstream acceptor
-                    //                 if (ei == 0 && t->strand == STRAND_REV) continue;
-                    //                 positions = (Range) { e->bounds->start + 1, t->exons[ei + direction]->bounds->start };
-                    //             } else { // ACCEPTOR
-                    //                 if (ei == 0 && t->strand == STRAND_FWD) continue;
-                    //                 if (ei == t->nexons-1 && t->strand == STRAND_REV) continue;
-                    //                 positions = (Range) { t->exons[ei - direction]->bounds->end, e->bounds->end - 1 };
-                    //             }
-                    //
-                    //             Range intersection;
-                    //             if (!intersect_ranges(splice_position, positions, &intersection) || !range_len(intersection)) continue;
-                    //
-                    //             if (prediction.type == DONOR) {
-                    //                 prediction.canonical_position = e->splice_sites->canonical_donors[0].position;
-                    //             } else { // ACCEPTOR
-                    //                 prediction.canonical_position = e->splice_sites->canonical_acceptors[0].position;
-                    //             }
-                    //
-                    //             int predict_for_pair = 0;
-                    //             int predict_for_competitor = 0;
-                    //             store_splice_sites(prediction, &predict_for_pair, &predict_for_competitor, e->splice_sites);
-                    //
-                    //             // if (predict_for_pair) {
-                    //             //     if (prediction.type == DONOR) {
-                    //             //         int pi = ei + direction;
-                    //             //         if (pi < 0 || pi >= t->nexons) continue;
-                    //             //         SpliceSite pair = t->exons[pi]->splice_sites->canonical_acceptors[0];
-                    //             //
-                    //             //         if (pair.predicted) continue;
-                    //             //
-                    //             //         float *pair_predictions = predict_on_sequence(models, hap_alt.s, pair.position, tgene->coords, tgene->strand, hap_in);
-                    //             //         filter_to_most_likely_prediction(PRED_WIDTH * NUM_SCORES, &pair_predictions);
-                    //             //
-                    //             //         SpliceProbability *pair_probabilities;
-                    //             //         int num_pair_probabilities = create_splice_probabilities(pair.position, r, r->tscripts, PRED_WIDTH * NUM_SCORES, pair_predictions, &pair_probabilities);
-                    //             //         for (int pi = 0; pi < num_pair_probabilities; pi++) {
-                    //             //             SpliceProbability pair_prediction = pair_probabilities[pi];
-                    //             //
-                    //             //             for (int ei = 0; ei < t->nexons; ei++) {
-                    //             //                 Exon *e = t->exons[ei];
-                    //             //
-                    //             //                 Range positions;
-                    //             //                 if (pair_prediction.type == DONOR) {
-                    //             //                     if (ei == t->nexons-1 && t->strand == STRAND_FWD) continue; // Last exon, cannot form a pair with a downstream acceptor
-                    //             //                     if (ei == 0 && t->strand == STRAND_REV) continue;
-                    //             //                     positions = (Range) { e->bounds->start + 1, t->exons[ei + direction]->bounds->start };
-                    //             //                 } else { // ACCEPTOR
-                    //             //                     if (ei == 0 && t->strand == STRAND_FWD) continue;
-                    //             //                     if (ei == t->nexons-1 && t->strand == STRAND_REV) continue;
-                    //             //                     positions = (Range) { t->exons[ei - direction]->bounds->end, e->bounds->end - 1 };
-                    //             //                 }
-                    //             //
-                    //             //                 Range intersection;
-                    //             //                 if (!intersect_ranges(splice_position, positions, &intersection) || !range_len(intersection)) continue;
-                    //             //
-                    //             //                 if (pair_prediction.type == DONOR) {
-                    //             //                     pair_prediction.canonical_position = e->splice_sites->canonical_donors[0].position;
-                    //             //                 } else { // ACCEPTOR
-                    //             //                     pair_prediction.canonical_position = e->splice_sites->canonical_acceptors[0].position;
-                    //             //                 }
-                    //             //
-                    //             //                 store_splice_sites(pair_prediction, &predict_for_pair, &predict_for_competitor, e->splice_sites);
-                    //             //             }
-                    //             //         }
-                    //             //     } else { // ACCEPTOR
-                    //             //         int pi = ei - direction;
-                    //             //         if (pi < 0 || pi >= t->nexons) continue;
-                    //             //         SpliceSite pair = t->exons[pi]->splice_sites->canonical_donors[0];
-                    //             //
-                    //             //         if (pair.predicted) continue;
-                    //             //
-                    //             //         float *pair_predictions = predict_on_sequence(models, hap_alt.s, pair.position, tgene->coords, tgene->strand, hap_in);
-                    //             //         filter_to_most_likely_prediction(PRED_WIDTH * NUM_SCORES, &pair_predictions);
-                    //             //
-                    //             //         SpliceProbability *pair_probabilities;
-                    //             //         int num_pair_probabilities = create_splice_probabilities(pair.position, r, r->tscripts, PRED_WIDTH * NUM_SCORES, pair_predictions, &pair_probabilities);
-                    //             //         for (int pi = 0; pi < num_pair_probabilities; pi++) {
-                    //             //             SpliceProbability pair_prediction = pair_probabilities[pi];
-                    //             //
-                    //             //             for (int ei = 0; ei < t->nexons; ei++) {
-                    //             //                 Exon *e = t->exons[ei];
-                    //             //
-                    //             //                 Range positions;
-                    //             //                 if (pair_prediction.type == DONOR) {
-                    //             //                     if (ei == t->nexons-1 && t->strand == STRAND_FWD) continue; // Last exon, cannot form a pair with a downstream acceptor
-                    //             //                     if (ei == 0 && t->strand == STRAND_REV) continue;
-                    //             //                     positions = (Range) { e->bounds->start + 1, t->exons[ei + direction]->bounds->start };
-                    //             //                 } else { // ACCEPTOR
-                    //             //                     if (ei == 0 && t->strand == STRAND_FWD) continue;
-                    //             //                     if (ei == t->nexons-1 && t->strand == STRAND_REV) continue;
-                    //             //                     positions = (Range) { t->exons[ei - direction]->bounds->end, e->bounds->end - 1 };
-                    //             //                 }
-                    //             //
-                    //             //                 Range intersection;
-                    //             //                 if (!intersect_ranges(splice_position, positions, &intersection) || !range_len(intersection)) continue;
-                    //             //
-                    //             //                 if (pair_prediction.type == DONOR) {
-                    //             //                     pair_prediction.canonical_position = e->splice_sites->canonical_donors[0].position;
-                    //             //                 } else { // ACCEPTOR
-                    //             //                     pair_prediction.canonical_position = e->splice_sites->canonical_acceptors[0].position;
-                    //             //                 }
-                    //             //
-                    //             //                 store_splice_sites(pair_prediction, &predict_for_pair, &predict_for_competitor, e->splice_sites);
-                    //             //             }
-                    //             //         }
-                    //             //     }
-                    //             // }
-                    //
-                    //             // if (predict_for_competitor) {
-                    //             //     if (prediction.type == DONOR) {
-                    //             //         int ci = ei - direction;
-                    //             //         if (ci < 0 || ci >= t->nexons) continue;
-                    //             //         SpliceSite competitor = t->exons[ci]->splice_sites->canonical_donors[0];
-                    //             //
-                    //             //         if (competitor.predicted) continue;
-                    //             //
-                    //             //         float *competitor_predictions = predict_on_sequence(models, hap_alt.s, competitor.position, tgene->coords, tgene->strand, hap_in);
-                    //             //         filter_to_most_likely_prediction(PRED_WIDTH * NUM_SCORES, &competitor_predictions);
-                    //             //
-                    //             //         SpliceProbability *competitor_probabilities;
-                    //             //         int num_competitor_probabilities = create_splice_probabilities(competitor.position, r, r->tscripts, PRED_WIDTH * NUM_SCORES, competitor_predictions, &competitor_probabilities);
-                    //             //         for (int csi = 0; csi < num_competitor_probabilities; csi++) {
-                    //             //             SpliceProbability competitor_prediction = competitor_probabilities[csi];
-                    //             //
-                    //             //             for (int ei = 0; ei < t->nexons; ei++) {
-                    //             //                 Exon *e = t->exons[ei];
-                    //             //
-                    //             //                 Range positions;
-                    //             //                 if (competitor_prediction.type == DONOR) {
-                    //             //                     if (ei == t->nexons-1 && t->strand == STRAND_FWD) continue; // Last exon, cannot form a pair with a downstream acceptor
-                    //             //                     if (ei == 0 && t->strand == STRAND_REV) continue;
-                    //             //                     positions = (Range) { e->bounds->start + 1, t->exons[ei + direction]->bounds->start };
-                    //             //                 } else { // ACCEPTOR
-                    //             //                     if (ei == 0 && t->strand == STRAND_FWD) continue;
-                    //             //                     if (ei == t->nexons-1 && t->strand == STRAND_REV) continue;
-                    //             //                     positions = (Range) { t->exons[ei - direction]->bounds->end, e->bounds->end - 1 };
-                    //             //                 }
-                    //             //
-                    //             //                 Range intersection;
-                    //             //                 if (!intersect_ranges(splice_position, positions, &intersection) || !range_len(intersection)) continue;
-                    //             //
-                    //             //                 if (competitor_prediction.type == DONOR) {
-                    //             //                     competitor_prediction.canonical_position = e->splice_sites->canonical_donors[0].position;
-                    //             //                 } else { // ACCEPTOR
-                    //             //                     competitor_prediction.canonical_position = e->splice_sites->canonical_acceptors[0].position;
-                    //             //                 }
-                    //             //
-                    //             //                 store_splice_sites(competitor_prediction, &predict_for_pair, &predict_for_competitor, e->splice_sites);
-                    //             //             }
-                    //             //         }
-                    //             //     } else { // ACCEPTOR
-                    //             //         int ci = ei + direction;
-                    //             //         if (ci < 0 || ci >= t->nexons) continue;
-                    //             //         SpliceSite competitor = t->exons[ci]->splice_sites->canonical_acceptors[0];
-                    //             //
-                    //             //         if (competitor.predicted) continue;
-                    //             //
-                    //             //         float *competitor_predictions = predict_on_sequence(models, hap_alt.s, competitor.position, tgene->coords, tgene->strand, hap_in);
-                    //             //         filter_to_most_likely_prediction(PRED_WIDTH * NUM_SCORES, &competitor_predictions);
-                    //             //
-                    //             //         SpliceProbability *competitor_probabilities;
-                    //             //         int num_competitor_probabilities = create_splice_probabilities(competitor.position, r, r->tscripts, PRED_WIDTH * NUM_SCORES, competitor_predictions, &competitor_probabilities);
-                    //             //         for (int ci = 0; ci < num_competitor_probabilities; ci++) {
-                    //             //             SpliceProbability competitor_prediction = competitor_probabilities[ci];
-                    //             //
-                    //             //             for (int ei = 0; ei < t->nexons; ei++) {
-                    //             //                 Exon *e = t->exons[ei];
-                    //             //
-                    //             //                 Range positions;
-                    //             //                 if (competitor_prediction.type == DONOR) {
-                    //             //                     if (ei == t->nexons-1 && t->strand == STRAND_FWD) continue; // Last exon, cannot form a pair with a downstream acceptor
-                    //             //                     if (ei == 0 && t->strand == STRAND_REV) continue;
-                    //             //                     positions = (Range) { e->bounds->start + 1, t->exons[ei + direction]->bounds->start };
-                    //             //                 } else { // ACCEPTOR
-                    //             //                     if (ei == 0 && t->strand == STRAND_FWD) continue;
-                    //             //                     if (ei == t->nexons-1 && t->strand == STRAND_REV) continue;
-                    //             //                     positions = (Range) { t->exons[ei - direction]->bounds->end, e->bounds->end - 1 };
-                    //             //                 }
-                    //             //
-                    //             //                 Range intersection;
-                    //             //                 if (!intersect_ranges(splice_position, positions, &intersection) || !range_len(intersection)) continue;
-                    //             //
-                    //             //                 if (competitor_prediction.type == DONOR) {
-                    //             //                     competitor_prediction.canonical_position = e->splice_sites->canonical_donors[0].position;
-                    //             //                 } else { // ACCEPTOR
-                    //             //                     competitor_prediction.canonical_position = e->splice_sites->canonical_acceptors[0].position;
-                    //             //                 }
-                    //             //
-                    //             //                 store_splice_sites(competitor_prediction, &predict_for_pair, &predict_for_competitor, e->splice_sites);
-                    //             //             }
-                    //             //         }
-                    //             //     }
-                    //             // }
-                    //         }
-                    //     }
-                    // }
+                    for (int i = 0; i < r->tscripts->n; i++) {
+                        Transcript *t = kv_A(*r->tscripts, i);
+                        Gene *tgene = kv_A(*r->transcript_genes, i);
+
+                        if (t == NULL || tgene->gff_id != gene->gff_id) continue;
+                        for (int si = 0; si < num_splice_probabilities; si++) {
+                            SpliceProbability prediction = splice_probabilities[si];
+                            Range splice_position = (Range) { prediction.position, prediction.position+1 };
+                            for (int ei = 0; ei < t->nexons; ei++) {
+                                Exon *e = t->exons[ei];
+
+                                int direction = 0;
+                                if (t->strand == STRAND_FWD) direction = 1;
+                                if (t->strand == STRAND_REV) direction = -1;
+                                if (t->strand == STRAND_UNK) continue;
+
+                                Range positions;
+                                if (prediction.type == DONOR) {
+                                    if (ei == t->nexons-1 && t->strand == STRAND_FWD) continue; // Last exon, cannot form a pair with a downstream acceptor
+                                    if (ei == 0 && t->strand == STRAND_REV) continue;
+                                    positions = (Range) { e->bounds->start + 1, t->exons[ei + direction]->bounds->start };
+                                } else { // ACCEPTOR
+                                    if (ei == 0 && t->strand == STRAND_FWD) continue;
+                                    if (ei == t->nexons-1 && t->strand == STRAND_REV) continue;
+                                    positions = (Range) { t->exons[ei - direction]->bounds->end, e->bounds->end - 1 };
+                                }
+
+                                Range intersection;
+                                if (!intersect_ranges(splice_position, positions, &intersection) || !range_len(intersection)) continue;
+
+                                if (prediction.type == DONOR) {
+                                    prediction.canonical_position = e->splice_sites->canonical_donors[0].position;
+                                } else { // ACCEPTOR
+                                    prediction.canonical_position = e->splice_sites->canonical_acceptors[0].position;
+                                }
+
+                                int predict_for_pair = 0;
+                                int predict_for_competitor = 0;
+                                store_splice_sites(prediction, &predict_for_pair, &predict_for_competitor, e->splice_sites);
+
+                                if (predict_for_pair) {
+                                    if (prediction.type == DONOR) {
+                                        int pi = ei + direction;
+                                        if (pi < 0 || pi >= t->nexons) continue;
+                                        SpliceSite pair = t->exons[pi]->splice_sites->canonical_acceptors[0];
+
+                                        if (pair.predicted) continue;
+
+                                        float *pair_predictions = predict_on_sequence(models, hap_alt.s, pair.position, tgene->coords, tgene->strand, hap_in);
+                                        filter_to_most_likely_prediction(PRED_WIDTH * NUM_SCORES, &pair_predictions);
+
+                                        SpliceProbability *pair_probabilities;
+                                        int num_pair_probabilities = create_splice_probabilities(pair.position, r, r->tscripts, PRED_WIDTH * NUM_SCORES, pair_predictions, &pair_probabilities);
+                                        for (int pi = 0; pi < num_pair_probabilities; pi++) {
+                                            SpliceProbability pair_prediction = pair_probabilities[pi];
+
+                                            for (int ei = 0; ei < t->nexons; ei++) {
+                                                Exon *e = t->exons[ei];
+
+                                                Range positions;
+                                                if (pair_prediction.type == DONOR) {
+                                                    if (ei == t->nexons-1 && t->strand == STRAND_FWD) continue; // Last exon, cannot form a pair with a downstream acceptor
+                                                    if (ei == 0 && t->strand == STRAND_REV) continue;
+                                                    positions = (Range) { e->bounds->start + 1, t->exons[ei + direction]->bounds->start };
+                                                } else { // ACCEPTOR
+                                                    if (ei == 0 && t->strand == STRAND_FWD) continue;
+                                                    if (ei == t->nexons-1 && t->strand == STRAND_REV) continue;
+                                                    positions = (Range) { t->exons[ei - direction]->bounds->end, e->bounds->end - 1 };
+                                                }
+
+                                                Range intersection;
+                                                if (!intersect_ranges(splice_position, positions, &intersection) || !range_len(intersection)) continue;
+
+                                                if (pair_prediction.type == DONOR) {
+                                                    pair_prediction.canonical_position = e->splice_sites->canonical_donors[0].position;
+                                                } else { // ACCEPTOR
+                                                    pair_prediction.canonical_position = e->splice_sites->canonical_acceptors[0].position;
+                                                }
+
+                                                store_splice_sites(pair_prediction, &predict_for_pair, &predict_for_competitor, e->splice_sites);
+                                            }
+                                        }
+                                    } else { // ACCEPTOR
+                                        int pi = ei - direction;
+                                        if (pi < 0 || pi >= t->nexons) continue;
+                                        SpliceSite pair = t->exons[pi]->splice_sites->canonical_donors[0];
+
+                                        if (pair.predicted) continue;
+
+                                        float *pair_predictions = predict_on_sequence(models, hap_alt.s, pair.position, tgene->coords, tgene->strand, hap_in);
+                                        filter_to_most_likely_prediction(PRED_WIDTH * NUM_SCORES, &pair_predictions);
+
+                                        SpliceProbability *pair_probabilities;
+                                        int num_pair_probabilities = create_splice_probabilities(pair.position, r, r->tscripts, PRED_WIDTH * NUM_SCORES, pair_predictions, &pair_probabilities);
+                                        for (int pi = 0; pi < num_pair_probabilities; pi++) {
+                                            SpliceProbability pair_prediction = pair_probabilities[pi];
+
+                                            for (int ei = 0; ei < t->nexons; ei++) {
+                                                Exon *e = t->exons[ei];
+
+                                                Range positions;
+                                                if (pair_prediction.type == DONOR) {
+                                                    if (ei == t->nexons-1 && t->strand == STRAND_FWD) continue; // Last exon, cannot form a pair with a downstream acceptor
+                                                    if (ei == 0 && t->strand == STRAND_REV) continue;
+                                                    positions = (Range) { e->bounds->start + 1, t->exons[ei + direction]->bounds->start };
+                                                } else { // ACCEPTOR
+                                                    if (ei == 0 && t->strand == STRAND_FWD) continue;
+                                                    if (ei == t->nexons-1 && t->strand == STRAND_REV) continue;
+                                                    positions = (Range) { t->exons[ei - direction]->bounds->end, e->bounds->end - 1 };
+                                                }
+
+                                                Range intersection;
+                                                if (!intersect_ranges(splice_position, positions, &intersection) || !range_len(intersection)) continue;
+
+                                                if (pair_prediction.type == DONOR) {
+                                                    pair_prediction.canonical_position = e->splice_sites->canonical_donors[0].position;
+                                                } else { // ACCEPTOR
+                                                    pair_prediction.canonical_position = e->splice_sites->canonical_acceptors[0].position;
+                                                }
+
+                                                store_splice_sites(pair_prediction, &predict_for_pair, &predict_for_competitor, e->splice_sites);
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if (predict_for_competitor) {
+                                    if (prediction.type == DONOR) {
+                                        int ci = ei - direction;
+                                        if (ci < 0 || ci >= t->nexons) continue;
+                                        SpliceSite competitor = t->exons[ci]->splice_sites->canonical_donors[0];
+
+                                        if (competitor.predicted) continue;
+
+                                        float *competitor_predictions = predict_on_sequence(models, hap_alt.s, competitor.position, tgene->coords, tgene->strand, hap_in);
+                                        filter_to_most_likely_prediction(PRED_WIDTH * NUM_SCORES, &competitor_predictions);
+
+                                        SpliceProbability *competitor_probabilities;
+                                        int num_competitor_probabilities = create_splice_probabilities(competitor.position, r, r->tscripts, PRED_WIDTH * NUM_SCORES, competitor_predictions, &competitor_probabilities);
+                                        for (int csi = 0; csi < num_competitor_probabilities; csi++) {
+                                            SpliceProbability competitor_prediction = competitor_probabilities[csi];
+
+                                            for (int ei = 0; ei < t->nexons; ei++) {
+                                                Exon *e = t->exons[ei];
+
+                                                Range positions;
+                                                if (competitor_prediction.type == DONOR) {
+                                                    if (ei == t->nexons-1 && t->strand == STRAND_FWD) continue; // Last exon, cannot form a pair with a downstream acceptor
+                                                    if (ei == 0 && t->strand == STRAND_REV) continue;
+                                                    positions = (Range) { e->bounds->start + 1, t->exons[ei + direction]->bounds->start };
+                                                } else { // ACCEPTOR
+                                                    if (ei == 0 && t->strand == STRAND_FWD) continue;
+                                                    if (ei == t->nexons-1 && t->strand == STRAND_REV) continue;
+                                                    positions = (Range) { t->exons[ei - direction]->bounds->end, e->bounds->end - 1 };
+                                                }
+
+                                                Range intersection;
+                                                if (!intersect_ranges(splice_position, positions, &intersection) || !range_len(intersection)) continue;
+
+                                                if (competitor_prediction.type == DONOR) {
+                                                    competitor_prediction.canonical_position = e->splice_sites->canonical_donors[0].position;
+                                                } else { // ACCEPTOR
+                                                    competitor_prediction.canonical_position = e->splice_sites->canonical_acceptors[0].position;
+                                                }
+
+                                                store_splice_sites(competitor_prediction, &predict_for_pair, &predict_for_competitor, e->splice_sites);
+                                            }
+                                        }
+                                    } else { // ACCEPTOR
+                                        int ci = ei + direction;
+                                        if (ci < 0 || ci >= t->nexons) continue;
+                                        SpliceSite competitor = t->exons[ci]->splice_sites->canonical_acceptors[0];
+
+                                        if (competitor.predicted) continue;
+
+                                        float *competitor_predictions = predict_on_sequence(models, hap_alt.s, competitor.position, tgene->coords, tgene->strand, hap_in);
+                                        filter_to_most_likely_prediction(PRED_WIDTH * NUM_SCORES, &competitor_predictions);
+
+                                        SpliceProbability *competitor_probabilities;
+                                        int num_competitor_probabilities = create_splice_probabilities(competitor.position, r, r->tscripts, PRED_WIDTH * NUM_SCORES, competitor_predictions, &competitor_probabilities);
+                                        for (int ci = 0; ci < num_competitor_probabilities; ci++) {
+                                            SpliceProbability competitor_prediction = competitor_probabilities[ci];
+
+                                            for (int ei = 0; ei < t->nexons; ei++) {
+                                                Exon *e = t->exons[ei];
+
+                                                Range positions;
+                                                if (competitor_prediction.type == DONOR) {
+                                                    if (ei == t->nexons-1 && t->strand == STRAND_FWD) continue; // Last exon, cannot form a pair with a downstream acceptor
+                                                    if (ei == 0 && t->strand == STRAND_REV) continue;
+                                                    positions = (Range) { e->bounds->start + 1, t->exons[ei + direction]->bounds->start };
+                                                } else { // ACCEPTOR
+                                                    if (ei == 0 && t->strand == STRAND_FWD) continue;
+                                                    if (ei == t->nexons-1 && t->strand == STRAND_REV) continue;
+                                                    positions = (Range) { t->exons[ei - direction]->bounds->end, e->bounds->end - 1 };
+                                                }
+
+                                                Range intersection;
+                                                if (!intersect_ranges(splice_position, positions, &intersection) || !range_len(intersection)) continue;
+
+                                                if (competitor_prediction.type == DONOR) {
+                                                    competitor_prediction.canonical_position = e->splice_sites->canonical_donors[0].position;
+                                                } else { // ACCEPTOR
+                                                    competitor_prediction.canonical_position = e->splice_sites->canonical_acceptors[0].position;
+                                                }
+
+                                                store_splice_sites(competitor_prediction, &predict_for_pair, &predict_for_competitor, e->splice_sites);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
 
                     free(ref_predictions);
                     free(hap_ref_predictions);
@@ -2125,9 +2125,8 @@ int main(int argc, char *argv[]) {
                     Records hap_in; kv_init(hap_in); // Variants for current allele including current variant
                     for (int j = 0; j < batch->n; j++) {
                         Record *hap_r = kv_A(*batch, j);
-                        Range record_range = variant_to_range(hap_r->v, 0);
-
                         if (hap_r->genes == NULL) continue;
+                        Range record_range = variant_to_range(hap_r->v, 0);
 
                         for (int gi2 = 0; gi2 < hap_r->genes->n; gi2++) {
                             Gene *gene2 = kv_A(*hap_r->genes, gi2);
