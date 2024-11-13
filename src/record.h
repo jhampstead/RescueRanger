@@ -15,7 +15,9 @@
 
 
 typedef struct SpliceSite {
+    void *record_ptr; // Circular dependency?
     uint32_t position;
+    uint32_t canonical_position;
     uint32_t predicted; // whether haplotype prediction has been run for the splice site
     uint32_t gff_canonical; // whether the splice site is canonical in the GFF
     float prior_probability; // raw SpliceAI probability
@@ -48,6 +50,7 @@ typedef struct Transcript {
     Range *cds;     // ordered list of exon coding regions
     size_t nexons, mexons;
     Exon **exons;
+    int triggers[3];
 } Transcript;
 
 typedef struct Gene {
@@ -58,7 +61,16 @@ typedef struct Gene {
     uint32_t strand;
 } Gene;
 
+typedef struct NonCodingRegion {
+    Range coords;
+    Range canonical_coords;
+    SpliceSite *donor, *acceptor;
+    void *record_ptr;
+    int is_utr;
+} NonCodingRegion;
+
 typedef kvec_t(Range) Ranges;
+typedef kvec_t(NonCodingRegion) NonCodingRegions;
 typedef kvec_t(Gene *) Genes;
 
 KHASH_MAP_INIT_INT64(RangeHash, Range *);
@@ -80,9 +92,10 @@ typedef struct TscriptCsqs {
     char *tid;
     int num_consequences;
     char **consequences;
+    int triggers[3];
 } TscriptCsqs;
 
-typedef kvec_t(TscriptCsqs) VepCsqs;
+typedef kvec_t(TscriptCsqs *) VepCsqs;
 
 typedef kvec_t(gf_tscript_t *) gf_tscripts;
 
@@ -99,7 +112,6 @@ typedef struct SpliceChange {
 typedef struct Record {
     bcf1_t *v;
     VepCsqs *vep;
-    int triggers[3];
     ConsequencePredictions *c;
 
     SpliceChange **cs;

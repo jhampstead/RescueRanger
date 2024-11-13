@@ -183,8 +183,14 @@ VepCsqs *parse_vep_transcript_consequences(bcf1_t *v, const HdrFormat *vep_fmt, 
 
         // Store in hashmap
         char *tr_id = transcript_csq.s + vep_field_idxs[feature_id];
-        TscriptCsqs t = {strdup(tr_id), consequence_n, cons};
-        kv_push(TscriptCsqs, *transcripts, t);
+        TscriptCsqs *t = malloc(sizeof(TscriptCsqs));
+        t->tid = strdup(tr_id);
+        t->num_consequences = consequence_n;
+        t->consequences = cons;
+        for (int j = 0; j < 3; j++) {
+            t->triggers[j] = 0;
+        }
+        kv_push(TscriptCsqs *, *transcripts, t);
 
         free(consequence_field_idxs);
         free(vep_field_idxs);
@@ -198,13 +204,15 @@ VepCsqs *parse_vep_transcript_consequences(bcf1_t *v, const HdrFormat *vep_fmt, 
 
 void destroy_vep_csqs(VepCsqs *vep_csqs) {
     for (int i = 0; i < vep_csqs->n; i++) {
-        TscriptCsqs vep_csq_field = kv_A(*vep_csqs, i);
+        TscriptCsqs *vep_csq_field = kv_A(*vep_csqs, i);
 
-        for (int j = 0; j < vep_csq_field.num_consequences; j++) {
-            free(vep_csq_field.consequences[j]);
+        for (int j = 0; j < vep_csq_field->num_consequences; j++) {
+            free(vep_csq_field->consequences[j]);
         }
-        free(vep_csq_field.consequences);
-        free(vep_csq_field.tid);
+        free(vep_csq_field->consequences);
+        free(vep_csq_field->tid);
+
+        free(vep_csq_field);
     }
 
     kv_destroy(*vep_csqs);
@@ -218,13 +226,10 @@ Record *init_record(bcf1_t *v, VepCsqs *csqs) {
     bcf_unpack(v_dup, BCF_UN_ALL);
     r->v = v_dup;
 
-    r->triggers[0] = 0;
-    r->triggers[1] = 0;
-    r->triggers[2] = 0;
-
     r->c = NULL;
     r->genes = NULL;
     r->tscripts = NULL;
+    r->transcript_genes = NULL;
     r->vep = NULL;
     r->complete_scores = NULL;
     // r->hap_scores = NULL;
