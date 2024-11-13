@@ -1092,7 +1092,7 @@ int trigger_cryptic_splice(bcf1_t *rec, bcf_hdr_t *hdr) {
 
     for (int i = 0; i < 4; i++) {
         if (spliceai_scores[i] >= SPLICEAI_CRYPTIC_SPLICE_THRESHOLD) {
-            log_info("Cryptic Found!");
+            // log_info("Cryptic Found!");
             return CRYPTIC_SPLICE_VALUE;  // Set cryptic splice trigger to 1 if values are greater than CRYPTIC_SPLICE_THRESHOLD
         }
     }
@@ -1130,7 +1130,7 @@ int create_splice_probabilities(int vposition, Record *r, Transcripts *transcrip
 
     int pred_width = num_hap_alt_predictions / NUM_SCORES;
     Range pred_range = { vposition - CAI_DISTANCE, vposition - CAI_DISTANCE + pred_width };
-    log_info("Length: %i, # transcripts: %i", pred_width, transcripts->n);
+    // log_info("Length: %i, # transcripts: %i", pred_width, transcripts->n);
     int canonicals[pred_width];
     for (int i = 0; i < pred_width; i++) canonicals[i] = 0;
     for (int ti = 0; ti < transcripts->n; ti++) {
@@ -1148,17 +1148,19 @@ int create_splice_probabilities(int vposition, Record *r, Transcripts *transcrip
             if (e->bounds->start >= pred_range.start && e->bounds->start < pred_range.end) {
                 int index = (int32_t) e->bounds->start - vposition + CAI_DISTANCE;
 
-                log_info("Index: %i", index);
+                // log_info("Index: %i", index);
 
-                if(canonicals[index] == 0) num_splice_probabilities++;
+                // Only add for loss of canonical site
+                if(canonicals[index] == 0 && posterior_probabilities[index * NUM_SCORES + ACCEPTOR] == 0) num_splice_probabilities++;
                 canonicals[index] = ACCEPTOR;
 
             } else if (e->bounds->end >= pred_range.start && e->bounds->end < pred_range.end) {
                 int index = (int32_t) e->bounds->end - vposition + CAI_DISTANCE;
 
-                log_info("Index: %i", index);
+                // log_info("Index: %i", index);
 
-                if(canonicals[index] == 0) num_splice_probabilities++;
+                // Only add for loss of canonical site
+                if(canonicals[index] == 0 && posterior_probabilities[index * NUM_SCORES + DONOR] == 0) num_splice_probabilities++;
                 canonicals[index] = DONOR;
             }
         }
@@ -1877,6 +1879,7 @@ int main(int argc, char *argv[]) {
                     SpliceProbability *splice_probabilities;
                     int num_splice_probabilities = create_splice_probabilities(vposition, r, r->tscripts, num_hap_alt_predictions, hap_alt_predictions, &splice_probabilities);
 
+
                     for (int i = 0; i < r->tscripts->n; i++) {
                         Transcript *t = kv_A(*r->tscripts, i);
                         Gene *tgene = kv_A(*r->transcript_genes, i);
@@ -2526,6 +2529,7 @@ int main(int argc, char *argv[]) {
                         log_debug("Gene length is: %i", hap_seq.l);
 
                         Range *isoform_bounds = NULL;
+                        int affected_bases = 0;
 
                         int gene_start = gene->coords.start;
                         if (t->strand == STRAND_FWD) {
@@ -2537,6 +2541,11 @@ int main(int argc, char *argv[]) {
                                 int intron_end = ncr.coords.end - gene_start;
                                 if (intron_start < seq_idx) {
                                     continue;
+                                }
+
+                                int bases_shifted = range_len(ncr.canonical_coords) - range_len(ncr.coords);
+                                if (bases_shifted != 0) {
+                                    affected_bases += bases_shifted;
                                 }
 
                                 // log_info("Adding region %i, %i:%i - %i:%i to isoform %i", j, seq_idx, intron_start, ncr.coords.start, ncr.coords.end, i);
@@ -2568,6 +2577,11 @@ int main(int argc, char *argv[]) {
                                     continue;
                                 }
 
+                                int bases_shifted = range_len(ncr.canonical_coords) - range_len(ncr.coords);
+                                if (bases_shifted != 0) {
+                                    affected_bases += bases_shifted;
+                                }
+
                                 // log_info("Adding region %i, %i:%i - %i:%i to isoform %i", j, seq_idx, intron_start, ncr.coords.end, ncr.coords.start, i);
                                 length += intron_start - seq_idx;
 
@@ -2589,6 +2603,11 @@ int main(int argc, char *argv[]) {
                             }
                             if (hap_seq.l != seq_idx) isoform_bounds->start = hap_seq.l;
                             // kputsn(hap_seq.s + seq_idx, hap_seq.l - seq_idx, &spliced_seq);
+                        }
+
+                        if (affected_bases > 80) {
+                            // Intron retention/exon skip!!!
+                            log_error("Deleterious splice change!!!");
                         }
 
                         // Convert strand to complementary, if necessary (keeps direction the same)
