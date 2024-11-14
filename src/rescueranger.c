@@ -100,17 +100,18 @@
 
 
 #define INFO_TAGS { SPLICEAI_HAP_TAG, CS_TAG, RESCUE_TAG, RESCUE_TYPE_TAG, PTV_TAG, PTV_TYPE_TAG, PREDICTION_FLAGS_TAG }
+#define INFO_TAG_DESCS { SPLICEAI_HAP_DESC, CS_DESC, RESCUE_DESC, RESCUE_TYPE_DESC, PTV_DESC, PTV_TYPE_DESC, PREDICTION_FLAGS_DESC }
 
-enum RescueType {
-    COMPLETE,
-    POSSIBLE_REINITIATION,
-    SKIPPED_EXON,
-    PARTIAL_EXON_SKIPPING,
-    PARTIAL_INTRON_RETENTION,
-    EXON_SKIPPING,
-    INTRON_RETENTION,
-    NONE
-};
+// enum RescueType {
+//     COMPLETE,
+//     POSSIBLE_REINITIATION,
+//     SKIPPED_EXON,
+//     PARTIAL_EXON_SKIPPING,
+//     PARTIAL_INTRON_RETENTION,
+//     EXON_SKIPPING,
+//     INTRON_RETENTION,
+//     NONE
+// };
 
 enum SpliceType {
     ACCEPTOR = 1,
@@ -553,16 +554,16 @@ static int get_position_in_isoform(const int64_t position, const NonCodingRegion
 void calculate_rescue_probabilities(Isoforms *isoforms_struct) {
     isoforms_struct->rescue_probability = 0.0f;
     RescueProbabilities *rescue_probs = malloc(sizeof(RescueProbabilities));
-    
+
     rescue_probs->n_isoforms = malloc(isoforms_struct->m_rescue_types * sizeof(int32_t));
-    rescue_probs->rescue_types = malloc(isoforms_struct->m_rescue_types * sizeof(char*));
+    rescue_probs->rescue_types = malloc(isoforms_struct->m_rescue_types * sizeof(enum RescueType));
     rescue_probs->rescue_probabilities = malloc(isoforms_struct->m_rescue_types * sizeof(float));
     rescue_probs->affected_bases = malloc(isoforms_struct->m_rescue_types * sizeof(int32_t));
-    
+
     for (int i = 0; i < isoforms_struct->m_rescue_types; i++) {
         rescue_probs->n_isoforms[i] = 0;
         rescue_probs->rescue_probabilities[i] = 0.0f;
-        rescue_probs->rescue_types[i] = NULL; // initialise with NULL
+        rescue_probs->rescue_types[i] = NO_RESCUE; // initialise as NO_RESCUE
         rescue_probs->affected_bases[i] = 0;
     }
 
@@ -571,44 +572,44 @@ void calculate_rescue_probabilities(Isoforms *isoforms_struct) {
 
         // If rescue is predicted on the isoform, add isoform probability to the rescue probability [INFO/RESCUE_PROB]
         if (isoform->rescue == 1) {
-            isoforms_struct->rescue_probability += isoform->probability;
+            isoforms_struct->rescue_probability += isoform->posterior_probability;
         }
 
         // Get probabilities by rescue type [INFO/RESCUE_TYPE]. If the rescue type is already recorded, add the isoform and sum the probability
         int found = 0;
         for (int j = 0; j < isoforms_struct->n_rescue_types; j++) {
-            if (rescue_probs->rescue_types[j] != NULL && strcmp(rescue_probs->rescue_types[j], isoform->rescue_type) == 0) {
-                rescue_probs->n_isoforms[j] += 1;
-                rescue_probs->rescue_probabilities[j] += isoform->probability;
-                // TODO: Update rescue_probs->affected_bases[j] to correct value
-                found = 1;
-                break;
-            }
+            if (rescue_probs->rescue_types[j] != isoform->rescue_type) continue;
+
+            rescue_probs->n_isoforms[j] += 1;
+            rescue_probs->rescue_probabilities[j] += isoform->posterior_probability;
+            // TODO: Update rescue_probs->affected_bases[j] to correct value
+            found = 1;
+            break;
         }
 
         // If rescue type isn't found, add a new rescue type, dynamically reallocating memory if necessary
-        if (!found) {
-            if (isoforms_struct->n_rescue_types >= isoforms_struct->m_rescue_types) {
-                isoforms_struct->m_rescue_types *= 2; // double the size
-                rescue_probs->n_isoforms = realloc(rescue_probs->n_isoforms, isoforms_struct->m_rescue_types * sizeof(int32_t));
-                rescue_probs->rescue_probabilities = realloc(rescue_probs->rescue_probabilities, isoforms_struct->m_rescue_types * sizeof(float));
-                rescue_probs->rescue_types = realloc(rescue_probs->rescue_types, isoforms_struct->m_rescue_types * sizeof(char*));
-                rescue_probs->affected_bases = realloc(rescue_probs->affected_bases, isoforms_struct->m_rescue_types * sizeof(int32_t));
+        if (found) continue;
 
-                for (int k = isoforms_struct->n_rescue_types; k < isoforms_struct->m_rescue_types; k++) {
-                    rescue_probs->n_isoforms[k] = 0;
-                    rescue_probs->rescue_probabilities[k] = 0.0f;
-                    rescue_probs->rescue_types[k] = NULL; // initialise with NULL
-                    rescue_probs->affected_bases[k] = 0;
-                }
+        if (isoforms_struct->n_rescue_types >= isoforms_struct->m_rescue_types) {
+            isoforms_struct->m_rescue_types *= 2; // double the size
+            rescue_probs->n_isoforms = realloc(rescue_probs->n_isoforms, isoforms_struct->m_rescue_types * sizeof(int32_t));
+            rescue_probs->rescue_probabilities = realloc(rescue_probs->rescue_probabilities, isoforms_struct->m_rescue_types * sizeof(float));
+            rescue_probs->rescue_types = realloc(rescue_probs->rescue_types, isoforms_struct->m_rescue_types * sizeof(enum RescueType));
+            rescue_probs->affected_bases = realloc(rescue_probs->affected_bases, isoforms_struct->m_rescue_types * sizeof(int32_t));
+
+            for (int k = isoforms_struct->n_rescue_types; k < isoforms_struct->m_rescue_types; k++) {
+                rescue_probs->n_isoforms[k] = 0;
+                rescue_probs->rescue_probabilities[k] = 0.0f;
+                rescue_probs->rescue_types[k] = NO_RESCUE; // initialise with NULL
+                rescue_probs->affected_bases[k] = 0;
             }
-
-            rescue_probs->rescue_types[isoforms_struct->n_rescue_types] = strdup(isoform->rescue_type);
-            rescue_probs->n_isoforms[isoforms_struct->n_rescue_types] = 1;
-            rescue_probs->rescue_probabilities[isoforms_struct->n_rescue_types] = isoform->probability;
-            // TODO: Update rescue_probs->affected_baes[isoforms_struct->n_rescue_types] to correct value
-            isoforms_struct->n_rescue_types++;
         }
+
+        rescue_probs->rescue_types[isoforms_struct->n_rescue_types] = isoform->rescue_type;
+        rescue_probs->n_isoforms[isoforms_struct->n_rescue_types] = 1;
+        rescue_probs->rescue_probabilities[isoforms_struct->n_rescue_types] = isoform->posterior_probability;
+        // TODO: Update rescue_probs->affected_bases[isoforms_struct->n_rescue_types] to correct value
+        isoforms_struct->n_rescue_types++;
     }
 
     isoforms_struct->rescue = (isoforms_struct->rescue_probability > 0.5) ? 1 : 0; // set rescue value on the basis of rescue_probability
@@ -622,14 +623,15 @@ void calculate_ptv_probabilities(Isoforms *isoforms_struct) {
     float frameshift_variant_probability = 0.0;
 
     for (int i = 0; i < isoforms_struct->n_isoforms; i++) {
-        if (isoforms_struct->isoforms[i]->ptv == 1) {
-            ptv_probability += isoform->probability;
+        Isoform *isoform = isoforms_struct->isoforms[i];
+        if (isoform->ptv == 0) continue;
 
-            if (strcmp(isoforms_struct->isoforms[i]->ptv_type, "stop_gained") == 0) {
-                stop_gained_probability += isoforms_struct->isoforms[i]->probability;
-            } else if (strcmp(isoforms_struct->isoforms[i]->ptv_type, "frameshift_variant") == 0) {
-                frameshift_variant_probability += isoforms_struct->isoforms[i]->probability;
-            }
+        ptv_probability += isoform->posterior_probability;
+
+        if (isoform->ptv_type == STOP_GAINED) {
+            stop_gained_probability += isoform->posterior_probability;
+        } else if (isoform->ptv_type == FRAMESHIFT) {
+            frameshift_variant_probability += isoform->posterior_probability;
         }
     }
 
@@ -637,46 +639,57 @@ void calculate_ptv_probabilities(Isoforms *isoforms_struct) {
     isoforms_struct->ptv = (isoforms_struct->ptv_probability > 0.5) ? 1 : 0;
 
     if (stop_gained_probability > frameshift_variant_probability) {
-        isoforms_struct->ptv_type = "stop_gained";
+        isoforms_struct->ptv_type = STOP_GAINED;
     } else if (frameshift_variant_probability > stop_gained_probability) {
-        isoforms_struct->ptv_type = "frameshift_variant";
+        isoforms_struct->ptv_type = FRAMESHIFT;
     } else {
-        isoforms_struct->ptv_type = NULL; // tie or no PTV
+        isoforms_struct->ptv_type = NO_PTV; // tie or no PTV
     }
 }
 
-char* generate_rescue_type_tag(Isoforms *isoforms_struct) { // INFO/RESCUE_TYPE rescue_type|probability|affected_bases
+kstring_t generate_rescue_type_tag(Isoforms *isoforms_struct) { // INFO/RESCUE_TYPE rescue_type|probability|affected_bases
     // Calculate total length for allocation
-    size_t tag_size = 0;
-    for (int i = 0; i < isoforms_struct->n_rescue_types; i++) {
-        tag_size += strlen(isoforms_struct->rescue_type_probabilities->rescue_types[i])
-                + 10  // for probability string, float truncated to 4 decimal places
-                + 32  // for affected bases string; type uint32_t
-                + 2;  // for '|' and '&' or null terminator
-    }
-
-    char *tag = malloc(tag_size + 1);  // +1 for the final null terminator
-    if (tag == NULL) return NULL;
-
-    tag[0] = '\0';  // initialise tag as null terminator
+    kstring_t tag = {0};
 
     for (int i = 0; i < isoforms_struct->n_rescue_types; i++) {
-        char prob_s[10];
-        char bases_s[32];
+        if (tag.l > 0) kputc(':', &tag);
 
-        sprintf(prob_s, "%.4f", isoforms_struct->rescue_type_probabilities->rescue_probabilities[i]);
-        sprintf(bases_s, "%d", isoforms_struct->rescue_type_probabilities->affected_bases[i]);
-
-        strcat(tag, isoforms_struct->rescue_type_probabilities->rescue_types[i]);
-        strcat(tag, "|");
-        strcat(tag, prob_s);
-        strcat(tag, "|");
-        strcat(tag, bases_s);
-
-        // Add '&' delimiter if not the last item
-        if (i < isoforms_struct->n_rescue_types - 1) {
-            strcat(tag, "&");
+        enum RescueType rescue_type = isoforms_struct->rescue_type_probabilities->rescue_types[i];
+        switch(rescue_type) {
+            case COMPLETE_RESCUE:
+                kputs("complete_rescue", &tag);
+                break;
+            case POSSIBLE_REINITIATION:
+                kputs("possible_reinitiation", &tag);
+                break;
+            case FRAME_RESTORING_INDEL:
+                kputs("frame_restoring_indel", &tag);
+                break;
+            case PARTIAL_EXON_SKIPPING:
+                kputs("partial_exon_skipping", &tag);
+                break;
+            case PARTIAL_INTRON_RETENTION:
+                kputs("partial_intron_retention", &tag);
+                break;
+            case EXON_SKIPPING:
+                kputs("exon_skipping", &tag);
+                break;
+            case INTRON_RETENTION:
+                kputs("intron_retention", &tag);
+                break;
+            case NO_RESCUE:
+                kputs("no_rescue", &tag);
+                break;
         }
+
+        kputc('|', &tag);
+        char prob_s[7];
+        sprintf(prob_s, "%.4f", isoforms_struct->rescue_type_probabilities->rescue_probabilities[i]);
+        kputsn(prob_s, 6, &tag);
+        kputc('|', &tag);
+        kputw(isoforms_struct->rescue_type_probabilities->affected_bases[i], &tag);
+
+        // TODO: Add exon number to tag
     }
 
     return tag;
@@ -684,14 +697,10 @@ char* generate_rescue_type_tag(Isoforms *isoforms_struct) { // INFO/RESCUE_TYPE 
 
 void free_isoforms(Isoforms *isoforms_struct) {
     for (int i = 0; i < isoforms_struct->n_isoforms; i++) {
-        free(isoforms_struct->isoforms[i]->rescue_type);
         free(isoforms_struct->isoforms[i]);
     }
     free(isoforms_struct->isoforms);
 
-    for (int i = 0; i < isoforms_struct->n_rescue_types; i++) {
-        free(isoforms_struct->rescue_type_probabilities->rescue_types[i]);
-    }
     free(isoforms_struct->rescue_type_probabilities->rescue_types);
     free(isoforms_struct->rescue_type_probabilities->n_isoforms);
     free(isoforms_struct->rescue_type_probabilities->rescue_probabilities);
@@ -699,391 +708,9 @@ void free_isoforms(Isoforms *isoforms_struct) {
     free(isoforms_struct->rescue_type_probabilities);
 }
 
-// int64_t get_position_in_spliced_haplotype(bcf1_t *v, Variants *vs, Transcript *t) {
-//     int positions_skipped = 0;
-//     int previous_exon_end = t->definition->beg;
-//
-//     for (int i = 0; i < t->definition->ncds; i++) {
-//         int64_t start = t->definition->cds[i]->beg;
-//         if (start > v->pos) break;
-//         int64_t end = start + t->definition->cds[i]->len;
-//
-//         int64_t start_in_hap = get_position_in_haplotype(start, vs, t->definition->beg, t->definition->end);
-//         int64_t end_in_hap = get_position_in_haplotype(end, vs, t->definition->beg, t->definition->end);
-//
-//         positions_skipped += start_in_hap - previous_exon_end; // Size of intron between current and previous exon
-//
-//         if (iregion_intersects((IRegion) {-1, v->pos, v->pos + strlen(v->d.allele[1])}, (IRegion) {-1, start, end})) {
-//             return get_position_in_haplotype(v->pos, vs, t->definition->beg, t->definition->end) - t->definition->beg - positions_skipped;
-//         }
-//
-//         previous_exon_end = end_in_hap;
-//     }
-//
-//     return -1;
-// }
-
-// void process_phased_variants(Records *vs, HdrFormat *vep_fmt, gff_t *gff, faidx_t *fai, bcf_hdr_t *hdr, Model *models) {
-//     kvec_t(int64_t) frameshifts_rescued; kv_init(frameshifts_rescued);
-//
-//
-//     for (int j = 0; j < vs->n; j++) {
-//         Record *r = kv_A(*vs, j);
-//         bcf1_t *vv = kv_A(*vs, j)->v;
-//         VepTranscripts *transcript_csqs = get_vep_transcript_consequences(vv, vep_fmt, hdr);
-//
-//         // Filter transcripts for overlap with current variant
-//         Region variant_region = iregion_to_region(variant_to_iregion(vv), hdr);
-//         Transcripts *variant_transcripts; find_region_transcripts(&variant_region, hdr, gff, fai, &variant_transcripts);
-//
-//         Transcript *v_ts[transcript_csqs->n];
-//         Variants *v_vs[transcript_csqs->n];
-//         Variants *v_vs2[transcript_csqs->n];
-//         for (int k = 0; k < transcript_csqs->n; k++) {
-//             v_ts[k] = NULL;
-//             v_vs[k] = NULL;
-//             v_vs2[k] = NULL;
-//         }
-//
-//         for (int k = 0; k < variant_transcripts->n; k++) {
-//             Transcript t = kv_A(*variant_transcripts, k);
-//             const char *tid = gff_id2string(gff, 0, t.definition->id);
-//
-//             for (int l = 0; l < transcript_csqs->n; l++) {
-//                 if (strcmp(tid, kv_A(*transcript_csqs, l).tr_id) == 0) {
-//                     v_ts[l] = &variant_transcripts->a[k];
-//
-//                     // Find region for matched transcript
-//                     IRegion tr_region = transcript_to_iregion(&t);
-//
-//                     // Create subset of variants overlapping the current transcript, excluding the current variant
-//                     Variants *vs_j = malloc(sizeof(Variants)); kv_init(*vs_j);
-//                     Variants *vs_j2 = malloc(sizeof(Variants)); kv_init(*vs_j2);
-//                     for (int m = 0; m < vs->n; m++) {
-//
-//                         bcf1_t *t_v = kv_A(*vs, m)->v;
-//                         if (iregion_intersects(tr_region, variant_to_iregion(t_v))) {
-//                             kv_push(bcf1_t *, *vs_j2, t_v);
-//                             if (m == j) continue;
-//                             kv_push(bcf1_t *, *vs_j, t_v);
-//                         }
-//                     }
-//
-//                     /* if (vs_j->n > 0)*/ v_vs[l] = vs_j;
-//                     /*if (vs_j->n > 0)*/ v_vs2[l] = vs_j2;
-//                     break;
-//                 }
-//             }
-//         }
-//
-//         // ConsequencePredictions *csq_preds; init_consequence_predictions(csq_preds, transcript_csqs->n);
-//         for (int k = 0; k < transcript_csqs->n; k++) {
-//             if (v_ts[k] == NULL) continue; // There is no coding transcript overlapping the current variant;
-//             if (v_vs[k] == NULL) continue; // There is no difference between the haplotype and reference 
-//
-//             Transcript *t = v_ts[k];
-//             Variants *vv_vs = v_vs[k];
-//             Variants *vv_vs2 = v_vs2[k];
-//
-//             // Calculate offsets between ref, hap_ref and hap_alt
-//             int hap_ref_offset = 0;
-//             for (int l = 0; l < vv_vs->n; l++) hap_ref_offset += get_allele_offset_variant(kv_A(*vv_vs, l), t->definition->beg, t->definition->end);
-//
-//             kstring_t hap_ref; get_haplotype_sequence(t->seq, *vv_vs, hap_ref_offset, t->definition->beg, &hap_ref);
-//
-//             int alt_allele_offset = get_allele_offset_variant(vv, t->definition->beg, t->definition->end);
-//             int hap_alt_offset = hap_ref_offset + alt_allele_offset;
-//             kstring_t hap_alt; get_haplotype_sequence(t->seq, *vv_vs2, hap_alt_offset, t->definition->beg, &hap_alt);
-//
-//
-//             // Check vep consequences for triggers for rechecking consequences in haplotype context
-//             int trigger = 0;
-//             for (int l = 0; l < transcript_csqs->a[k].num_consequences; l++) {
-//                 const char *consequence = transcript_csqs->a[k].consequences[l];
-//                 if ((strcmp(consequence, SPLICE_DONOR_VARIANT) == 0) ||
-//                     (strcmp(consequence, SPLICE_ACCEPTOR_VARIANT) == 0)) {
-//                     trigger = SPLICE_TRIGGER;
-//                     // log_warn("Splice trigger %s:%li = %s", bcf_hdr_id2name(hdr, vv->rid), vv->pos, consequence);
-//                 } else if (strcmp(consequence, FRAMESHIFT_VARIANT) == 0) {
-//                     trigger = FRAMESHIFT_TRIGGER;
-//                     // log_warn("Frameshift trigger %s:%li = %s", bcf_hdr_id2name(hdr, vv->rid), vv->pos, consequence);
-//                 } else if (strcmp(consequence, STOP_GAINED_VARIANT) == 0) {
-//                     trigger = STOP_TRIGGER;
-//                 }
-//             }
-//
-//             int is_rescued = 0;
-//             if (trigger == SPLICE_TRIGGER) {
-//
-//                 // Run reference
-//                 int32_t start = VARIANT_POS + (t->definition->beg - vv->pos);
-//                 int32_t end = VARIANT_POS - (t->definition->end - (vv->pos+1)); // Open ended, so + 1
-//                 char *ref_seq = t->seq.s - start;
-//
-//                 if (start < 0) start = 0;
-//                 if (end < 0) end = 0;
-//
-//                 Range ref_boundary = { start, end };
-//                 char *ref = pad_sequence(ref_seq, ref_boundary, WIDTH);
-//                 float *ref_predictions; int num_ref_predictions;
-//                 int ref_len = strlen(ref);
-//                 predict_for_seq(models, ref, ref_len, t->definition->strand, &ref_predictions, &num_ref_predictions);
-//                 free(ref);
-//
-//                 // Run haplotype reference
-//                 int pred_offset = prediction_offset(vv, vv_vs, t->definition->beg, t->definition->end);
-//                 int64_t transcript_start = get_position_in_haplotype(t->definition->beg, vv_vs, t->definition->beg, t->definition->end);
-//                 int64_t transcript_end = get_position_in_haplotype(t->definition->end, vv_vs, t->definition->beg, t->definition->end);
-//                 int64_t vposition = get_position_in_haplotype(vv->pos, vv_vs, t->definition->beg, t->definition->end);
-//                 int32_t hap_ref_start = VARIANT_POS + (transcript_start - vposition);
-//                 int32_t hap_ref_end = VARIANT_POS - (transcript_end - vposition) + pred_offset;
-//                 char *hap_ref_seq = hap_ref.s - hap_ref_start;
-//                 int hap_ref_seq_len = strlen(hap_ref_seq);
-//                 if (hap_ref_start < 0) hap_ref_start = 0;
-//                 if (hap_ref_end < 0) hap_ref_end = 0;
-//                 Range hap_ref_boundary = {hap_ref_start, hap_ref_end};
-//                 char *hap_ref_padded = pad_sequence(hap_ref_seq, hap_ref_boundary, WIDTH + pred_offset);
-//                 float *hap_ref_predictions; int num_hap_ref_predictions;
-//                 int hap_ref_len = strlen(hap_ref_padded);
-//                 predict_for_seq(models, hap_ref_padded, hap_ref_len, t->definition->strand, &hap_ref_predictions, &num_hap_ref_predictions);
-//                 float *corrected_hap_ref_predictions = match_predictions_to_reference(hap_ref_predictions, vv, vv_vs, t, num_ref_predictions);
-//                 Score score = calculate_delta_scores(vv->d.allele[1], t->definition->gene->name, ref_predictions, corrected_hap_ref_predictions, num_ref_predictions, CAI_DISTANCE);
-//
-//
-//                 // // Run haplotype alt
-//                 transcript_end += get_allele_offset_variant(vv, t->definition->beg, t->definition->end);
-//                 int hap_alt_pred_offset = prediction_offset(vv, vv_vs2, t->definition->beg, t->definition->end);
-//                 int32_t hap_alt_start = VARIANT_POS + (transcript_start - vposition);
-//                 int32_t hap_alt_end = VARIANT_POS - (transcript_end - vposition) + hap_alt_pred_offset;
-//                 char *hap_alt_seq = hap_alt.s - hap_alt_start;
-//                 int hap_alt_seq_len = strlen(hap_alt_seq);
-//                 if (hap_alt_start < 0) hap_alt_start = 0;
-//                 if (hap_alt_end < 0) hap_alt_end = 0;
-//                 Range hap_alt_boundary = {hap_alt_start, hap_alt_end};
-//                 char *hap_alt_padded = pad_sequence(hap_alt_seq, hap_alt_boundary, WIDTH + hap_alt_pred_offset); //+ get_allele_offset(vv, t->definition->beg, t->definition->end));
-//                 float *hap_alt_predictions; int num_hap_alt_predictions;
-//                 int hap_alt_len = strlen(hap_alt_padded);
-//                 predict_for_seq(models, hap_alt_padded, hap_alt_len, t->definition->strand, &hap_alt_predictions, &num_hap_alt_predictions);
-//                 float *corrected_hap_alt_predictions = match_predictions_to_reference(hap_alt_predictions, vv, vv_vs2, t, num_ref_predictions);
-//                 Score score_alt = calculate_delta_scores(vv->d.allele[1], t->definition->gene->name, corrected_hap_ref_predictions, corrected_hap_alt_predictions, num_ref_predictions, CAI_DISTANCE);
-//
-//                 // Calculate scores between ref and hap_alt
-//                 Score score_hap = calculate_delta_scores(vv->d.allele[1], t->definition->gene->name, ref_predictions, corrected_hap_alt_predictions, num_ref_predictions, CAI_DISTANCE);
-//
-//
-//                 if (r->c->hap_score[k]->l > 0) {
-//                     kputc('&', r->c->hap_score[k]);
-//                 }
-//
-//                 if (score_hap.dl > SPLICEAI_THRESHOLD && score_hap.dg > SPLICEAI_THRESHOLD && (score_hap.dg_idx - score_hap.dl_idx) % 3 == 0) is_rescued = 1;
-//
-//                 if (score_hap.al > SPLICEAI_THRESHOLD && score_hap.ag > SPLICEAI_THRESHOLD && (score_hap.ag_idx - score_hap.al_idx) % 3 == 0) is_rescued = 1;
-//
-//                 if (score_hap.al < SPLICEAI_RESCUE_THRESHOLD && score_hap.dl < SPLICEAI_RESCUE_THRESHOLD) is_rescued = 1;
-//
-//                 if (is_rescued) {
-//                     log_info("%s:%li is rescued! Original consequence: %s", bcf_hdr_id2name(hdr, vv->rid), vv->pos, transcript_csqs->a[k].consequences[0]);
-//                 }
-//
-//                 ksprintf(r->c->hap_score[k], "%s|%s|%.2f|%.2f|%.2f|%.2f|%d|%d|%d|%d", score_hap.alt, score_hap.gene, score_hap.ag, score_hap.al, score_hap.dg, score_hap.dl, score_hap.ag_idx, score_hap.al_idx, score_hap.dg_idx, score_hap.dl_idx);
-//                 log_info(r->c->hap_score[k]->s);
-//
-//             free(ref_predictions);
-//             free(hap_ref_predictions);
-//             free(corrected_hap_ref_predictions);
-//             free(hap_alt_predictions);
-//             free(corrected_hap_alt_predictions);
-//
-//             }
-//
-//             if (trigger) {
-//
-//                 kstring_t spliced_transcript = {0};
-//                 // Splice transcript
-//                 int length = 0;
-//                 int hap_length = 0;
-//                 for (int l = 0; l < t->definition->ncds; l++) {
-//                     int64_t start = t->definition->cds[l]->beg;
-//                     int64_t end = start + t->definition->cds[l]->len;
-//                     int64_t start_in_hap = get_position_in_haplotype(start, vv_vs2, t->definition->beg, t->definition->end);
-//                     int64_t end_in_hap = get_position_in_haplotype(end, vv_vs2, t->definition->beg, t->definition->end);
-//
-//                     length += (end - start);
-//                     hap_length += (end_in_hap - start_in_hap);
-//                     kputsn(hap_alt.s + (start_in_hap - t->definition->beg), end_in_hap - start_in_hap, &spliced_transcript);
-//                 }
-//
-//                 int v_pos = get_position_in_spliced_haplotype(vv, vv_vs2, t);
-//                 if (trigger == FRAMESHIFT_TRIGGER) {
-//                     int offset = get_allele_offset_variant(vv, t->definition->beg, t->definition->end);
-//                     if (v_pos == -1) continue;
-//
-//                     kvec_t(int64_t) frameshifts_used; kv_init(frameshifts_used);
-//                     kv_push(int64_t, frameshifts_used, vv->pos);
-//
-//                     if (t->definition->strand == STRAND_FWD) {
-//                         for (int l = 0; l < vv_vs->n; l++) {
-//                             bcf1_t *vvv = kv_A(*vv_vs, l);
-//
-//                             int already_rescued = 0;
-//                             for (int m = 0; m < frameshifts_rescued.n; m++) {
-//                                 if (kv_A(frameshifts_rescued, m) == vvv->pos) {
-//                                     already_rescued = 1;
-//                                     break;
-//                                 }
-//                             }
-//                             if (already_rescued) continue;
-//
-//                             int v2_pos = get_position_in_spliced_haplotype(vvv, vv_vs2, t);
-//                             int variant_offset = get_allele_offset_variant(vvv, t->definition->beg, t->definition->end);
-//                             if (variant_offset != 0 && v2_pos != -1 && v2_pos > v_pos && v2_pos <= v_pos + MAX_FRAMESHIFT_RADIUS) {
-//                                 offset += variant_offset;
-//                                 kv_push(int64_t, frameshifts_used, vvv->pos);
-//                             }
-//                             if (v2_pos > v_pos + MAX_FRAMESHIFT_RADIUS) break;
-//                         }
-//                     }
-//                     else if (t->definition->strand == STRAND_REV) {
-//                         for (int l = vv_vs->n-1; l >= 0; l--) {
-//                             bcf1_t *vvv = kv_A(*vv_vs, l);
-//
-//                             int already_rescued = 0;
-//                             for (int m = 0; m < frameshifts_rescued.n; m++) {
-//                                 if (kv_A(frameshifts_rescued, m) == vvv->pos) {
-//                                     already_rescued = 1;
-//                                     break;
-//                                 }
-//                             }
-//                             if (already_rescued) continue;
-//
-//                             int v2_pos = get_position_in_spliced_haplotype(vvv, vv_vs2, t);
-//                             int variant_offset = get_allele_offset_variant(vvv, t->definition->beg, t->definition->end);
-//                             if (variant_offset != 0 && v2_pos != -1 && v2_pos < v_pos && v2_pos >= v_pos - MAX_FRAMESHIFT_RADIUS) {
-//                                 offset += variant_offset;
-//                                 kv_push(int64_t, frameshifts_used, vvv->pos);
-//                             }
-//                             if (v2_pos < v_pos - MAX_FRAMESHIFT_RADIUS) break;
-//                         }
-//                     }
-//
-//                     if (offset % 3 == 0) {
-//                         log_info("%s:%li is rescued! Original consequence: %s", bcf_hdr_id2name(hdr, vv->rid), vv->pos, transcript_csqs->a[k].consequences[0]);
-//
-//                         is_rescued = 1;
-//
-//                         for (int l = 0; l < frameshifts_used.n; l++) {
-//                             kv_push(int64_t, frameshifts_rescued, kv_A(frameshifts_used, l));
-//                         }
-//                     }
-//
-//                     kv_destroy(frameshifts_used);
-//                 }
-//
-//                 if (trigger == STOP_TRIGGER) {
-//                     int offset = get_allele_offset_variant(vv, t->definition->beg, t->definition->end);
-//                     int start = v_pos / 3;
-//                     int end = offset > 0 ? (v_pos + offset) / 3 + 1 : v_pos / 3 + 1;
-//                     int stop_hit = 0;
-//                     if (t->definition->strand == STRAND_FWD) {
-//                         v_pos = get_position_in_spliced_haplotype(vv, vv_vs2, t);
-//                         const char *stop_codons[3] = STOP_CODONS;
-//                         for (int l = start; l < end; l++) {
-//                             for (int m = 0; m < 3; m++) {
-//                                 const char *stop = stop_codons[m];
-//                                 char *frame = spliced_transcript.s + l * 3;
-//                                 if (stop[0] == frame[0] && stop[1] == frame[1] && stop[2] == frame[2]) {
-//                                     stop_hit = 1;
-//                                     break;
-//                                 }
-//                             }
-//                             if (stop_hit) break;
-//                         }
-//                     } else {
-//                         stop_hit = 1;
-//                     }
-//                     // else if (t->definition->strand == STRAND_REV) {
-//                     //     const char *stop_codons[3] = COMPLEMENTARY_STOP_CODONS;
-//                     //     for (int l = end-1; l >= start; l--) {
-//                     //         for (int m = 0; m < 3; m++) {
-//                     //             const char *stop = stop_codons[m];
-//                     //             char *frame = spliced_transcript.s + l * 3;
-//                     //             if (stop[0] == frame[2] && stop[1] == frame[1] && stop[2] == frame[0]) {
-//                     //                 stop_hit = 1;
-//                     //                 break;
-//                     //             }
-//                     //         }
-//                     //
-//                     //         if (stop_hit) break;
-//                     //     }
-//                     // }
-//
-//                     if (!stop_hit) {
-//                         log_info("%s:%li is rescued! Original consequence: %s", bcf_hdr_id2name(hdr, vv->rid), vv->pos, transcript_csqs->a[k].consequences[0]);
-//                         is_rescued = 1;
-//                     }
-//                 }
-//
-//
-//                 free(spliced_transcript.s);
-//             }
-//
-//             if (r->c->is_rescue[k]->l > 0) {
-//                 kputc('&', r->c->is_rescue[k]);
-//             }
-//             kputw(is_rescued, r->c->is_rescue[k]);
-//
-//             if (r->c->rescue_type[k]->l > 0) {
-//                 kputc('&', r->c->rescue_type[k]);
-//             }
-//             if (is_rescued) {
-//                 if (trigger == SPLICE_TRIGGER) {
-//                     kputs("rescued_splice", r->c->rescue_type[k]);
-//                 } else if (trigger == FRAMESHIFT_TRIGGER) {
-//                     kputs("rescued_frameshift", r->c->rescue_type[k]);
-//                 } else {
-//                     kputs("rescued_stop", r->c->rescue_type[k]);
-//                 }
-//             } else {
-//                 kputc('.', r->c->rescue_type[k]);
-//             }
-//
-//             if (trigger != SPLICE_TRIGGER) {
-//                 if (r->c->hap_score[k]->l > 0) kputc('&', r->c->hap_score[k]);
-//                 kputc('.', r->c->hap_score[k]);
-//             }
-//
-//             // Free per transcript predicted for
-//             free(hap_ref.s);
-//             free(hap_alt.s);
-//             kv_destroy(*vv_vs);
-//             kv_destroy(*vv_vs2);
-//             free(vv_vs);
-//             free(vv_vs2);
-//         }
-//
-//         // Free per variant predicted for
-//         for (int i = 0; i < variant_transcripts->n; i++) { free(kv_A(*variant_transcripts, i).seq.s); }
-//         kv_destroy(*variant_transcripts); free(variant_transcripts);
-//
-//         for (int i = 0; i < transcript_csqs->n; i++) { 
-//             VepTranscript tcs = kv_A(*transcript_csqs, i);
-//             free(tcs.tr_id);
-//             for (int j = 0; j < transcript_csqs->a[i].num_consequences; j++) {
-//                 free(transcript_csqs->a[i].consequences[j]);
-//             }
-//             free(tcs.consequences);
-//         }
-//         kv_destroy(*transcript_csqs);
-//         free(transcript_csqs);
-//
-//     }
-//
-//     kv_destroy(frameshifts_rescued);
-// }
-
 static int add_rescueranger_tags(bcf_hdr_t *hdr) {
     const char *tags[7] = INFO_TAGS;
-    const char *descriptions[7] = { SPLICEAI_HAP_DESC, CS_DESC, RESCUE_DESC, RESCUE_TYPE_DESC, PTV_DESC, PTV_TYPE_DESC, PREDICTION_FLAGS_DESC };
+    const char *descriptions[7] = INFO_TAG_DESCS;
 
     for (int i = 0; i < 7; i++) {
         if (bcf_hdr_append(hdr, descriptions[i]) != 0) {
@@ -1666,6 +1293,9 @@ int main(int argc, char *argv[]) {
 
             r->cs = malloc(r->genes->n * NUM_PHASES * sizeof(SpliceChange *)); 
             for (int k = 0; k < r->genes->n * NUM_PHASES; k++) r->cs[k] = NULL;
+
+            r->isoforms = malloc(r->tscripts->n * NUM_PHASES * sizeof(Isoforms));
+            for (int k = 0; k < r->tscripts->n * NUM_PHASES; k++) r->isoforms[k].valid = 0;
         }
     }
 
@@ -2627,10 +2257,10 @@ int main(int argc, char *argv[]) {
                         misoforms *= regions.n;
                     }
 
-                    NonCodingRegions **isoforms = malloc(misoforms * sizeof(NonCodingRegions *));
+                    NonCodingRegions **intron_sets = malloc(misoforms * sizeof(NonCodingRegions *));
                     for (int i = 0; i < misoforms; i++) {
-                        isoforms[i] = malloc(sizeof(NonCodingRegions));
-                        kv_init(*isoforms[i]);
+                        intron_sets[i] = malloc(sizeof(NonCodingRegions));
+                        kv_init(*intron_sets[i]);
                     }
 
                     for (int i = 0; i < n_nc_regions; i++) {
@@ -2639,7 +2269,7 @@ int main(int argc, char *argv[]) {
 
                         if (nisoforms == 0) { // First isoform
                             for (int j = 0; j < ranges.n; j++) {
-                                NonCodingRegions *first = isoforms[j];
+                                NonCodingRegions *first = intron_sets[j];
                                 NonCodingRegion to_push = kv_A(ranges, j);
                                 kv_push(NonCodingRegion, *first, to_push);
                                 nisoforms++;
@@ -2649,8 +2279,8 @@ int main(int argc, char *argv[]) {
                             int prior_n_isoforms = nisoforms;
                             for (int j = 1; j < ranges.n; j++) {
                                 for (int k = 0; k < prior_n_isoforms; k++) {
-                                    NonCodingRegions *original = isoforms[k];
-                                    NonCodingRegions *new = isoforms[j * prior_n_isoforms + k];
+                                    NonCodingRegions *original = intron_sets[k];
+                                    NonCodingRegions *new = intron_sets[j * prior_n_isoforms + k];
                                     kv_copy(NonCodingRegion, *new, *original);
                                     nisoforms++;
                                 }
@@ -2658,7 +2288,7 @@ int main(int argc, char *argv[]) {
 
                             for (int j = 0; j < ranges.n; j++) {
                                 for (int k = 0; k < prior_n_isoforms; k++) {
-                                    NonCodingRegions *target = isoforms[j * prior_n_isoforms + k];
+                                    NonCodingRegions *target = intron_sets[j * prior_n_isoforms + k];
                                     NonCodingRegion to_push = kv_A(ranges, j);
                                     kv_push(NonCodingRegion, *target, to_push);
                                 }
@@ -2670,8 +2300,24 @@ int main(int argc, char *argv[]) {
                     get_haplotype_sequence(gene->seq, &hap_in, gene->coords, &hap_seq);
                     log_info("%s:%li (num_isoforms=%i)", bcf_hdr_id2name(hdr, r->v->rid), r->v->pos, nisoforms); 
 
+                    Isoforms isoforms = {
+                        1,
+                        0,
+                        nisoforms,
+                        0,
+                        1,
+                        0,
+                        0.0,
+                        0,
+                        0.0,
+                        NO_PTV,
+                        malloc(nisoforms * sizeof(Isoform *)),
+                        NULL,
+                        NULL
+                    };
+
                     for (int i = 0; i < nisoforms; i++) {
-                        NonCodingRegions *ncrs = isoforms[i];
+                        NonCodingRegions *ncrs = intron_sets[i];
                         kstring_t spliced_seq = {0};
                         int seq_idx = 0;
                         log_debug("Processing isoform: %i", i);
@@ -2978,6 +2624,7 @@ int main(int argc, char *argv[]) {
 
                         klist_t(RecordContext) *context = kl_init_RecordContext();
                         int context_size = 0;
+                        int is_stop_rescue = 0;
                         for (int ri = 0; ri < shifts.n; ri++) {
                             IsoformFrameshift iso_shift = kv_A(shifts, ri);
                             if (iso_shift.r != r) continue;
@@ -3009,6 +2656,7 @@ int main(int argc, char *argv[]) {
 
                                 if (!is_stop) {
                                     log_error("%d:%d t=%i if=%i STOP RESCUE", r->v->rid, r->v->pos, ti, i);
+                                    is_stop_rescue = 1;
                                 }
                             }
 
@@ -3073,6 +2721,34 @@ int main(int argc, char *argv[]) {
 
 
                         }
+
+                        float isoform_prior = 1.0;
+                        for (int i = 0; i > ncrs->n; i++) {
+                            NonCodingRegion ncr = kv_A(*ncrs, i);
+                            if (ncr.donor != NULL) isoform_prior *= ncr.donor->prior_probability;
+                            if (ncr.acceptor != NULL) isoform_prior *= ncr.acceptor->prior_probability;
+                        }
+
+                        enum RescueType rescue_type = NO_RESCUE;
+                        if (is_stop_rescue) rescue_type = COMPLETE_RESCUE;
+
+                        Isoform *isoform = malloc(sizeof(Isoform));
+                        isoform->prior_probability = isoform_prior;
+                        isoform->posterior_probability = 0.0;
+                        isoform->rescue = (
+                            rescue_type == COMPLETE_RESCUE && 
+                            rescue_type == POSSIBLE_REINITIATION && 
+                            (rescue_type == FRAME_RESTORING_INDEL && affected_bases <= 80) &&
+                            (rescue_type == PARTIAL_EXON_SKIPPING && affected_bases <= 15 && affected_bases % 3 == 0) &&
+                            (rescue_type == PARTIAL_INTRON_RETENTION && affected_bases <= 15 && affected_bases % 3 == 0)
+                        );
+
+                        isoform->rescue_type = rescue_type;
+                        isoform->affected_bases = 0;
+                        isoform->ptv = 0;
+                        isoform->ptv_type = NO_PTV;
+
+                        isoforms.isoforms[isoforms.n_isoforms++] = isoform;
 
                         // klist_t(RecordContext) *context = kl_init_RecordContext();
                         // int context_size = 0;
@@ -3170,6 +2846,20 @@ int main(int argc, char *argv[]) {
                     }
 
 
+                    // Calculate isoforms posterior
+                    if (isoforms.n_isoforms != isoforms.m_isoforms) {
+                        log_error("Less isoforms found thann expected. This is a bug!");
+                        exit(1);
+                    }
+
+                    float probability_sum = 0.0;
+                    for (int i = 0; i > isoforms.n_isoforms; i++) probability_sum += isoforms.isoforms[i]->prior_probability;
+                    for (int i = 0; i > isoforms.n_isoforms; i++) isoforms.isoforms[i]->posterior_probability = isoforms.isoforms[i]->prior_probability / probability_sum;
+
+                    calculate_rescue_probabilities(&isoforms);
+
+                    r->isoforms[ti * NUM_PHASES + p] = isoforms;
+
                     kv_destroy(hap_in);
                     free(hap_seq.s);
                 }
@@ -3247,6 +2937,45 @@ int main(int argc, char *argv[]) {
 
             free(splice_scores.s);
             free(splice_change.s);
+        }
+
+
+        for (int i = 0; i < block.records->n; i++) {
+            Record *r = kv_A(*block.records, i);
+
+            int triggered = 0;
+            for (int j = 0; j < r->vep->n; j++) {
+                TscriptCsqs *csq = kv_A(*r->vep, j);
+                if (csq->triggers[SPLICE_TRIGGER] || csq->triggers[FRAMESHIFT_TRIGGER] || csq->triggers[STOP_TRIGGER]) triggered = 1;
+            }
+
+            if (!triggered) continue;
+
+            kstring_t tag = {0};
+
+            for (int ti = 0; ti < r->transcript_genes->n; ti++) {
+                if (ti > 0) kputc(',', &tag);
+
+                if (kv_A(*r->transcript_genes, ti) == NULL) {
+                    kputc('.', &tag);
+                    continue;
+                }
+
+                for (int p = 0; p < NUM_PHASES; p++) {
+                    if (p > 0) kputc('&', &tag);
+
+                    Isoforms isoforms = r->isoforms[ti * NUM_PHASES + p];
+                    if (!isoforms.valid) {
+                        kputc('.', &tag);
+                        continue;
+                    }
+
+                    kstring_t transcript_phase_tag = generate_rescue_type_tag(&isoforms);
+                    kputsn(transcript_phase_tag.s, transcript_phase_tag.l, &tag);
+                }
+            }
+
+            bcf_update_info_string(hdr, r->v, RESCUE_TYPE_TAG, tag.s);
         }
     }
 

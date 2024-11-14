@@ -13,25 +13,43 @@
 #include "cpliceai/range.h"
 #include "cpliceai/utils.h"
 
+enum RescueType {
+    COMPLETE_RESCUE,
+    POSSIBLE_REINITIATION,
+    FRAME_RESTORING_INDEL,
+    PARTIAL_EXON_SKIPPING,
+    PARTIAL_INTRON_RETENTION,
+    EXON_SKIPPING,
+    INTRON_RETENTION,
+    NO_RESCUE
+};
+
+enum PTVType {
+    STOP_GAINED,
+    FRAMESHIFT,
+    NO_PTV
+};
 
 typedef struct Isoform {
-    NonCodingRegion *ncrs; // non-coding regions defining the spliced boundaries of this isoform
-    float probability; // probability of the isoform
+    // NonCodingRegion *ncrs; // non-coding regions defining the spliced boundaries of this isoform
+    float prior_probability; // prior probability of the isoform
+    float posterior_probability; // posterior probability of the isoform
     uint8_t rescue; // 0 = not rescued, 1 = rescued
-    char *rescue_type; // character string representing the type of rescue event predicted (e.g. partial_exon_skipping)
+    enum RescueType rescue_type; // representing the type of rescue event predicted (e.g. partial_exon_skipping)
     uint32_t affected_bases; // number of bases offset/excluded/included within the isoform sequence
     uint8_t ptv; // 0 = no non-canonical PTV on isoform, 1 = non-canonical PTV on isoform
-    char *ptv_type; // character string representing the type of non-canonical PTV predicted (stop_gained or frameshift_variant)
+    enum PTVType ptv_type; // representing the type of non-canonical PTV predicted (stop_gained or frameshift_variant)
 } Isoform;
 
 typedef struct RescueProbabilities {
     uint32_t *n_isoforms; // counts of isoforms supporting each rescue type
-    char **rescue_types; // rescue types
+    enum RescueType *rescue_types; // rescue types
     float *rescue_probabilities; // cumulative probability for each rescue type
     uint32_t *affected_bases; // counts of affected bases
 } RescueProbabilities;
 
 typedef struct Isoforms {
+    uint8_t valid;
     uint32_t n_isoforms; // number of isoforms
     uint32_t m_isoforms; // capacity for isoforms
     uint32_t n_rescue_types; // count of unique rescue types
@@ -40,7 +58,7 @@ typedef struct Isoforms {
     float rescue_probability; // total rescue probability
     uint8_t ptv; // prediction of non-canonical PTV
     float ptv_probability; // cumulative probability of non-canonical PTV
-    char *ptv_type; // type of new PTV, one of stop_gained or frameshift_variant
+    enum PTVType ptv_type; // type of new PTV, one of stop_gained or frameshift_variant TODO: add support for variants with multiple PTV types
     Isoform **isoforms; // array of pointers to Isoform structs
     RescueProbabilities *rescue_type_probabilities; // pointer to RescueProbabilities struct
     char **flags; // array of prediction flags
@@ -145,6 +163,7 @@ typedef struct Record {
     bcf1_t *v;
     VepCsqs *vep;
     ConsequencePredictions *c;
+    Isoforms *isoforms;
 
     SpliceChange **cs;
     Score **complete_scores;
