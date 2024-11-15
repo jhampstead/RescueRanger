@@ -181,6 +181,7 @@ void match_gf_tscripts_to_vep_tscripts(gf_tscripts *tscripts, Record *r, gff_t *
             const char *tid = gff_id2string(gff, 0, t->id);
 
             if (strcmp(tid, kv_A(*r->vep, i)->tid) != 0) continue;
+            if (t->type != GF_PROTEIN_CODING) break; // Transcript is not coding, so should not be matched and set to NULL instead
 
             has_matched = 1;
             kv_push(gf_tscript_t *, *record_tscripts, t);
@@ -897,7 +898,7 @@ float * predict_on_sequence(Model *models, char *seq, uint32_t position, Range p
     return predictions;
 }
 
-int create_splice_probabilities(int vposition, Record *r, Transcripts *transcripts, int num_hap_alt_predictions, float *hap_alt_predictions, SpliceProbability **splice_probabilities) {
+int create_splice_probabilities(int vposition, Record *r, Transcripts *transcripts, int *transcript_mask, int num_hap_alt_predictions, float *hap_alt_predictions, SpliceProbability **splice_probabilities) {
     float *posterior_probabilities = calloc(num_hap_alt_predictions, sizeof(float));
     int num_acceptors = transform_to_posterior_probabilities(ACCEPTOR_POS, num_hap_alt_predictions, hap_alt_predictions, &posterior_probabilities);
     int num_donors = transform_to_posterior_probabilities(DONOR_POS, num_hap_alt_predictions, hap_alt_predictions, &posterior_probabilities);
@@ -912,7 +913,7 @@ int create_splice_probabilities(int vposition, Record *r, Transcripts *transcrip
     for (int ti = 0; ti < transcripts->n; ti++) {
         Transcript *t = kv_A(*transcripts, ti);
 
-        if (t == NULL) continue;
+        if (t == NULL || !transcript_mask[ti]) continue;
         for (int ei = 0; ei < t->nexons; ei++) {
             Exon *e = t->exons[ei];
 
@@ -1654,9 +1655,19 @@ int main(int argc, char *argv[]) {
                     // Remove predictions that are most likely to be neutral
                     filter_to_most_likely_prediction(num_hap_alt_predictions, &hap_alt_predictions);
 
+
+                    int current_gene[r->tscripts->n];
+                    for (int i = 0; i < r->tscripts->n; i++) {
+                        Transcript *t = kv_A(*r->tscripts, i);
+                        Gene *tgene = kv_A(*r->transcript_genes, i);
+
+                        current_gene[i] = (t != NULL && tgene->gff_id == gene->gff_id);
+                    }
+
                     // Scale donor/acceptor probabilities by their prior
                     SpliceProbability *splice_probabilities;
-                    int num_splice_probabilities = create_splice_probabilities(vposition, r, r->tscripts, num_hap_alt_predictions, hap_alt_predictions, &splice_probabilities);
+                    int num_splice_probabilities = create_splice_probabilities(vposition, r, r->tscripts, current_gene, num_hap_alt_predictions, hap_alt_predictions, &splice_probabilities);
+
 
 
                     for (int i = 0; i < r->tscripts->n; i++) {
@@ -1664,6 +1675,11 @@ int main(int argc, char *argv[]) {
                         Gene *tgene = kv_A(*r->transcript_genes, i);
 
                         if (t == NULL || tgene->gff_id != gene->gff_id) continue;
+
+                        int current_gene[r->tscripts->n];
+                        for (int i = 0; i < r->tscripts->n; i++) current_gene[i] = 0;
+                        current_gene[i] = 1;
+
                         for (int si = 0; si < num_splice_probabilities; si++) {
                             SpliceProbability prediction = splice_probabilities[si];
                             Range splice_position = (Range) { prediction.position, prediction.position+1 };
@@ -1711,7 +1727,8 @@ int main(int argc, char *argv[]) {
                                         filter_to_most_likely_prediction(PRED_WIDTH * NUM_SCORES, &pair_predictions);
 
                                         SpliceProbability *pair_probabilities;
-                                        int num_pair_probabilities = create_splice_probabilities(pair.position, r, r->tscripts, PRED_WIDTH * NUM_SCORES, pair_predictions, &pair_probabilities);
+                                        uint32_t pair_position = pair.position - haplotype_offset(&hap_ex, (Range) {gene->coords.start, pair.position});
+                                        int num_pair_probabilities = create_splice_probabilities(pair_position, r, r->tscripts, current_gene, PRED_WIDTH * NUM_SCORES, pair_predictions, &pair_probabilities);
                                         for (int pi = 0; pi < num_pair_probabilities; pi++) {
                                             SpliceProbability pair_prediction = pair_probabilities[pi];
 
@@ -1752,7 +1769,8 @@ int main(int argc, char *argv[]) {
                                         filter_to_most_likely_prediction(PRED_WIDTH * NUM_SCORES, &pair_predictions);
 
                                         SpliceProbability *pair_probabilities;
-                                        int num_pair_probabilities = create_splice_probabilities(pair.position, r, r->tscripts, PRED_WIDTH * NUM_SCORES, pair_predictions, &pair_probabilities);
+                                        uint32_t pair_position = pair.position - haplotype_offset(&hap_ex, (Range) {gene->coords.start, pair.position});
+                                        int num_pair_probabilities = create_splice_probabilities(pair_position, r, r->tscripts, current_gene, PRED_WIDTH * NUM_SCORES, pair_predictions, &pair_probabilities);
                                         for (int pi = 0; pi < num_pair_probabilities; pi++) {
                                             SpliceProbability pair_prediction = pair_probabilities[pi];
 
@@ -1797,7 +1815,8 @@ int main(int argc, char *argv[]) {
                                         filter_to_most_likely_prediction(PRED_WIDTH * NUM_SCORES, &competitor_predictions);
 
                                         SpliceProbability *competitor_probabilities;
-                                        int num_competitor_probabilities = create_splice_probabilities(competitor.position, r, r->tscripts, PRED_WIDTH * NUM_SCORES, competitor_predictions, &competitor_probabilities);
+                                        uint32_t competitor_position = competitor.position - haplotype_offset(&hap_ex, (Range) {gene->coords.start, competitor.position});
+                                        int num_competitor_probabilities = create_splice_probabilities(competitor_position, r, r->tscripts, current_gene, PRED_WIDTH * NUM_SCORES, competitor_predictions, &competitor_probabilities);
                                         for (int csi = 0; csi < num_competitor_probabilities; csi++) {
                                             SpliceProbability competitor_prediction = competitor_probabilities[csi];
 
@@ -1838,7 +1857,8 @@ int main(int argc, char *argv[]) {
                                         filter_to_most_likely_prediction(PRED_WIDTH * NUM_SCORES, &competitor_predictions);
 
                                         SpliceProbability *competitor_probabilities;
-                                        int num_competitor_probabilities = create_splice_probabilities(competitor.position, r, r->tscripts, PRED_WIDTH * NUM_SCORES, competitor_predictions, &competitor_probabilities);
+                                        uint32_t competitor_position = competitor.position - haplotype_offset(&hap_ex, (Range) {gene->coords.start, competitor.position});
+                                        int num_competitor_probabilities = create_splice_probabilities(competitor_position, r, r->tscripts, current_gene, PRED_WIDTH * NUM_SCORES, competitor_predictions, &competitor_probabilities);
                                         for (int ci = 0; ci < num_competitor_probabilities; ci++) {
                                             SpliceProbability competitor_prediction = competitor_probabilities[ci];
 
@@ -2853,8 +2873,8 @@ int main(int argc, char *argv[]) {
                     }
 
                     float probability_sum = 0.0;
-                    for (int i = 0; i > isoforms.n_isoforms; i++) probability_sum += isoforms.isoforms[i]->prior_probability;
-                    for (int i = 0; i > isoforms.n_isoforms; i++) isoforms.isoforms[i]->posterior_probability = isoforms.isoforms[i]->prior_probability / probability_sum;
+                    for (int i = 0; i < isoforms.n_isoforms; i++) probability_sum += isoforms.isoforms[i]->prior_probability;
+                    for (int i = 0; i < isoforms.n_isoforms; i++) isoforms.isoforms[i]->posterior_probability = isoforms.isoforms[i]->prior_probability / probability_sum;
 
                     calculate_rescue_probabilities(&isoforms);
 
@@ -2966,7 +2986,7 @@ int main(int argc, char *argv[]) {
 
                     Isoforms isoforms = r->isoforms[ti * NUM_PHASES + p];
                     if (!isoforms.valid) {
-                        kputc('.', &tag);
+                        kputs(".|.|.", &tag);
                         continue;
                     }
 
