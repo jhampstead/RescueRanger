@@ -69,6 +69,7 @@
 #define CRYPTIC_SPLICE_VALUE 2
 
 #define PROXIMITY_THRESHOLD 15
+#define AF_THRESHOLD 0.01
 
 #define START_CODON "ATG"
 #define COMPLEMENTARY_START_CODON "CAT"
@@ -1117,6 +1118,72 @@ void store_splice_sites(SpliceProbability prediction, int *predict_for_pair, int
         }
     }
 }
+
+int set_af_trigger(bcf1_t *record, bcf_hdr_t *header) {
+    int af_below_threshold = 1;
+    float af_value = 0.0;
+    
+    // Set based on MAX_AF
+    int af_id = bcf_hdr_id2int(header, BCF_DT_INFO, bcf_hdr_int2id(header, BCF_DT_ID, "MAX_AF"));
+    if (bcf_get_info_float(header, record, "MAX_AF", &af_value, NULL) > 0) {
+        if (af_value > AF_THRESHOLD) {
+            af_below_threshold = 0;
+            return af_below_threshold;
+        }
+    }
+
+    return af_below_threshold;
+}
+
+int is_purine(char base) {
+    return base == 'A' || base == 'G';
+}
+
+int calculate_kozak_strength(char* sequence, int pos, int length) {
+    int score = 0;
+
+    if (pos >= 3 && is_purine(toupper(sequence[pos - 3]))) {
+        score += 1;  // Give a point for purine at -3
+    }
+
+    if (pos + 3 < length && toupper(sequence[pos + 3]) == 'G') {
+        score += 1;  // Give a point for G at +4
+    }
+
+    return score;
+}
+
+int32_t* find_possible_reinitiation_positions(char* reinitiation_sequence, int* count, int** kozak_strengths, int offset) {
+    int length = strlen(reinitiation_sequence);
+    char codon[4] = {0}; // Buffer to hold codon (3 bases + null terminator)
+    int32_t* reinitiation_positions = NULL;
+    *kozak_strengths = NULL;
+    int allocated_size = 0;
+    *count = 0;
+
+    for (int i = 0; i < length; i += 3) {
+        codon[0] = reinitiation_sequence[i];
+        codon[1] = reinitiation_sequence[i + 1];
+        codon[2] = reinitiation_sequence[i + 2];
+        codon[3] = '\0';
+
+        if (strcmp(codon, START_CODON) == 0) {
+            int strength = calculate_kozak_strength(reinitiation_sequence, i, length);
+
+            if (*count >= allocated_size) {
+                allocated_size = (allocated_size == 0) ? 1 : allocated_size * 2;
+                reinitiation_positions = realloc(reinitiation_positions, allocated_size * sizeof(int32_t));
+                *kozak_strengths = realloc(*kozak_strengths, allocated_size * sizeof(int));
+            }
+
+            reinitiation_positions[*count] = i + 1 + offset; // Store 1-based position in the actual sequence (i + 1 + offset)
+            (*kozak_strengths)[*count] = strength;
+            (*count)++;
+        }
+    }
+    return reinitiation_positions;
+}
+
 
 int main(int argc, char *argv[]) {
     log_set_level(2);
