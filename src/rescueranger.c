@@ -92,6 +92,9 @@
 #define PTV_TAG "PTV"
 #define PTV_DESC "##INFO=<ID=PTV,Number=.,Type=String,Description=\"Newly predicted PTV consequence\">"
 
+#define PTV_PROB_TAG "PTV_PROB"
+#define PTV_PROB_DESC "##INFO=<ID=PTV_PROB_DESC,Number=.,Type=String,Description=\"Probability of induced PTV\">"
+
 #define PTV_TYPE_TAG "PTV_TYPE"
 #define PTV_TYPE_DESC "##INFO=<ID=PTV_TYPE,Number=.,Type=String,Description=\"Type of PTV\">"
 
@@ -99,8 +102,8 @@
 #define PREDICTION_FLAGS_DESC "##INFO=<ID=PREDICTION_FLAGS,Number=.,Type=String,Description=\"Additional flags for the context in which the prediction happened.\">"
 
 
-#define INFO_TAGS { SPLICEAI_HAP_TAG, CS_TAG, RESCUE_TAG, RESCUE_TYPE_TAG, PTV_TAG, PTV_TYPE_TAG, PREDICTION_FLAGS_TAG }
-#define INFO_TAG_DESCS { SPLICEAI_HAP_DESC, CS_DESC, RESCUE_DESC, RESCUE_TYPE_DESC, PTV_DESC, PTV_TYPE_DESC, PREDICTION_FLAGS_DESC }
+#define INFO_TAGS { SPLICEAI_HAP_TAG, CS_TAG, RESCUE_TAG, RESCUE_TYPE_TAG, PTV_TAG, PTV_PROB_TAG, PTV_TYPE_TAG, PREDICTION_FLAGS_TAG }
+#define INFO_TAG_DESCS { SPLICEAI_HAP_DESC, CS_DESC, RESCUE_DESC, RESCUE_TYPE_DESC, PTV_DESC, PTV_PROB_DESC, PTV_TYPE_DESC, PREDICTION_FLAGS_DESC }
 
 // enum RescueType {
 //     COMPLETE,
@@ -583,7 +586,7 @@ void calculate_rescue_probabilities(Isoforms *isoforms_struct) {
 
             rescue_probs->n_isoforms[j] += 1;
             rescue_probs->rescue_probabilities[j] += isoform->posterior_probability;
-            // TODO: Update rescue_probs->affected_bases[j] to correct value
+            if (isoform->affected_bases > rescue_probs->affected_bases[j]) rescue_probs->affected_bases[j] = isoform->affected_bases;
             found = 1;
             break;
         }
@@ -609,6 +612,7 @@ void calculate_rescue_probabilities(Isoforms *isoforms_struct) {
         rescue_probs->rescue_types[isoforms_struct->n_rescue_types] = isoform->rescue_type;
         rescue_probs->n_isoforms[isoforms_struct->n_rescue_types] = 1;
         rescue_probs->rescue_probabilities[isoforms_struct->n_rescue_types] = isoform->posterior_probability;
+        rescue_probs->affected_bases[isoforms_struct->n_rescue_types] = isoform->affected_bases;
         // TODO: Update rescue_probs->affected_bases[isoforms_struct->n_rescue_types] to correct value
         isoforms_struct->n_rescue_types++;
     }
@@ -710,10 +714,10 @@ void free_isoforms(Isoforms *isoforms_struct) {
 }
 
 static int add_rescueranger_tags(bcf_hdr_t *hdr) {
-    const char *tags[7] = INFO_TAGS;
-    const char *descriptions[7] = INFO_TAG_DESCS;
+    const char *tags[8] = INFO_TAGS;
+    const char *descriptions[8] = INFO_TAG_DESCS;
 
-    for (int i = 0; i < 7; i++) {
+    for (int i = 0; i < 8; i++) {
         if (bcf_hdr_append(hdr, descriptions[i]) != 0) {
             log_error("Failed to append description for tag %s to vcf header.", tags[i]);
             return -1;
@@ -1135,9 +1139,6 @@ int main(int argc, char *argv[]) {
     add_rescueranger_tags(hdr);
     bcf_hdr_write(fp_out, hdr);
 
-    // const char *raw_score_path = "raw_scores.tsv";
-    // FILE *raw_scores = fopen(raw_score_path, "w");
-
     bcf1_t *v = bcf_init();
 
     kvec_t(RecordBlock) batches; kv_init(batches);
@@ -1146,6 +1147,8 @@ int main(int argc, char *argv[]) {
     kv_init(*batch);
 
     IRegion batch_region = {-1, -1, -1};
+
+    int splice_trigger_count = 0;
 
     // Read records from vcf and store into coding/non-coding record blocks
     while (bcf_read(fp_in, hdr, v) >= 0) {
@@ -1309,6 +1312,8 @@ int main(int argc, char *argv[]) {
             Record *r = kv_A(*block.records, i);
             int is_cryptic = trigger_cryptic_splice(r->v, hdr);
 
+            int canonical_splice_trigger = 0;
+
             // Check VEP consequences for rescue triggers
             for (int j = 0; j < r->vep->n; j++) {
                 TscriptCsqs *transcript_consequence = kv_A(*r->vep, j);
@@ -1330,6 +1335,7 @@ int main(int argc, char *argv[]) {
                     if (strcmp(consequence, SPLICE_DONOR_VARIANT) == 0 ||
                         strcmp(consequence, SPLICE_ACCEPTOR_VARIANT) == 0) {
                         transcript_consequence->triggers[SPLICE_TRIGGER] = CANONICAL_SPLICE_VALUE;
+                        canonical_splice_trigger = 1;
                     }
                     // if (strcmp(consequence, SPLICE_REGION_VARIANT) == 0) {
                     //     r->triggers[SPLICE_TRIGGER] = 1;
@@ -1344,6 +1350,8 @@ int main(int argc, char *argv[]) {
 
                 if (is_cryptic) transcript_consequence->triggers[SPLICE_TRIGGER] = CRYPTIC_SPLICE_VALUE;
             }
+
+            splice_trigger_count += (canonical_splice_trigger | is_cryptic);
         }
     }
 
@@ -2344,7 +2352,7 @@ int main(int argc, char *argv[]) {
                         log_debug("Gene length is: %i", hap_seq.l);
 
                         Range *isoform_bounds = NULL;
-                        int affected_bases = 0;
+                        // int affected_bases = 0;
 
                         int gene_start = gene->coords.start;
                         if (t->strand == STRAND_FWD) {
@@ -2359,9 +2367,9 @@ int main(int argc, char *argv[]) {
                                 }
 
                                 int bases_shifted = range_len(ncr.canonical_coords) - range_len(ncr.coords);
-                                if (bases_shifted != 0) {
-                                    affected_bases += bases_shifted;
-                                }
+                                // if (bases_shifted != 0) {
+                                //     affected_bases += bases_shifted;
+                                // }
 
                                 // log_info("Adding region %i, %i:%i - %i:%i to isoform %i", j, seq_idx, intron_start, ncr.coords.start, ncr.coords.end, i);
                                 length += intron_start - seq_idx;
@@ -2393,9 +2401,9 @@ int main(int argc, char *argv[]) {
                                 }
 
                                 int bases_shifted = range_len(ncr.canonical_coords) - range_len(ncr.coords);
-                                if (bases_shifted != 0) {
-                                    affected_bases += bases_shifted;
-                                }
+                                // if (bases_shifted != 0) {
+                                //     affected_bases += bases_shifted;
+                                // }
 
                                 // log_info("Adding region %i, %i:%i - %i:%i to isoform %i", j, seq_idx, intron_start, ncr.coords.end, ncr.coords.start, i);
                                 length += intron_start - seq_idx;
@@ -2418,11 +2426,6 @@ int main(int argc, char *argv[]) {
                             }
                             if (hap_seq.l != seq_idx) isoform_bounds->start = hap_seq.l;
                             // kputsn(hap_seq.s + seq_idx, hap_seq.l - seq_idx, &spliced_seq);
-                        }
-
-                        if (affected_bases > 80) {
-                            // Intron retention/exon skip!!!
-                            log_error("Deleterious splice change!!!");
                         }
 
                         // Convert strand to complementary, if necessary (keeps direction the same)
@@ -2537,7 +2540,7 @@ int main(int argc, char *argv[]) {
                                 } else {
                                     splice_positions[num_splice_sites] = malloc(sizeof(int64_t));
                                     *(splice_positions[num_splice_sites]) = isoform_position;
-                                    splice_offsets[num_splice_sites] = ncr.canonical_coords.start - ncr.coords.start; // range_len(ncr.canonical_coords) - range_len(ncr.coords);
+                                    splice_offsets[num_splice_sites] = -(ncr.canonical_coords.start - ncr.coords.start); // range_len(ncr.canonical_coords) - range_len(ncr.coords);
 
                                     IsoformFrameshift isoshift = {isoform_position, splice_offsets[num_splice_sites], (Record *) ncr.record_ptr};
                                     kv_push(IsoformFrameshift, variant_shifts, isoshift);
@@ -2578,12 +2581,11 @@ int main(int argc, char *argv[]) {
                                 } else {
                                     splice_positions[num_splice_sites] = malloc(sizeof(int64_t));
                                     *(splice_positions[num_splice_sites]) = isoform_position;
-                                    splice_offsets[num_splice_sites] = ncr.canonical_coords.start - ncr.coords.start; // range_len(ncr.canonical_coords) - range_len(ncr.coords);
+                                    splice_offsets[num_splice_sites] = -(ncr.canonical_coords.start - ncr.coords.start); // range_len(ncr.canonical_coords) - range_len(ncr.coords);
 
                                     IsoformFrameshift isoshift = {isoform_position, splice_offsets[num_splice_sites], (Record *) ncr.record_ptr};
                                     kv_push(IsoformFrameshift, variant_shifts, isoshift);
                                     num_splice_sites++;
-
                                 }
                             }
                         }
@@ -2642,9 +2644,9 @@ int main(int argc, char *argv[]) {
 
                         const char stop_codons[3][3] = STOP_CODONS;
 
-                        klist_t(RecordContext) *context = kl_init_RecordContext();
-                        int context_size = 0;
-                        int is_stop_rescue = 0;
+                        int affected_bases = 0; // TODO: Right now this value is absolute, after the refactor it shouldn't be
+                        enum RescueType rescue_type = NO_RESCUE;
+                        enum PTVType ptv_type = NO_PTV;
                         for (int ri = 0; ri < shifts.n; ri++) {
                             IsoformFrameshift iso_shift = kv_A(shifts, ri);
                             if (iso_shift.r != r) continue;
@@ -2676,70 +2678,102 @@ int main(int argc, char *argv[]) {
 
                                 if (!is_stop) {
                                     log_error("%d:%d t=%i if=%i STOP RESCUE", r->v->rid, r->v->pos, ti, i);
-                                    is_stop_rescue = 1;
+                                    rescue_type = COMPLETE_RESCUE;
                                 }
                             }
 
- //                            if (csq->triggers[FRAMESHIFT_TRIGGER] || csq->triggers[SPLICE_TRIGGER]) {
- //                                for (int si = 0; si < spliced_seq.l; si += 3) {
- //                                    if (shifts.n > 0) {
- //                                        while (shift_index < shifts.n && kv_A(shifts, shift_index).seq_pos - shifted_isoform.start < si) {
- //                                            shift_index++;
- //                                        }
- //
- //                                        IsoformFrameshift shift = kv_A(shifts, shift_index);
- //                                        Record *iso_r = shift.r;
- //
- //                                        if (iso_r == NULL) {}
- //                                        else if (csq->triggers[SPLICE_TRIGGER] && shift.shift == 0) {
- //                                            log_error("%d:%d t=%i if=%i COMPLETE SPLICE RESCUE", r->v->rid, r->v->pos, ti, i);
- //                                        } else if (csq->triggers[SPLICE_TRIGGER] && shift.shift % 3 == 0 & abs(shift.shift) < MAX_FRAMESHIFT_RADIUS) {
- //                                            log_error("%d:%d t=%i if=%i SPLICE FRAMESHIFT RESCUE", r->v->rid, r->v->pos, ti, i);
- //                                        } else {
- //                                            int combined_shift = 0;
- //                                            if (context_size > 0) {
- //                                                kliter_t(RecordContext) *it = kl_begin(context), *next_it;
- //
- //                                                while (it != kl_end(context)) {
- //                                                    next_it = kl_next(it);
- //
- //                                                    IsoformFrameshift *context_shift = &kl_val(it);
- //
- //                                                    // Out of range of rescue, remove from context
- //                                                    if (context_shift->seq_pos + MAX_FRAMESHIFT_RADIUS < shift.seq_pos) {
- //                                                        kl_shift_RecordContext(context, NULL);
- //                                                        it = next_it;
- //                                                        context_size--;
- //                                                        continue;
- //                                                    }
- //
- //                                                    combined_shift += context_shift->shift;
- //                                                    it = next_it;
- //                                                }
- //                                            }
- //
- //                                            combined_shift += shift.shift;
- //                                            if (combined_shift % 3 == 0) {
- //                                                log_error("%d:%d t=%i if=%i FRAMESHIFT SET RESCUE", r->v->rid, r->v->pos, ti, i);
- //
- //                                                kliter_t(RecordContext) *it;
- //                                                while ((it = kl_begin(context)) != kl_end(context)) {
- //                                                    // Set frameshift to rescued
- //                                                    kl_shift_RecordContext(context, NULL);
- //                                                    context_size = 0;
- //                                                }
- //                                            } else { // Unrescued
- //                                                // Store frameshift, to consider with a following shift
- //                                                *kl_pushp(RecordContext, context) = shift;
- //                                                context_size++;
- //                                            }
- // 
- //                                        }
- //                                    }
- //                                }
- //                            }
+                            int should_check_induced = 0;
+                            Range possible_induced_sequence = {0};
 
+                            if (csq->triggers[SPLICE_TRIGGER] && rescue_type == NO_RESCUE) {
+                                if (iso_shift.shift == 0) {
+                                    rescue_type = COMPLETE_RESCUE;
+                                    continue;
+                                }
 
+                                // TODO: Check for partial exon skipping/intron retention
+                                if (iso_shift.shift % 3 == 0 && abs(iso_shift.shift) < 15) {
+                                    rescue_type = iso_shift.shift > 0 ? INTRON_RETENTION : PARTIAL_EXON_SKIPPING;
+                                    affected_bases = iso_shift.shift;
+
+                                    int splice_insertion_length = iso_shift.shift > 0 ? iso_shift.shift : 0;
+                                    should_check_induced = 1;
+                                    if (t->strand == STRAND_FWD) {
+                                        possible_induced_sequence.start = (int) ((iso_shift.seq_pos - shifted_isoform.start + 1) / 3) * 3;
+                                        possible_induced_sequence.end = (iso_shift.seq_pos - shifted_isoform.start + 1) + splice_insertion_length + 1;
+                                    } else {
+                                        possible_induced_sequence.start = (int) ((shifted_isoform.end - iso_shift.seq_pos - 1) / 3) * 3;
+                                        possible_induced_sequence.end = (shifted_isoform.end - iso_shift.seq_pos - 1) + splice_insertion_length + 1;
+                                    }
+                                }
+                            }
+
+                            if ((csq->triggers[FRAMESHIFT_TRIGGER] || csq->triggers[SPLICE_TRIGGER]) && rescue_type == NO_RESCUE) {
+                                if (iso_shift.shift == 0) continue;
+
+                                if (iso_shift.shift % 3 == 0 && abs(iso_shift.shift) < MAX_FRAMESHIFT_RADIUS) { // TODO: Is this possible?
+                                    rescue_type = FRAME_RESTORING_INDEL;
+                                    affected_bases = iso_shift.shift;
+                                } else {
+                                    int32_t summed_shift = 0;
+                                    int32_t shift_start = 0;
+                                    for (int i = 0; i < shifts.n; i++) {
+                                        IsoformFrameshift shift = kv_A(shifts, i);
+                                        if (shift.shift == 0) continue; // Rescued splice, do nothing
+
+                                        // If outside of rescue radius
+                                        if (shift.seq_pos - MAX_FRAMESHIFT_RADIUS > shift_start) {
+                                            summed_shift = shift.shift;
+                                            shift_start = shift.seq_pos;
+                                            continue;
+                                        }
+
+                                        summed_shift += shift.shift;
+                                        if (summed_shift % 3 != 0) continue;
+
+                                        if (shift.seq_pos + MAX_FRAMESHIFT_RADIUS > iso_shift.seq_pos && shift.seq_pos - MAX_FRAMESHIFT_RADIUS < iso_shift.seq_pos) {
+                                            rescue_type = FRAME_RESTORING_INDEL; // Only set to rescue type if it is the current shift
+                                            int32_t shift_end = shift.seq_pos;
+                                            affected_bases = abs(shift_end - shift_start);
+
+                                            should_check_induced = 1;
+                                            if (t->strand == STRAND_FWD) {
+                                                possible_induced_sequence.start = (int) ((shift_start - shifted_isoform.start + 1) / 3) * 3;
+                                                possible_induced_sequence.end = (shift_start - shifted_isoform.start + 1) + affected_bases;
+                                            } else {
+                                                possible_induced_sequence.start = (int) ((shifted_isoform.end - shift_start - 1) / 3) * 3;
+                                                possible_induced_sequence.end = (shifted_isoform.end - shift_start - 1) + affected_bases;
+                                            }
+
+                                        }
+
+                                        summed_shift = 0;
+                                        shift_start = 0;
+                                    }
+                                }
+                            }
+
+                            if (!should_check_induced) continue;
+
+                            const char *codon = spliced_seq.s + possible_induced_sequence.start;
+
+                            // Check if the current codon codes for a stop
+                            int is_stop = 0;
+                            for (int i = 0; i < range_len(possible_induced_sequence); i+=3) {
+                                const char *variant_codon = codon + i;
+                                for (int j = 0; j < 3; j++) {
+                                    const char *stop = stop_codons[j];
+                                    if (!(variant_codon[0] == stop[0] && variant_codon[1] == stop[1] && variant_codon[2] == stop[2])) continue;
+
+                                    is_stop = 1;
+                                    break;
+                                }
+                            }
+
+                            if (is_stop) {
+                                log_error("%d:%d t=%i if=%i STOP GAIN", r->v->rid, r->v->pos, ti, i);
+                                ptv_type = STOP_GAINED;
+                            }
                         }
 
                         float isoform_prior = 1.0;
@@ -2749,126 +2783,28 @@ int main(int argc, char *argv[]) {
                             if (ncr.acceptor != NULL) isoform_prior *= ncr.acceptor->prior_probability;
                         }
 
-                        enum RescueType rescue_type = NO_RESCUE;
-                        if (is_stop_rescue) rescue_type = COMPLETE_RESCUE;
-
                         Isoform *isoform = malloc(sizeof(Isoform));
                         isoform->prior_probability = isoform_prior;
                         isoform->posterior_probability = 0.0;
                         isoform->rescue = (
-                            rescue_type == COMPLETE_RESCUE && 
-                            rescue_type == POSSIBLE_REINITIATION && 
-                            (rescue_type == FRAME_RESTORING_INDEL && affected_bases <= 80) &&
-                            (rescue_type == PARTIAL_EXON_SKIPPING && affected_bases <= 15 && affected_bases % 3 == 0) &&
+                            rescue_type == COMPLETE_RESCUE || 
+                            rescue_type == POSSIBLE_REINITIATION ||
+                            (rescue_type == FRAME_RESTORING_INDEL) ||
+                            (rescue_type == PARTIAL_EXON_SKIPPING && affected_bases <= 15 && affected_bases % 3 == 0) ||
                             (rescue_type == PARTIAL_INTRON_RETENTION && affected_bases <= 15 && affected_bases % 3 == 0)
                         );
-
                         isoform->rescue_type = rescue_type;
-                        isoform->affected_bases = 0;
-                        isoform->ptv = 0;
-                        isoform->ptv_type = NO_PTV;
+                        isoform->affected_bases = affected_bases;
+
+                        isoform->ptv = (ptv_type == STOP_GAINED || ptv_type == FRAMESHIFT);
+                        isoform->ptv_type = ptv_type;
 
                         isoforms.isoforms[isoforms.n_isoforms++] = isoform;
-
-                        // klist_t(RecordContext) *context = kl_init_RecordContext();
-                        // int context_size = 0;
-                        // for (int si = 0; si < spliced_seq.l; si += 3) {
-                        //     // if (upstream_ptv) {
-                        //     //     log_warn("%d:%d t=%i if=%i UPSTREAM_PTV_RESCUE", r->v->rid, r->v->pos, ti, i);
-                        //     //     break;
-                        //     // }
-                        //
-                        //     if (shifts.n > 0) {
-                        //         while (shift_index < shifts.n && kv_A(shifts, shift_index).seq_pos - shifted_isoform.start < si) {
-                        //             shift_index++;
-                        //         }
-                        //
-                        //         IsoformFrameshift shift = kv_A(shifts, shift_index);
-                        //         Record *iso_r = shift.r;
-                        //         if (iso_r == NULL) {
-                        //         } else if (r->triggers[SPLICE_TRIGGER] && shift.shift == 0 && !upstream_ptv) {
-                        //             log_warn("%d:%d t=%i if=%i COMPLETE SPLICE RESCUE", r->v->rid, r->v->pos, ti, i);
-                        //             upstream_ptv = 1;
-                        //         } else if (r->triggers[SPLICE_TRIGGER] && shift.shift % 3 == 0 && abs(shift.shift) < 80 && !upstream_ptv) { // In frame splice rescue
-                        //             log_warn("%d:%d t=%i if=%i SPLICE_FRAMESHIFT_RESCUE", r->v->rid, r->v->pos, ti, i);
-                        //             upstream_ptv = 1;
-                        //         } else if ((r->triggers[SPLICE_TRIGGER] && shift.shift != 0) || r->triggers[FRAMESHIFT_TRIGGER]) {
-                        //             int combined_shift = 0;
-                        //             if (context_size > 0) {
-                        //                 kliter_t(RecordContext) *it = kl_begin(context), *next_it;
-                        //
-                        //                 while (it != kl_end(context)) {
-                        //                     next_it = kl_next(it);
-                        //
-                        //                     IsoformFrameshift *context_shift = &kl_val(it);
-                        //
-                        //                     // Out of range of rescue, remove from context
-                        //                     if (context_shift->seq_pos + MAX_FRAMESHIFT_RADIUS < shift.seq_pos) {
-                        //                         kl_shift_RecordContext(context, NULL);
-                        //                         it = next_it;
-                        //                         continue;
-                        //                     }
-                        //
-                        //                     combined_shift += context_shift->shift;
-                        //                     it = next_it;
-                        //                 }
-                        //             }
-                        //
-                        //             combined_shift += shift.shift;
-                        //             if (combined_shift % 3 == 0) {
-                        //                 log_warn("%d:%d t=%i if=%i FRAMESHIFT SET RESCUE", r->v->rid, r->v->pos, ti, i);
-                        //                 upstream_ptv = 1;
-                        //
-                        //                 kliter_t(RecordContext) *it;
-                        //                 while ((it = kl_begin(context)) != kl_end(context)) {
-                        //                     // Set frameshift to rescued
-                        //                     kl_shift_RecordContext(context, NULL);
-                        //                 }
-                        //             } else { // Unrescued
-                        //                 // Store frameshift, to consider with a following shift
-                        //                 *kl_pushp(RecordContext, context) = shift;
-                        //                 context_size++;
-                        //             }
-                        //         }
-                        //
-                        //         if (iso_r != r) continue;
-                        //     }
-                        //
-                        //     // Get coding codon from spliced isoform sequence
-                        //     const char *codon = spliced_seq.s + si;
-                        //
-                        //     // Check if the current codon codes for a stop
-                        //     int is_stop = 0;
-                        //     for (int i = 0; i < 3; i++) {
-                        //         const char *stop = stop_codons[i];
-                        //         if (!(codon[0] == stop[0] && codon[1] == stop[1] && codon[2] == stop[2])) continue;
-                        //
-                        //         is_stop = 1;
-                        //         break;
-                        //     }
-                        //
-                        //     if (!is_stop && r->triggers[STOP_TRIGGER]) {
-                        //         log_warn("%d:%d t=%i if=%i RESCUED STOP", r->v->rid, r->v->pos, ti, i);
-                        //         upstream_ptv = 1;
-                        //     }
-                        //
-                        //     if (is_stop && (r->triggers[SPLICE_TRIGGER] || r->triggers[FRAMESHIFT_TRIGGER])) {
-                        //         log_warn("%d:%d t=%i if=%i INDUCED STOP", r->v->rid, r->v->pos, ti, i);
-                        //         upstream_ptv = 1;
-                        //     }
-                        //
-                        // }
-
-                        // if (spliced_seq.s != NULL) free(spliced_seq.s);
-
-                        // kv_destroy(shifts);
-                        // free(record_positions);
                     }
-
 
                     // Calculate isoforms posterior
                     if (isoforms.n_isoforms != isoforms.m_isoforms) {
-                        log_error("Less isoforms found thann expected. This is a bug!");
+                        log_error("Less isoforms found than expected. This is a bug!");
                         exit(1);
                     }
 
@@ -2877,6 +2813,7 @@ int main(int argc, char *argv[]) {
                     for (int i = 0; i < isoforms.n_isoforms; i++) isoforms.isoforms[i]->posterior_probability = isoforms.isoforms[i]->prior_probability / probability_sum;
 
                     calculate_rescue_probabilities(&isoforms);
+                    calculate_ptv_probabilities(&isoforms);
 
                     r->isoforms[ti * NUM_PHASES + p] = isoforms;
 
@@ -2971,33 +2908,83 @@ int main(int argc, char *argv[]) {
 
             if (!triggered) continue;
 
-            kstring_t tag = {0};
+            kstring_t rescue_type_tag = {0};
 
             for (int ti = 0; ti < r->transcript_genes->n; ti++) {
-                if (ti > 0) kputc(',', &tag);
+                if (ti > 0) kputc(',', &rescue_type_tag);
 
                 if (kv_A(*r->transcript_genes, ti) == NULL) {
-                    kputc('.', &tag);
+                    kputc('.', &rescue_type_tag);
                     continue;
                 }
 
                 for (int p = 0; p < NUM_PHASES; p++) {
-                    if (p > 0) kputc('&', &tag);
+                    if (p > 0) kputc('&', &rescue_type_tag);
 
                     Isoforms isoforms = r->isoforms[ti * NUM_PHASES + p];
                     if (!isoforms.valid) {
-                        kputs(".|.|.", &tag);
+                        kputs(".|.|.", &rescue_type_tag);
                         continue;
                     }
 
                     kstring_t transcript_phase_tag = generate_rescue_type_tag(&isoforms);
-                    kputsn(transcript_phase_tag.s, transcript_phase_tag.l, &tag);
+                    kputsn(transcript_phase_tag.s, transcript_phase_tag.l, &rescue_type_tag);
                 }
             }
 
-            bcf_update_info_string(hdr, r->v, RESCUE_TYPE_TAG, tag.s);
+            bcf_update_info_string(hdr, r->v, RESCUE_TYPE_TAG, rescue_type_tag.s);
+
+
+            kstring_t ptv_tag = {0};
+            kstring_t ptv_prob_tag = {0};
+            kstring_t ptv_type_tag = {0};
+
+            for (int ti = 0; ti < r->transcript_genes->n; ti++) {
+                if (ti > 0) {
+                    kputc(',', &ptv_tag);
+                    kputc(',', &ptv_prob_tag);
+                    kputc(',', &ptv_type_tag);
+                }
+
+
+                for (int p = 0; p < NUM_PHASES; p++) {
+                    if (p > 0) {
+                        kputc('&', &ptv_tag);
+                        kputc('&', &ptv_prob_tag);
+                        kputc('&', &ptv_type_tag);
+                    }
+
+                    Isoforms isoforms = r->isoforms[ti * NUM_PHASES + p];
+
+                    kputw(isoforms.ptv, &ptv_tag);
+
+                    char prob_s[7];
+                    sprintf(prob_s, "%.4f", isoforms.ptv_probability);
+                    kputsn(prob_s, 6, &ptv_prob_tag);
+
+                    switch(isoforms.ptv_type) {
+                        case STOP_GAINED:
+                            kputs("stop_gained", &ptv_type_tag);
+                            break;
+                        case FRAMESHIFT:
+                            kputs("frameshift", &ptv_type_tag);
+                            break;
+                        case NO_PTV:
+                            kputs("no_ptv", &ptv_type_tag);
+                            break;
+                    }
+                }
+
+            }
+
+            bcf_update_info_string(hdr, r->v, PTV_TAG, ptv_tag.s);
+            bcf_update_info_string(hdr, r->v, PTV_PROB_TAG, ptv_prob_tag.s);
+            bcf_update_info_string(hdr, r->v, PTV_TYPE_TAG, ptv_type_tag.s);
+
         }
     }
+
+    log_info("Number of splice triggers: %d", splice_trigger_count);
 
     for (int b = 0; b < batches.n; b++) {
         RecordBlock block = kv_A(batches, b);

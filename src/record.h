@@ -14,6 +14,7 @@
 #include "cpliceai/utils.h"
 
 enum RescueType {
+    NO_RESCUE = 0,
     COMPLETE_RESCUE,
     POSSIBLE_REINITIATION,
     FRAME_RESTORING_INDEL,
@@ -21,13 +22,12 @@ enum RescueType {
     PARTIAL_INTRON_RETENTION,
     EXON_SKIPPING,
     INTRON_RETENTION,
-    NO_RESCUE
 };
 
 enum PTVType {
+    NO_PTV = 0,
     STOP_GAINED,
-    FRAMESHIFT,
-    NO_PTV
+    FRAMESHIFT
 };
 
 typedef struct Isoform {
