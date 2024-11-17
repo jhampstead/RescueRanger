@@ -66,7 +66,10 @@
 #define STOP_TRIGGER 2
 
 #define CANONICAL_SPLICE_VALUE 1
-#define CRYPTIC_SPLICE_VALUE 2
+#define AF_SPLICE_VALUE 2
+
+#define STOP_RESCUE_VALUE 1
+#define STOP_GAIN_VALUE 2
 
 #define PROXIMITY_THRESHOLD 15
 #define AF_THRESHOLD 0.01
@@ -884,7 +887,7 @@ int trigger_cryptic_splice(bcf1_t *rec, bcf_hdr_t *hdr) {
     for (int i = 0; i < 4; i++) {
         if (spliceai_scores[i] >= SPLICEAI_CRYPTIC_SPLICE_THRESHOLD) {
             // log_info("Cryptic Found!");
-            return CRYPTIC_SPLICE_VALUE;  // Set cryptic splice trigger to 1 if values are greater than CRYPTIC_SPLICE_THRESHOLD
+            // return CRYPTIC_SPLICE_VALUE;  // Set cryptic splice trigger to 1 if values are greater than CRYPTIC_SPLICE_THRESHOLD
         }
     }
 
@@ -1119,20 +1122,24 @@ void store_splice_sites(SpliceProbability prediction, int *predict_for_pair, int
     }
 }
 
-int set_af_trigger(bcf1_t *record, bcf_hdr_t *header) {
-    int af_below_threshold = 1;
-    float af_value = 0.0;
-    
-    // Set based on MAX_AF
-    int af_id = bcf_hdr_id2int(header, BCF_DT_INFO, bcf_hdr_int2id(header, BCF_DT_ID, "MAX_AF"));
-    if (bcf_get_info_float(header, record, "MAX_AF", &af_value, NULL) > 0) {
-        if (af_value > AF_THRESHOLD) {
-            af_below_threshold = 0;
-            return af_below_threshold;
-        }
-    }
+int has_af_trigger(bcf1_t *record, bcf_hdr_t *hdr) {
+    float *af_value = NULL;
+    int ndst = 0;
 
-    return af_below_threshold;
+    // Set based on INFO/MAX_AF
+    if (bcf_get_info_float(hdr, record, "MAX_AF", &af_value, &ndst) <= 0) return 0;
+
+    return *af_value >= AF_THRESHOLD;
+}
+
+int has_mnv_trigger(bcf1_t *record, bcf_hdr_t *hdr) {
+    int32_t *mnv = NULL;
+    int ndst = 0;
+
+    // Set based on FORMAT/MNV
+    if (bcf_get_format_int32(hdr, record, "MNV", &mnv, &ndst) <= 0) return 0;
+
+    return *mnv;
 }
 
 int is_purine(char base) {
@@ -1142,11 +1149,11 @@ int is_purine(char base) {
 int calculate_kozak_strength(char* sequence, int pos, int length) {
     int score = 0;
 
-    if (pos >= 3 && is_purine(toupper(sequence[pos - 3]))) {
+    if (pos >= 3 && is_purine(sequence[pos - 3])) {
         score += 1;  // Give a point for purine at -3
     }
 
-    if (pos + 3 < length && toupper(sequence[pos + 3]) == 'G') {
+    if (pos + 3 < length && sequence[pos + 3] == 'G') {
         score += 1;  // Give a point for G at +4
     }
 
@@ -1386,7 +1393,9 @@ int main(int argc, char *argv[]) {
 
         for (int i = 0; i < block.records->n; i++) {
             Record *r = kv_A(*block.records, i);
-            int is_cryptic = trigger_cryptic_splice(r->v, hdr);
+            // int is_cryptic = trigger_cryptic_splice(r->v, hdr);
+            int is_af_triggered = has_af_trigger(r->v, hdr);
+            int is_mnv_triggered = has_af_trigger(r->v, hdr);
 
             int canonical_splice_trigger = 0;
 
@@ -1420,14 +1429,15 @@ int main(int argc, char *argv[]) {
                         transcript_consequence->triggers[FRAMESHIFT_TRIGGER] = 1;
                     }
                     if (strcmp(consequence, STOP_GAINED_VARIANT) == 0) {
-                        transcript_consequence->triggers[STOP_TRIGGER] = 1;
+                        transcript_consequence->triggers[STOP_TRIGGER] = STOP_RESCUE_VALUE;
                     }
                 }
 
-                if (is_cryptic) transcript_consequence->triggers[SPLICE_TRIGGER] = CRYPTIC_SPLICE_VALUE;
+                if (is_af_triggered) transcript_consequence->triggers[SPLICE_TRIGGER] = AF_SPLICE_VALUE;
+                if (is_mnv_triggered && !transcript_consequence->triggers[STOP_TRIGGER]) transcript_consequence->triggers[STOP_TRIGGER] = STOP_GAIN_VALUE;
             }
 
-            splice_trigger_count += (canonical_splice_trigger | is_cryptic);
+            splice_trigger_count += (canonical_splice_trigger | is_af_triggered);
         }
     }
 
@@ -2755,10 +2765,14 @@ int main(int argc, char *argv[]) {
                                     }
                                 }
 
-                                if (!is_stop) {
+                                if (!is_stop && csq->triggers[STOP_TRIGGER] == STOP_RESCUE_VALUE) {
                                     log_error("%d:%d t=%i if=%i STOP RESCUE", r->v->rid, r->v->pos, ti, i);
                                     rescue_type = COMPLETE_RESCUE;
                                     rescued = 1;
+                                }
+
+                                if (is_stop && csq->triggers[STOP_TRIGGER] == STOP_GAIN_VALUE) {
+                                    ptv_type = STOP_GAINED;
                                 }
                             }
 
@@ -2993,7 +3007,7 @@ int main(int argc, char *argv[]) {
             int triggered = 0;
             for (int j = 0; j < r->vep->n; j++) {
                 TscriptCsqs *csq = kv_A(*r->vep, j);
-                if (csq->triggers[SPLICE_TRIGGER] || csq->triggers[FRAMESHIFT_TRIGGER] || csq->triggers[STOP_TRIGGER]) triggered = 1;
+                if (csq->triggers[SPLICE_TRIGGER] || csq->triggers[FRAMESHIFT_TRIGGER] || csq->triggers[STOP_TRIGGER] == STOP_RESCUE_VALUE) triggered = 1;
             }
 
             if (!triggered) continue;
@@ -3042,7 +3056,21 @@ int main(int argc, char *argv[]) {
                 }
             }
 
+            bcf_update_info_string(hdr, r->v, RESCUE_TAG, rescue_type_tag.s);
+            bcf_update_info_string(hdr, r->v, RESCUE_PROB_TAG, rescue_type_tag.s);
             bcf_update_info_string(hdr, r->v, RESCUE_TYPE_TAG, rescue_type_tag.s);
+        }
+
+        for (int i = 0; i < block.records->n; i++) {
+            Record *r = kv_A(*block.records, i);
+
+            int triggered = 0;
+            for (int j = 0; j < r->vep->n; j++) {
+                TscriptCsqs *csq = kv_A(*r->vep, j);
+                if (csq->triggers[SPLICE_TRIGGER] || csq->triggers[FRAMESHIFT_TRIGGER] || csq->triggers[STOP_TRIGGER]) triggered = 1;
+            }
+
+            if (!triggered) continue;
 
             int has_ptv;
             kstring_t ptv_tag = {0};
