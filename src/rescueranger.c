@@ -11,6 +11,7 @@
 #include <klib/kvec.h>
 #include <klib/kstring.h>
 #include <klib/klist.h>
+#include <klib/ksort.h>
 
 #include <time.h>
 #include <zlib.h>
@@ -102,8 +103,11 @@
 #define PREDICTION_FLAGS_DESC "##INFO=<ID=PREDICTION_FLAGS,Number=.,Type=String,Description=\"Additional flags for the context in which the prediction happened.\">"
 
 
-#define INFO_TAGS { SPLICEAI_HAP_TAG, CS_TAG, RESCUE_TAG, RESCUE_TYPE_TAG, PTV_TAG, PTV_PROB_TAG, PTV_TYPE_TAG, PREDICTION_FLAGS_TAG }
-#define INFO_TAG_DESCS { SPLICEAI_HAP_DESC, CS_DESC, RESCUE_DESC, RESCUE_TYPE_DESC, PTV_DESC, PTV_PROB_DESC, PTV_TYPE_DESC, PREDICTION_FLAGS_DESC }
+#define INFO_TAGS { SPLICEAI_HAP_TAG, CS_TAG, RESCUE_TAG, RESCUE_PROB_TAG, RESCUE_TYPE_TAG, PTV_TAG, PTV_PROB_TAG, PTV_TYPE_TAG, PREDICTION_FLAGS_TAG }
+#define INFO_TAG_DESCS { SPLICEAI_HAP_DESC, CS_DESC, RESCUE_DESC, RESCUE_PROB_DESC, RESCUE_TYPE_DESC, PTV_DESC, PTV_PROB_DESC, PTV_TYPE_DESC, PREDICTION_FLAGS_DESC }
+
+
+
 
 // enum RescueType {
 //     COMPLETE,
@@ -146,6 +150,9 @@ typedef struct IsoformFrameshift {
 #define empty_free(x) 
 KLIST_INIT(RecordContext, IsoformFrameshift, empty_free);
 
+
+#define frameshift_lt(a, b) ((a).seq_pos < (b).seq_pos)
+KSORT_INIT(frameshift_sort, IsoformFrameshift, frameshift_lt)
 
 Range variant_to_range(const bcf1_t *v, const int allele) {
     return (Range) { v->pos, v->pos + strlen(v->d.allele[allele]) };
@@ -713,11 +720,12 @@ void free_isoforms(Isoforms *isoforms_struct) {
     free(isoforms_struct->rescue_type_probabilities);
 }
 
+#define TAG_SIZE 9
 static int add_rescueranger_tags(bcf_hdr_t *hdr) {
-    const char *tags[8] = INFO_TAGS;
-    const char *descriptions[8] = INFO_TAG_DESCS;
+    const char *tags[TAG_SIZE] = INFO_TAGS;
+    const char *descriptions[TAG_SIZE] = INFO_TAG_DESCS;
 
-    for (int i = 0; i < 8; i++) {
+    for (int i = 0; i < TAG_SIZE; i++) {
         if (bcf_hdr_append(hdr, descriptions[i]) != 0) {
             log_error("Failed to append description for tag %s to vcf header.", tags[i]);
             return -1;
@@ -726,6 +734,7 @@ static int add_rescueranger_tags(bcf_hdr_t *hdr) {
 
     return 0;
 }
+#undef TAG_SIZE
 
 static void filter_to_most_likely_prediction(size_t num_probabilities, float **probabilities) {
     for (int i = 0; i < num_probabilities; i += NUM_SCORES) {
@@ -2597,8 +2606,10 @@ int main(int argc, char *argv[]) {
 
                         } else if (variant_shifts.n == 0) {
                             kv_copy(IsoformFrameshift, shifts, splice_shifts);
+                            ks_introsort_frameshift_sort(shifts.n, shifts.a);
                         } else if (splice_shifts.n == 0) {
                             kv_copy(IsoformFrameshift, shifts, variant_shifts);
+                            ks_introsort_frameshift_sort(shifts.n, shifts.a);
                         } else {
                             if (t->strand == STRAND_FWD) {
                                 size_t ri = 0, si = 0;
@@ -2645,6 +2656,7 @@ int main(int argc, char *argv[]) {
                         const char stop_codons[3][3] = STOP_CODONS;
 
                         int affected_bases = 0; // TODO: Right now this value is absolute, after the refactor it shouldn't be
+                        int rescued = 0;
                         enum RescueType rescue_type = NO_RESCUE;
                         enum PTVType ptv_type = NO_PTV;
                         for (int ri = 0; ri < shifts.n; ri++) {
@@ -2679,6 +2691,7 @@ int main(int argc, char *argv[]) {
                                 if (!is_stop) {
                                     log_error("%d:%d t=%i if=%i STOP RESCUE", r->v->rid, r->v->pos, ti, i);
                                     rescue_type = COMPLETE_RESCUE;
+                                    rescued = 1;
                                 }
                             }
 
@@ -2688,14 +2701,15 @@ int main(int argc, char *argv[]) {
                             if (csq->triggers[SPLICE_TRIGGER] && rescue_type == NO_RESCUE) {
                                 if (iso_shift.shift == 0) {
                                     rescue_type = COMPLETE_RESCUE;
+                                    rescued = 1;
                                     continue;
                                 }
 
-                                // TODO: Check for partial exon skipping/intron retention
-                                if (iso_shift.shift % 3 == 0 && abs(iso_shift.shift) < 15) {
-                                    rescue_type = iso_shift.shift > 0 ? INTRON_RETENTION : PARTIAL_EXON_SKIPPING;
-                                    affected_bases = iso_shift.shift;
+                                rescue_type = iso_shift.shift > 0 ? INTRON_RETENTION : EXON_SKIPPING;
+                                affected_bases = iso_shift.shift;
 
+                                if (iso_shift.shift % 3 == 0 && abs(iso_shift.shift) < 15) {
+                                    rescued = 1;
                                     int splice_insertion_length = iso_shift.shift > 0 ? iso_shift.shift : 0;
                                     should_check_induced = 1;
                                     if (t->strand == STRAND_FWD) {
@@ -2708,15 +2722,18 @@ int main(int argc, char *argv[]) {
                                 }
                             }
 
-                            if ((csq->triggers[FRAMESHIFT_TRIGGER] || csq->triggers[SPLICE_TRIGGER]) && rescue_type == NO_RESCUE) {
+                            if ((csq->triggers[FRAMESHIFT_TRIGGER] || csq->triggers[SPLICE_TRIGGER]) && 
+                                (rescue_type == NO_RESCUE || rescue_type == INTRON_RETENTION || rescue_type == EXON_SKIPPING)) {
                                 if (iso_shift.shift == 0) continue;
 
                                 if (iso_shift.shift % 3 == 0 && abs(iso_shift.shift) < MAX_FRAMESHIFT_RADIUS) { // TODO: Is this possible?
+                                    rescued = 1;
                                     rescue_type = FRAME_RESTORING_INDEL;
                                     affected_bases = iso_shift.shift;
                                 } else {
                                     int32_t summed_shift = 0;
                                     int32_t shift_start = 0;
+                                    int included_current_shift = 0;
                                     for (int i = 0; i < shifts.n; i++) {
                                         IsoformFrameshift shift = kv_A(shifts, i);
                                         if (shift.shift == 0) continue; // Rescued splice, do nothing
@@ -2725,14 +2742,19 @@ int main(int argc, char *argv[]) {
                                         if (shift.seq_pos - MAX_FRAMESHIFT_RADIUS > shift_start) {
                                             summed_shift = shift.shift;
                                             shift_start = shift.seq_pos;
+                                            included_current_shift = 0;
                                             continue;
                                         }
+
+                                        // Keep track of whether the set of frameshifts includes the target 
+                                        if (!included_current_shift && shift.r == r) included_current_shift = 1;
 
                                         summed_shift += shift.shift;
                                         if (summed_shift % 3 != 0) continue;
 
-                                        if (shift.seq_pos + MAX_FRAMESHIFT_RADIUS > iso_shift.seq_pos && shift.seq_pos - MAX_FRAMESHIFT_RADIUS < iso_shift.seq_pos) {
-                                            rescue_type = FRAME_RESTORING_INDEL; // Only set to rescue type if it is the current shift
+                                        if (included_current_shift && shift.seq_pos + MAX_FRAMESHIFT_RADIUS > iso_shift.seq_pos && shift.seq_pos - MAX_FRAMESHIFT_RADIUS < iso_shift.seq_pos) {
+                                            rescued = 1;
+                                            rescue_type = (rescue_type == NO_RESCUE) ? FRAME_RESTORING_INDEL : rescue_type; // Only set to rescue type
                                             int32_t shift_end = shift.seq_pos;
                                             affected_bases = abs(shift_end - shift_start);
 
@@ -2749,6 +2771,7 @@ int main(int argc, char *argv[]) {
 
                                         summed_shift = 0;
                                         shift_start = 0;
+                                        included_current_shift = 0;
                                     }
                                 }
                             }
@@ -2790,8 +2813,8 @@ int main(int argc, char *argv[]) {
                             rescue_type == COMPLETE_RESCUE || 
                             rescue_type == POSSIBLE_REINITIATION ||
                             (rescue_type == FRAME_RESTORING_INDEL) ||
-                            (rescue_type == PARTIAL_EXON_SKIPPING && affected_bases <= 15 && affected_bases % 3 == 0) ||
-                            (rescue_type == PARTIAL_INTRON_RETENTION && affected_bases <= 15 && affected_bases % 3 == 0)
+                            (rescue_type == EXON_SKIPPING && affected_bases <= 15 && affected_bases % 3 == 0) ||
+                            (rescue_type == INTRON_RETENTION && affected_bases <= 15 && affected_bases % 3 == 0)
                         );
                         isoform->rescue_type = rescue_type;
                         isoform->affected_bases = affected_bases;
@@ -2908,24 +2931,44 @@ int main(int argc, char *argv[]) {
 
             if (!triggered) continue;
 
+            kstring_t rescue_tag = {0};
+            kstring_t rescue_prob_tag = {0};
             kstring_t rescue_type_tag = {0};
 
             for (int ti = 0; ti < r->transcript_genes->n; ti++) {
-                if (ti > 0) kputc(',', &rescue_type_tag);
+                if (ti > 0) {
+                    kputc(',', &rescue_tag);
+                    kputc(',', &rescue_prob_tag);
+                    kputc(',', &rescue_type_tag);
+                }
 
                 if (kv_A(*r->transcript_genes, ti) == NULL) {
+                    kputc('.', &rescue_tag);
+                    kputc('.', &rescue_prob_tag);
                     kputc('.', &rescue_type_tag);
                     continue;
                 }
 
                 for (int p = 0; p < NUM_PHASES; p++) {
-                    if (p > 0) kputc('&', &rescue_type_tag);
+                    if (p > 0) {
+                        kputc('&', &rescue_tag);
+                        kputc('&', &rescue_prob_tag);
+                        kputc('&', &rescue_type_tag);
+                    }
 
                     Isoforms isoforms = r->isoforms[ti * NUM_PHASES + p];
                     if (!isoforms.valid) {
+                        kputc('.', &rescue_tag);
+                        kputc('.', &rescue_prob_tag);
                         kputs(".|.|.", &rescue_type_tag);
                         continue;
                     }
+
+                    kputw(isoforms.rescue, &rescue_tag);
+
+                    char prob_s[7];
+                    sprintf(prob_s, "%.4f", isoforms.ptv_probability);
+                    kputsn(prob_s, 6, &rescue_prob_tag);
 
                     kstring_t transcript_phase_tag = generate_rescue_type_tag(&isoforms);
                     kputsn(transcript_phase_tag.s, transcript_phase_tag.l, &rescue_type_tag);
@@ -2934,7 +2977,7 @@ int main(int argc, char *argv[]) {
 
             bcf_update_info_string(hdr, r->v, RESCUE_TYPE_TAG, rescue_type_tag.s);
 
-
+            int has_ptv;
             kstring_t ptv_tag = {0};
             kstring_t ptv_prob_tag = {0};
             kstring_t ptv_type_tag = {0};
@@ -2965,9 +3008,11 @@ int main(int argc, char *argv[]) {
                     switch(isoforms.ptv_type) {
                         case STOP_GAINED:
                             kputs("stop_gained", &ptv_type_tag);
+                            has_ptv = 1;
                             break;
                         case FRAMESHIFT:
                             kputs("frameshift", &ptv_type_tag);
+                            has_ptv = 1;
                             break;
                         case NO_PTV:
                             kputs("no_ptv", &ptv_type_tag);
@@ -2976,6 +3021,8 @@ int main(int argc, char *argv[]) {
                 }
 
             }
+
+            if (!has_ptv) continue;
 
             bcf_update_info_string(hdr, r->v, PTV_TAG, ptv_tag.s);
             bcf_update_info_string(hdr, r->v, PTV_PROB_TAG, ptv_prob_tag.s);
