@@ -72,7 +72,7 @@
 #define STOP_GAIN_VALUE 2
 
 #define PROXIMITY_THRESHOLD 15
-#define AF_THRESHOLD 0.01
+#define AF_THRESHOLD 0.001
 
 #define START_CODON "ATG"
 #define COMPLEMENTARY_START_CODON "CAT"
@@ -149,14 +149,14 @@ typedef struct IsoformFrameshift {
     uint32_t seq_pos;
     int shift;
     Record *r;
-} IsoformFrameshift;
+} IsoformVariant;
 
 #define empty_free(x) 
-KLIST_INIT(RecordContext, IsoformFrameshift, empty_free);
+KLIST_INIT(RecordContext, IsoformVariant, empty_free);
 
 
 #define frameshift_lt(a, b) ((a).seq_pos < (b).seq_pos)
-KSORT_INIT(frameshift_sort, IsoformFrameshift, frameshift_lt)
+KSORT_INIT(frameshift_sort, IsoformVariant, frameshift_lt)
 
 Range variant_to_range(const bcf1_t *v, const int allele) {
     return (Range) { v->pos, v->pos + strlen(v->d.allele[allele]) };
@@ -1129,7 +1129,7 @@ int has_af_trigger(bcf1_t *record, bcf_hdr_t *hdr) {
     // Set based on INFO/MAX_AF
     if (bcf_get_info_float(hdr, record, "MAX_AF", &af_value, &ndst) <= 0) return 0;
 
-    return *af_value >= AF_THRESHOLD;
+    return *af_value <= AF_THRESHOLD;
 }
 
 int has_mnv_trigger(bcf1_t *record, bcf_hdr_t *hdr) {
@@ -1395,7 +1395,7 @@ int main(int argc, char *argv[]) {
             Record *r = kv_A(*block.records, i);
             // int is_cryptic = trigger_cryptic_splice(r->v, hdr);
             int is_af_triggered = has_af_trigger(r->v, hdr);
-            int is_mnv_triggered = has_af_trigger(r->v, hdr);
+            int is_mnv_triggered = has_mnv_trigger(r->v, hdr);
 
             int canonical_splice_trigger = 0;
 
@@ -1762,7 +1762,8 @@ int main(int argc, char *argv[]) {
                     SpliceProbability *splice_probabilities;
                     int num_splice_probabilities = create_splice_probabilities(vposition, r, r->tscripts, current_gene, num_hap_alt_predictions, hap_alt_predictions, &splice_probabilities);
 
-
+                    // If there's less than 0.2 change, don't predict for competitors and pairs
+                    if (r->cs[g * NUM_PHASES + p]->sum < SPLICEAI_RESCUE_THRESHOLD) continue;
 
                     for (int i = 0; i < r->tscripts->n; i++) {
                         Transcript *t = kv_A(*r->tscripts, i);
@@ -2583,7 +2584,7 @@ int main(int argc, char *argv[]) {
                         }
 
                         // Get isoform position for each record
-                        kvec_t(IsoformFrameshift) variant_shifts; kv_init(variant_shifts);
+                        kvec_t(IsoformVariant) variant_shifts; kv_init(variant_shifts);
                         int64_t **record_positions = malloc(hap_in.n * sizeof(int64_t *));
                         int64_t variant_offsets[hap_in.n];
                         int num_coding_variants = 0;
@@ -2608,12 +2609,12 @@ int main(int argc, char *argv[]) {
                             variant_offsets[i] = offset;
                             num_coding_variants++;
 
-                            IsoformFrameshift isoshift = {isoform_position, variant_offsets[i], hap_r};
-                            kv_push(IsoformFrameshift, variant_shifts, isoshift);
+                            IsoformVariant isoshift = {isoform_position, variant_offsets[i], hap_r};
+                            kv_push(IsoformVariant, variant_shifts, isoshift);
                         }
 
                         // Get isoform position for splice site changes
-                        kvec_t(IsoformFrameshift) splice_shifts; kv_init(splice_shifts);
+                        kvec_t(IsoformVariant) splice_shifts; kv_init(splice_shifts);
                         int64_t **splice_positions = malloc(2 * ncrs->n * sizeof(int64_t *));
                         int64_t splice_offsets[2*ncrs->n];
                         int num_splice_sites = 0;
@@ -2628,8 +2629,9 @@ int main(int argc, char *argv[]) {
                                     *(splice_positions[num_splice_sites]) = isoform_position;
                                     splice_offsets[num_splice_sites] = -(ncr.canonical_coords.start - ncr.coords.start); // range_len(ncr.canonical_coords) - range_len(ncr.coords);
 
-                                    IsoformFrameshift isoshift = {isoform_position, splice_offsets[num_splice_sites], (Record *) ncr.record_ptr};
-                                    kv_push(IsoformFrameshift, variant_shifts, isoshift);
+                                    IsoformVariant variant = {isoform_position, splice_offsets[num_splice_sites], NULL };
+                                    if (ncr.donor != NULL && ncr.donor->record_ptr != NULL) variant.r = (Record *) ncr.donor->record_ptr;
+                                    kv_push(IsoformVariant, splice_shifts, variant);
                                     num_splice_sites++;
                                 }
 
@@ -2640,8 +2642,9 @@ int main(int argc, char *argv[]) {
                                     *(splice_positions[num_splice_sites]) = isoform_position;
                                     splice_offsets[num_splice_sites] = ncr.canonical_coords.end - ncr.coords.end; // range_len(ncr.canonical_coords) - range_len(ncr.coords);
 
-                                    IsoformFrameshift isoshift = {isoform_position, splice_offsets[num_splice_sites], (Record *) ncr.record_ptr};
-                                    kv_push(IsoformFrameshift, variant_shifts, isoshift);
+                                    IsoformVariant variant = {isoform_position, splice_offsets[num_splice_sites], NULL };
+                                    if (ncr.acceptor != NULL && ncr.acceptor->record_ptr != NULL) variant.r = (Record *) ncr.acceptor->record_ptr;
+                                    kv_push(IsoformVariant, splice_shifts, variant);
                                     num_splice_sites++;
 
                                 }
@@ -2657,8 +2660,9 @@ int main(int argc, char *argv[]) {
                                     *(splice_positions[num_splice_sites]) = isoform_position;
                                     splice_offsets[num_splice_sites] = ncr.canonical_coords.end - ncr.coords.end; // range_len(ncr.canonical_coords) - range_len(ncr.coords);
 
-                                    IsoformFrameshift isoshift = {isoform_position, splice_offsets[num_splice_sites], (Record *) ncr.record_ptr};
-                                    kv_push(IsoformFrameshift, variant_shifts, isoshift);
+                                    IsoformVariant variant = {isoform_position, splice_offsets[num_splice_sites], NULL };
+                                    if (ncr.donor != NULL && ncr.donor->record_ptr != NULL) variant.r = (Record *) ncr.donor->record_ptr;
+                                    kv_push(IsoformVariant, variant_shifts, variant);
                                     num_splice_sites++;
                                 }
 
@@ -2669,53 +2673,72 @@ int main(int argc, char *argv[]) {
                                     *(splice_positions[num_splice_sites]) = isoform_position;
                                     splice_offsets[num_splice_sites] = -(ncr.canonical_coords.start - ncr.coords.start); // range_len(ncr.canonical_coords) - range_len(ncr.coords);
 
-                                    IsoformFrameshift isoshift = {isoform_position, splice_offsets[num_splice_sites], (Record *) ncr.record_ptr};
-                                    kv_push(IsoformFrameshift, variant_shifts, isoshift);
+                                    IsoformVariant variant = {isoform_position, splice_offsets[num_splice_sites], NULL };
+                                    if (ncr.acceptor != NULL && ncr.acceptor->record_ptr != NULL) variant.r = (Record *) ncr.acceptor->record_ptr;
+                                    kv_push(IsoformVariant, variant_shifts, variant);
                                     num_splice_sites++;
                                 }
                             }
                         }
 
-                        kvec_t(IsoformFrameshift) shifts;
+
+
+                        kvec_t(IsoformVariant) shifts;
                         kv_init(shifts);
 
                         if (variant_shifts.n == 0 && splice_shifts.n == 0) {
 
                         } else if (variant_shifts.n == 0) {
-                            kv_copy(IsoformFrameshift, shifts, splice_shifts);
-                            ks_introsort_frameshift_sort(shifts.n, shifts.a);
+                            kv_copy(IsoformVariant, shifts, splice_shifts);
+                            // ks_introsort_frameshift_sort(shifts.n, shifts.a);
                         } else if (splice_shifts.n == 0) {
-                            kv_copy(IsoformFrameshift, shifts, variant_shifts);
-                            ks_introsort_frameshift_sort(shifts.n, shifts.a);
+                            kv_copy(IsoformVariant, shifts, variant_shifts);
+                            // ks_introsort_frameshift_sort(shifts.n, shifts.a);
                         } else {
                             if (t->strand == STRAND_FWD) {
                                 size_t ri = 0, si = 0;
                                 while (ri < variant_shifts.n && si < splice_shifts.n) {
-                                    IsoformFrameshift variant = kv_A(variant_shifts, ri);
-                                    IsoformFrameshift splice = kv_A(splice_shifts, si);
+                                    IsoformVariant variant = kv_A(variant_shifts, ri);
+                                    IsoformVariant splice = kv_A(splice_shifts, si);
                                     if (variant.seq_pos < splice.seq_pos) {
-                                        kv_push(IsoformFrameshift, shifts, variant);
+                                        kv_push(IsoformVariant, shifts, variant);
                                         ri++;
                                     } else {
-                                        kv_push(IsoformFrameshift, shifts, splice);
+                                        kv_push(IsoformVariant, shifts, splice);
                                         si++;
                                     }
                                 }
                             } else if (t->strand == STRAND_REV) {
                                 size_t ri = variant_shifts.n, si = splice_shifts.n;
                                 while (ri > 0 && si > 0) {
-                                    IsoformFrameshift variant = kv_A(variant_shifts, ri-1);
-                                    IsoformFrameshift splice = kv_A(splice_shifts, si-1);
+                                    IsoformVariant variant = kv_A(variant_shifts, ri-1);
+                                    IsoformVariant splice = kv_A(splice_shifts, si-1);
                                     if (variant.seq_pos > splice.seq_pos) {
-                                        kv_push(IsoformFrameshift, shifts, variant);
+                                        kv_push(IsoformVariant, shifts, variant);
                                         ri--;
                                     } else {
-                                        kv_push(IsoformFrameshift, shifts, splice);
+                                        kv_push(IsoformVariant, shifts, splice);
                                         si--;
                                     }
                                 }
                             }
                         }
+
+
+                        // Filter to shifts that overlap the isoform
+                        size_t j = 0; // Index for the next valid position
+                        for (size_t i = 0; i < kv_size(shifts); i++) {
+                            IsoformVariant shift = kv_A(shifts, i);
+                            if (shift.r == NULL) continue;
+
+                            int vposition = shift.r->v->pos - haplotype_offset(&hap_in, (Range) { gene->coords.start, shift.r->v->pos });
+                            if ((t->strand == STRAND_FWD && shift.seq_pos >= shifted_isoform.start && shift.seq_pos < shifted_isoform.end) || 
+                                (t->strand == STRAND_REV && shift.seq_pos >= shifted_isoform.end && shift.seq_pos < shifted_isoform.start)) {
+                                kv_A(shifts, j++) = kv_A(shifts, i);
+                            }
+                        }
+                        shifts.n = j; // Adjust the size of the vector
+
 
                         // Reverse direction if necessary, 3' - 5' --> 5' - 3'
                         log_info("%s:%li (isoform_length=%i)", bcf_hdr_id2name(hdr, r->v->rid), r->v->pos, spliced_seq.l); 
@@ -2736,10 +2759,12 @@ int main(int argc, char *argv[]) {
                         int rescued = 0;
                         enum RescueType rescue_type = NO_RESCUE;
                         enum PTVType ptv_type = NO_PTV;
+                        int touched = 0;
                         for (int ri = 0; ri < shifts.n; ri++) {
-                            IsoformFrameshift iso_shift = kv_A(shifts, ri);
+                            IsoformVariant iso_shift = kv_A(shifts, ri);
                             if (iso_shift.r != r) continue;
 
+                            touched = 1;
                             if (csq->triggers[STOP_TRIGGER]) {
                                 int codon_start;
                                 if (t->strand == STRAND_FWD) {
@@ -2816,7 +2841,7 @@ int main(int argc, char *argv[]) {
                                     int32_t shift_start = 0;
                                     int included_current_shift = 0;
                                     for (int i = 0; i < shifts.n; i++) {
-                                        IsoformFrameshift shift = kv_A(shifts, i);
+                                        IsoformVariant shift = kv_A(shifts, i);
                                         if (shift.shift == 0) continue; // Rescued splice, do nothing
 
                                         // If outside of rescue radius
@@ -2878,6 +2903,11 @@ int main(int argc, char *argv[]) {
                                 log_error("%d:%d t=%i if=%i STOP GAIN", r->v->rid, r->v->pos, ti, i);
                                 ptv_type = STOP_GAINED;
                             }
+                        }
+
+                        if (touched && csq->triggers[SPLICE_TRIGGER] == AF_SPLICE_VALUE) {
+                            rescued = 1;
+                            rescue_type = 1;
                         }
 
                         float isoform_prior = 1.0;
@@ -3072,7 +3102,7 @@ int main(int argc, char *argv[]) {
 
             if (!triggered) continue;
 
-            int has_ptv;
+            int has_ptv = 0;
             kstring_t ptv_tag = {0};
             kstring_t ptv_prob_tag = {0};
             kstring_t ptv_type_tag = {0};
