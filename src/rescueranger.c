@@ -89,7 +89,7 @@
 #define RESCUE_DESC "##INFO=<ID=RESCUE,Number=.,Type=String,Description=\"Boolean rescue prediction\">"
 
 #define RESCUE_PROB_TAG "RESCUE_PROB"
-#define RESCUE_PROB_DESC "##INFO=<ID=RESCUE_PROB,Number=.,Type=Float,Description=\"Probability of rescue\">"
+#define RESCUE_PROB_DESC "##INFO=<ID=RESCUE_PROB,Number=.,Type=String,Description=\"Probability of rescue\">"
 
 #define RESCUE_TYPE_TAG "RESCUE_TYPE"
 #define RESCUE_TYPE_DESC "##INFO=<ID=RESCUE_TYPE,Number=.,Type=String,Description=\"Information on type of rescue. Format: RESCUE_TYPE|EXON_NUMBER|PROBABILITY|AFFECTED_BASES\">"
@@ -1762,8 +1762,8 @@ int main(int argc, char *argv[]) {
                     SpliceProbability *splice_probabilities;
                     int num_splice_probabilities = create_splice_probabilities(vposition, r, r->tscripts, current_gene, num_hap_alt_predictions, hap_alt_predictions, &splice_probabilities);
 
-                    // If there's less than 0.2 change, don't predict for competitors and pairs
-                    if (r->cs[g * NUM_PHASES + p]->sum < SPLICEAI_RESCUE_THRESHOLD) continue;
+                    // If there's less than 0.2 change between ref and hap alt, don't predict for competitors and pairs
+                    if (score.ag < SPLICEAI_RESCUE_THRESHOLD && score.al < SPLICEAI_RESCUE_THRESHOLD && score.dg < SPLICEAI_RESCUE_THRESHOLD && score.dl < SPLICEAI_RESCUE_THRESHOLD) continue;
 
                     for (int i = 0; i < r->tscripts->n; i++) {
                         Transcript *t = kv_A(*r->tscripts, i);
@@ -2732,8 +2732,8 @@ int main(int argc, char *argv[]) {
                             if (shift.r == NULL) continue;
 
                             int vposition = shift.r->v->pos - haplotype_offset(&hap_in, (Range) { gene->coords.start, shift.r->v->pos });
-                            if ((t->strand == STRAND_FWD && shift.seq_pos >= shifted_isoform.start && shift.seq_pos < shifted_isoform.end) || 
-                                (t->strand == STRAND_REV && shift.seq_pos >= shifted_isoform.end && shift.seq_pos < shifted_isoform.start)) {
+                            if ((t->strand == STRAND_FWD && vposition >= shifted_isoform.start && vposition < shifted_isoform.end) || 
+                                (t->strand == STRAND_REV && vposition >= shifted_isoform.end && vposition < shifted_isoform.start)) {
                                 kv_A(shifts, j++) = kv_A(shifts, i);
                             }
                         }
@@ -3086,8 +3086,8 @@ int main(int argc, char *argv[]) {
                 }
             }
 
-            bcf_update_info_string(hdr, r->v, RESCUE_TAG, rescue_type_tag.s);
-            bcf_update_info_string(hdr, r->v, RESCUE_PROB_TAG, rescue_type_tag.s);
+            bcf_update_info_string(hdr, r->v, RESCUE_TAG, rescue_tag.s);
+            bcf_update_info_string(hdr, r->v, RESCUE_PROB_TAG, rescue_prob_tag.s);
             bcf_update_info_string(hdr, r->v, RESCUE_TYPE_TAG, rescue_type_tag.s);
         }
 
@@ -3123,6 +3123,8 @@ int main(int argc, char *argv[]) {
                     }
 
                     Isoforms isoforms = r->isoforms[ti * NUM_PHASES + p];
+
+                    if (!isoforms.valid) continue;
 
                     kputw(isoforms.ptv, &ptv_tag);
 
