@@ -1681,7 +1681,7 @@ int main(int argc, char *argv[]) {
 
                     Range ref_boundary = { start, end };
                     char *ref_padded = pad_sequence(ref_seq, ref_boundary, WIDTH);
-                    float *ref_predictions; int num_ref_predictions;
+                    float *ref_predictions = NULL; int num_ref_predictions = 0;
                     int ref_len = strlen(ref_padded);
                     predict_for_seq(models, ref_padded, ref_len, gene->strand, &ref_predictions, &num_ref_predictions);
                     free(ref_padded);
@@ -1702,7 +1702,7 @@ int main(int argc, char *argv[]) {
 
                     Range hap_ref_boundary = {hap_ref_start, hap_ref_end};
                     char *hap_ref_padded = pad_sequence(hap_ref_seq, hap_ref_boundary, WIDTH - pred_offset);
-                    float *hap_ref_predictions; int num_hap_ref_predictions;
+                    float *hap_ref_predictions = NULL; int num_hap_ref_predictions = 0;
                     int hap_ref_len = strlen(hap_ref_padded);
                     predict_for_seq(models, hap_ref_padded, hap_ref_len, gene->strand, &hap_ref_predictions, &num_hap_ref_predictions);
                     float *corrected_hap_ref_predictions = match_predictions_to_reference(hap_ref_predictions, r->v, &hap_ex, num_ref_predictions);
@@ -1723,7 +1723,7 @@ int main(int argc, char *argv[]) {
 
                     Range hap_alt_boundary = {hap_alt_start, hap_alt_end};
                     char *hap_alt_padded = pad_sequence(hap_alt_seq, hap_alt_boundary, WIDTH - pred_offset);
-                    float *hap_alt_predictions; int num_hap_alt_predictions;
+                    float *hap_alt_predictions = NULL; int num_hap_alt_predictions = 0;
                     int hap_alt_len = strlen(hap_alt_padded);
                     predict_for_seq(models, hap_alt_padded, hap_alt_len, gene->strand, &hap_alt_predictions, &num_hap_alt_predictions);
                     float *corrected_hap_alt_predictions = match_predictions_to_reference(hap_alt_predictions, r->v, &hap_in, num_ref_predictions);
