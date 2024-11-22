@@ -98,7 +98,7 @@
 #define PTV_DESC "##INFO=<ID=PTV,Number=.,Type=String,Description=\"Newly predicted PTV consequence\">"
 
 #define PTV_PROB_TAG "PTV_PROB"
-#define PTV_PROB_DESC "##INFO=<ID=PTV_PROB_DESC,Number=.,Type=String,Description=\"Probability of induced PTV\">"
+#define PTV_PROB_DESC "##INFO=<ID=PTV_PROB,Number=.,Type=String,Description=\"Probability of induced PTV\">"
 
 #define PTV_TYPE_TAG "PTV_TYPE"
 #define PTV_TYPE_DESC "##INFO=<ID=PTV_TYPE,Number=.,Type=String,Description=\"Type of PTV\">"
@@ -226,6 +226,7 @@ void predict_for_seq(Model *models, const char *seq, int seq_len, int strand, fl
 
     if (strand == STRAND_REV) reverse_encoding(ohe, enc_len);
 
+    // log_info("Enc len: %i", enc_len);
     if (predict(models, enc_len, 1, &ohe, num_predictions, predictions)) {
         log_info("Predict failed.");
         return;
@@ -924,8 +925,8 @@ int create_splice_probabilities(int vposition, Record *r, Transcripts *transcrip
 
     int pred_width = num_hap_alt_predictions / NUM_SCORES;
     Range pred_range = { vposition - CAI_DISTANCE, vposition - CAI_DISTANCE + pred_width };
-    // log_info("Length: %i, # transcripts: %i", pred_width, transcripts->n);
     int canonicals[pred_width];
+    // log_info("Length: %i, # transcripts: %i", pred_width, transcripts->n);
     for (int i = 0; i < pred_width; i++) canonicals[i] = 0;
     for (int ti = 0; ti < transcripts->n; ti++) {
         Transcript *t = kv_A(*transcripts, ti);
@@ -939,19 +940,21 @@ int create_splice_probabilities(int vposition, Record *r, Transcripts *transcrip
                 continue;
             }
 
-            if (e->bounds->start >= pred_range.start && e->bounds->start < pred_range.end) {
+
+            if (((t->strand == STRAND_FWD && ei > 0) || (t->strand == STRAND_REV && ei < t->nexons-1)) && e->bounds->start >= pred_range.start && e->bounds->start < pred_range.end) {
                 int index = (int32_t) e->bounds->start - vposition + CAI_DISTANCE;
 
-                // log_info("Index: %i", index);
+                // log_info("Acceptor: index=%i, value=%f, ti=%i", index, posterior_probabilities[index * NUM_SCORES + ACCEPTOR], ti);
 
                 // Only add for loss of canonical site
                 if(canonicals[index] == 0 && posterior_probabilities[index * NUM_SCORES + ACCEPTOR] == 0) num_splice_probabilities++;
                 canonicals[index] = ACCEPTOR;
 
-            } else if (e->bounds->end >= pred_range.start && e->bounds->end < pred_range.end) {
+            }
+            if (((t->strand == STRAND_FWD && ei < t->nexons-1) || (t->strand == STRAND_REV && ei > 0)) && e->bounds->end >= pred_range.start && e->bounds->end < pred_range.end) {
                 int index = (int32_t) e->bounds->end - vposition + CAI_DISTANCE;
 
-                // log_info("Index: %i", index);
+                // log_info("Donor: index=%i, value=%f, ti=%i", index, posterior_probabilities[index * NUM_SCORES + DONOR], ti);
 
                 // Only add for loss of canonical site
                 if(canonicals[index] == 0 && posterior_probabilities[index * NUM_SCORES + DONOR] == 0) num_splice_probabilities++;
@@ -959,6 +962,7 @@ int create_splice_probabilities(int vposition, Record *r, Transcripts *transcrip
             }
         }
     }
+    // log_info("Num splice probabilities: %i", num_splice_probabilities);
 
     SpliceProbability *probabilities = malloc(num_splice_probabilities * sizeof(SpliceProbability));
     int prob_idx = 0;
@@ -985,6 +989,7 @@ int create_splice_probabilities(int vposition, Record *r, Transcripts *transcrip
         int offset_from_variant = ((int) (i / NUM_SCORES)) - CAI_DISTANCE;
         int prediction_position = vposition + offset_from_variant;
 
+        // log_info("Type: %i, offset: %i, prediction_position: %i, prior: %f, posterior: %f", type, offset_from_variant, prediction_position, prior_probability, posterior_probability);
         probabilities[prob_idx++] = (SpliceProbability) { r, type, prior_probability, posterior_probability, prediction_position, 0 };
     }
 
@@ -1433,7 +1438,7 @@ int main(int argc, char *argv[]) {
                     }
                 }
 
-                if (is_af_triggered) transcript_consequence->triggers[SPLICE_TRIGGER] = AF_SPLICE_VALUE;
+                if (is_af_triggered && !transcript_consequence->triggers[SPLICE_TRIGGER]) transcript_consequence->triggers[SPLICE_TRIGGER] = AF_SPLICE_VALUE;
                 if (is_mnv_triggered && !transcript_consequence->triggers[STOP_TRIGGER]) transcript_consequence->triggers[STOP_TRIGGER] = STOP_GAIN_VALUE;
             }
 
@@ -1679,11 +1684,14 @@ int main(int argc, char *argv[]) {
                     if (start < 0) start = 0;
                     if (end < 0) end = 0;
 
+                    // log_info("%s:%li (ref)", bcf_hdr_id2name(hdr, r->v->rid), r->v->pos); 
                     Range ref_boundary = { start, end };
                     char *ref_padded = pad_sequence(ref_seq, ref_boundary, WIDTH);
                     float *ref_predictions = NULL; int num_ref_predictions = 0;
                     int ref_len = strlen(ref_padded);
+                    // log_info("ref_len: %i", ref_len);
                     predict_for_seq(models, ref_padded, ref_len, gene->strand, &ref_predictions, &num_ref_predictions);
+                    // log_info("num_ref_predictions: %i", num_ref_predictions);
                     free(ref_padded);
 
                     // HAP REF
@@ -1700,6 +1708,7 @@ int main(int argc, char *argv[]) {
                     if (hap_ref_start < 0) hap_ref_start = 0;
                     if (hap_ref_end < 0) hap_ref_end = 0;
 
+                    // log_info("%s:%li (hap_ref)", bcf_hdr_id2name(hdr, r->v->rid), r->v->pos); 
                     Range hap_ref_boundary = {hap_ref_start, hap_ref_end};
                     char *hap_ref_padded = pad_sequence(hap_ref_seq, hap_ref_boundary, WIDTH - pred_offset);
                     float *hap_ref_predictions = NULL; int num_hap_ref_predictions = 0;
@@ -1721,6 +1730,7 @@ int main(int argc, char *argv[]) {
                     if (hap_alt_start < 0) hap_alt_start = 0;
                     if (hap_alt_end < 0) hap_alt_end = 0;
 
+                    // log_info("%s:%li (hap_alt)", bcf_hdr_id2name(hdr, r->v->rid), r->v->pos); 
                     Range hap_alt_boundary = {hap_alt_start, hap_alt_end};
                     char *hap_alt_padded = pad_sequence(hap_alt_seq, hap_alt_boundary, WIDTH - pred_offset);
                     float *hap_alt_predictions = NULL; int num_hap_alt_predictions = 0;
@@ -2757,12 +2767,15 @@ int main(int argc, char *argv[]) {
 
                         int affected_bases = 0; // TODO: Right now this value is absolute, after the refactor it shouldn't be
                         int rescued = 0;
+                        int rescue_checked = 0;
                         enum RescueType rescue_type = NO_RESCUE;
                         enum PTVType ptv_type = NO_PTV;
                         int touched = 0;
                         for (int ri = 0; ri < shifts.n; ri++) {
                             IsoformVariant iso_shift = kv_A(shifts, ri);
                             if (iso_shift.r != r) continue;
+
+                            if (rescue_checked) continue;
 
                             touched = 1;
                             if (csq->triggers[STOP_TRIGGER]) {
@@ -2794,6 +2807,8 @@ int main(int argc, char *argv[]) {
                                     log_error("%d:%d t=%i if=%i STOP RESCUE", r->v->rid, r->v->pos, ti, i);
                                     rescue_type = COMPLETE_RESCUE;
                                     rescued = 1;
+                                } else if (csq->triggers[STOP_TRIGGER] == STOP_RESCUE_VALUE) {
+                                    rescue_checked = 1;
                                 }
 
                                 if (is_stop && csq->triggers[STOP_TRIGGER] == STOP_GAIN_VALUE) {
@@ -2804,7 +2819,7 @@ int main(int argc, char *argv[]) {
                             int should_check_induced = 0;
                             Range possible_induced_sequence = {0};
 
-                            if (csq->triggers[SPLICE_TRIGGER] && rescue_type == NO_RESCUE) {
+                            if (csq->triggers[SPLICE_TRIGGER] && rescue_type == NO_RESCUE && rescue_checked) {
                                 if (iso_shift.shift == 0) {
                                     rescue_type = COMPLETE_RESCUE;
                                     rescued = 1;
@@ -2825,11 +2840,14 @@ int main(int argc, char *argv[]) {
                                         possible_induced_sequence.start = (int) ((shifted_isoform.end - iso_shift.seq_pos - 1) / 3) * 3;
                                         possible_induced_sequence.end = (shifted_isoform.end - iso_shift.seq_pos - 1) + splice_insertion_length + 1;
                                     }
+                                } else if (csq->triggers[SPLICE_TRIGGER] == 2 && iso_shift.shift % 3 != 0) {
+                                    rescued = 0;
+                                    ptv_type = FRAMESHIFT;
                                 }
                             }
 
                             if ((csq->triggers[FRAMESHIFT_TRIGGER] || csq->triggers[SPLICE_TRIGGER]) && 
-                                (rescue_type == NO_RESCUE || rescue_type == INTRON_RETENTION || rescue_type == EXON_SKIPPING)) {
+                                (rescue_type == NO_RESCUE || rescue_type == INTRON_RETENTION || rescue_type == EXON_SKIPPING || ptv_type == FRAMESHIFT)) {
                                 if (iso_shift.shift == 0) continue;
 
                                 if (iso_shift.shift % 3 == 0 && abs(iso_shift.shift) < MAX_FRAMESHIFT_RADIUS) { // TODO: Is this possible?
@@ -2864,6 +2882,8 @@ int main(int argc, char *argv[]) {
                                             int32_t shift_end = shift.seq_pos;
                                             affected_bases = abs(shift_end - shift_start);
 
+                                            if (ptv_type == FRAMESHIFT) ptv_type = NO_PTV;
+
                                             should_check_induced = 1;
                                             if (t->strand == STRAND_FWD) {
                                                 possible_induced_sequence.start = (int) ((shift_start - shifted_isoform.start + 1) / 3) * 3;
@@ -2882,7 +2902,11 @@ int main(int argc, char *argv[]) {
                                 }
                             }
 
-                            if (!should_check_induced) continue;
+                            if (!should_check_induced) {
+                                rescue_checked = 1;
+                                rescue_type = NO_RESCUE;
+                                continue;
+                            }
 
                             const char *codon = spliced_seq.s + possible_induced_sequence.start;
 
@@ -2902,12 +2926,15 @@ int main(int argc, char *argv[]) {
                             if (is_stop) {
                                 log_error("%d:%d t=%i if=%i STOP GAIN", r->v->rid, r->v->pos, ti, i);
                                 ptv_type = STOP_GAINED;
+                                continue;
                             }
+
+                            // rescue_checked = 1;
+                            // rescue_type = NO_RESCUE;
                         }
 
                         if (touched && csq->triggers[SPLICE_TRIGGER] == AF_SPLICE_VALUE) {
                             rescued = 1;
-                            rescue_type = 1;
                         }
 
                         float isoform_prior = 1.0;
@@ -2920,13 +2947,7 @@ int main(int argc, char *argv[]) {
                         Isoform *isoform = malloc(sizeof(Isoform));
                         isoform->prior_probability = isoform_prior;
                         isoform->posterior_probability = 0.0;
-                        isoform->rescue = (
-                            rescue_type == COMPLETE_RESCUE || 
-                            rescue_type == POSSIBLE_REINITIATION ||
-                            (rescue_type == FRAME_RESTORING_INDEL) ||
-                            (rescue_type == EXON_SKIPPING && affected_bases <= 15 && affected_bases % 3 == 0) ||
-                            (rescue_type == INTRON_RETENTION && affected_bases <= 15 && affected_bases % 3 == 0)
-                        );
+                        isoform->rescue = rescued;
                         isoform->rescue_type = rescue_type;
                         isoform->affected_bases = affected_bases;
 
@@ -3124,7 +3145,13 @@ int main(int argc, char *argv[]) {
 
                     Isoforms isoforms = r->isoforms[ti * NUM_PHASES + p];
 
-                    if (!isoforms.valid) continue;
+                    if (!isoforms.valid) {
+                        kputc('.', &ptv_tag);
+                        kputc('.', &ptv_prob_tag);
+                        kputc('.', &ptv_type_tag);
+
+                        continue;
+                    }
 
                     kputw(isoforms.ptv, &ptv_tag);
 
