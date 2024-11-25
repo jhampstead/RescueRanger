@@ -2258,7 +2258,7 @@ int main(int argc, char *argv[]) {
                                 for (int j = 0; j < acceptors.n; j++) {
                                     SpliceSite acceptor = kv_A(acceptors, j);
                                     NonCodingRegion ncr = {
-                                        { donor.position, donor.position },
+                                        { donor.position, acceptor.position },
                                         { donor.canonical_position, acceptor.canonical_position },
                                         &donor,
                                         &acceptor,
@@ -2687,8 +2687,57 @@ int main(int argc, char *argv[]) {
                             NonCodingRegion ncr = kv_A(*ncrs, i);
                             int64_t isoform_position;
 
+                            if (ncr.donor != NULL && ncr.acceptor != NULL && ncr.donor->prior_probability == 0 && ncr.acceptor->prior_probability == 0) {
+                                int64_t position = ncr.canonical_coords.start;
+                                int offset = range_len(ncr.canonical_coords);
+
+                                if (get_position_in_isoform(position, ncrs, &hap_in, t->strand, gene->coords, &isoform_position) == 0) {
+                                    Records *records = (Records *) ncr.donor->records_ptr;
+                                    for (int j = 0; j < records->n; j++) {
+                                        IsoformVariant variant = {SPLICE, isoform_position, offset, kv_A(*records, j) };
+                                        kv_push(IsoformVariant, splice_shifts, variant);
+                                        num_splice_sites++;
+                                    }
+
+                                    records = (Records *) ncr.acceptor->records_ptr;
+                                    for (int j = 0; j < records->n; j++) {
+                                        IsoformVariant variant = {SPLICE, isoform_position, offset, kv_A(*records, j) };
+                                        kv_push(IsoformVariant, splice_shifts, variant);
+                                        num_splice_sites++;
+                                    }
+                                }
+                                continue;
+                            } else if (ncr.donor != NULL && ncr.donor->prior_probability == 0) {
+                                int64_t position = ncr.canonical_coords.start;
+                                int offset = range_len(ncr.canonical_coords);
+
+                                if (get_position_in_isoform(position, ncrs, &hap_in, t->strand, gene->coords, &isoform_position) == 0) {
+                                    Records *records = (Records *) ncr.donor->records_ptr;
+                                    for (int j = 0; j < records->n; j++) {
+                                        IsoformVariant variant = {SPLICE, isoform_position, offset, kv_A(*records, j) };
+                                        kv_push(IsoformVariant, splice_shifts, variant);
+                                        num_splice_sites++;
+                                    }
+                                }
+                                continue;
+                            } else if (ncr.acceptor != NULL && ncr.acceptor->prior_probability == 0) {
+                                int64_t position = ncr.canonical_coords.start;
+                                int offset = range_len(ncr.canonical_coords);
+
+                                if (get_position_in_isoform(position, ncrs, &hap_in, t->strand, gene->coords, &isoform_position) == 0) {
+                                    Records *records = (Records *) ncr.acceptor->records_ptr;
+                                    for (int j = 0; j < records->n; j++) {
+                                        IsoformVariant variant = {SPLICE, isoform_position, offset, kv_A(*records, j) };
+                                        kv_push(IsoformVariant, splice_shifts, variant);
+                                        num_splice_sites++;
+                                    }
+                                }
+                                continue;
+                            }
+
                             int donor_offset = strand_correction * (ncr.coords.start - ncr.canonical_coords.start);
-                            if (donor_offset != 0) {
+                            // if (donor_offset != 0) {
+                            if (ncr.donor != NULL) {
                                 int64_t position = ncr.canonical_coords.start < ncr.coords.start ? ncr.canonical_coords.start : ncr.coords.start;
                                 int64_t isoform_position;
 
@@ -2704,7 +2753,8 @@ int main(int argc, char *argv[]) {
 
 
                             int acceptor_offset = strand_correction * (ncr.coords.end - ncr.canonical_coords.end);
-                            if (acceptor_offset != 0) {
+                            // if (acceptor_offset != 0) {
+                            if (ncr.acceptor != NULL) {
                                 int64_t position = ncr.canonical_coords.end < ncr.coords.end ? ncr.canonical_coords.end : ncr.coords.end;
                                 int64_t isoform_position;
 
@@ -2827,12 +2877,16 @@ int main(int argc, char *argv[]) {
                                         is_stop = 1;
                                         break;
                                     }
+
+                                    if (is_stop) break;
                                 }
 
                                 if (!is_stop && csq->triggers[STOP_TRIGGER] == STOP_RESCUE_VALUE) {
                                     log_error("%d:%d t=%i if=%i STOP RESCUE", r->v->rid, r->v->pos, ti, i);
-                                    rescue_type = COMPLETE_RESCUE;
-                                    rescued = 1;
+                                    if (rescue_type == NO_RESCUE) {
+                                        rescue_type = COMPLETE_RESCUE;
+                                        rescued = 1;
+                                    }
                                 } else if (csq->triggers[STOP_TRIGGER] == STOP_RESCUE_VALUE) {
                                     rescue_checked = 1;
                                 }
@@ -2956,9 +3010,10 @@ int main(int argc, char *argv[]) {
                             // rescue_type = NO_RESCUE;
                         }
 
-                        // if (touched && csq->triggers[SPLICE_TRIGGER] == AF_SPLICE_VALUE) {
-                        //     rescued = 1;
-                        // }
+                        if (!touched && csq->triggers[SPLICE_TRIGGER] == CANONICAL_SPLICE_VALUE && rescue_type == NO_RESCUE) {
+                            rescued = 1;
+                            rescue_type = COMPLETE_RESCUE;
+                        }
 
                         float isoform_prior = 1.0;
                         for (int i = 0; i > ncrs->n; i++) {
@@ -3122,7 +3177,7 @@ int main(int argc, char *argv[]) {
                     kputw(isoforms.rescue, &rescue_tag);
 
                     char prob_s[7];
-                    sprintf(prob_s, "%.4f", isoforms.ptv_probability);
+                    sprintf(prob_s, "%.4f", isoforms.rescue_probability);
                     kputsn(prob_s, 6, &rescue_prob_tag);
 
                     kstring_t transcript_phase_tag = generate_rescue_type_tag(&isoforms);
