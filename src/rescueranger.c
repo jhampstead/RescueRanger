@@ -320,7 +320,7 @@ void remove_unworkable_variants(Records *vs, const bcf_hdr_t *hdr) {
         // }
 
         if (range_len(intersection) > 0) {
-            last_variant = (Range) { last_variant.start, last_variant.end > bounds.end ? last_variant.end : bounds.end };
+            last_variant = (Range) { bounds.start, last_variant.end > bounds.end ? last_variant.end : bounds.end };
         } else {
             last_variant = bounds;
         }
@@ -1450,23 +1450,14 @@ int main(int argc, char *argv[]) {
                     const char *consequence = transcript_consequence->consequences[k];
                     if (strcmp(consequence, "non_coding_transcript_variant") == 0 ||
                         strcmp(consequence, "NMD_transcript_variant") == 0) {
-                        is_non_coding = 1;
+                        continue;
                     }
-                }
-
-                if (is_non_coding) continue;
-
-                for (int k = 0; k < transcript_consequence->num_consequences; k++) {
-                    const char *consequence = transcript_consequence->consequences[k];
 
                     if (strcmp(consequence, SPLICE_DONOR_VARIANT) == 0 ||
                         strcmp(consequence, SPLICE_ACCEPTOR_VARIANT) == 0) {
                         transcript_consequence->triggers[SPLICE_TRIGGER] = CANONICAL_SPLICE_VALUE;
                         canonical_splice_trigger = 1;
                     }
-                    // if (strcmp(consequence, SPLICE_REGION_VARIANT) == 0) {
-                    //     r->triggers[SPLICE_TRIGGER] = 1;
-                    // }
                     if (strcmp(consequence, FRAMESHIFT_VARIANT) == 0) {
                         transcript_consequence->triggers[FRAMESHIFT_TRIGGER] = 1;
                     }
@@ -2902,7 +2893,7 @@ int main(int argc, char *argv[]) {
                                         if (shift.seq_pos - MAX_FRAMESHIFT_RADIUS > shift_start) {
                                             summed_shift = shift.shift;
                                             shift_start = shift.seq_pos;
-                                            included_current_shift = 0;
+                                            included_current_shift = 0 | (shift.r == r);
                                             continue;
                                         }
 
