@@ -65,7 +65,7 @@ typedef struct Isoforms {
 } Isoforms;
 
 typedef struct SpliceSite {
-    void *record_ptr; // Circular dependency?
+    void *records_ptr; // Circular dependency?
     uint32_t position;
     uint32_t canonical_position;
     uint32_t predicted; // whether haplotype prediction has been run for the splice site
@@ -115,7 +115,6 @@ typedef struct NonCodingRegion {
     Range coords;
     Range canonical_coords;
     SpliceSite *donor, *acceptor;
-    void *record_ptr;
     int is_utr;
 } NonCodingRegion;
 
