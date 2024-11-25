@@ -3010,10 +3010,10 @@ int main(int argc, char *argv[]) {
                             // rescue_type = NO_RESCUE;
                         }
 
-                        if (!touched && csq->triggers[SPLICE_TRIGGER] == CANONICAL_SPLICE_VALUE && rescue_type == NO_RESCUE) {
-                            rescued = 1;
-                            rescue_type = COMPLETE_RESCUE;
-                        }
+                        // if (!touched && csq->triggers[SPLICE_TRIGGER] == CANONICAL_SPLICE_VALUE && rescue_type == NO_RESCUE) {
+                        //     rescued = 1;
+                        //     rescue_type = COMPLETE_RESCUE;
+                        // }
 
                         float isoform_prior = 1.0;
                         for (int i = 0; i > ncrs->n; i++) {
