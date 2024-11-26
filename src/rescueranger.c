@@ -2150,19 +2150,19 @@ int main(int argc, char *argv[]) {
 
                             if (ei+1 > last_cds) continue;
 
-                            SpliceSite canonical_donor = t->exons[ei]->splice_sites->canonical_donors[0];
-                            uint32_t lost_donor = !canonical_donor.gff_canonical && canonical_donor.predicted == 0;
+                            SpliceSite *canonical_donor = t->exons[ei]->splice_sites->canonical_donors;
+                            uint32_t lost_donor = canonical_donor->predicted && canonical_donor->prior_probability == 0;
 
-                            SpliceSite canonical_acceptor = t->exons[ei+1]->splice_sites->canonical_acceptors[0];
-                            uint32_t lost_acceptor = !canonical_acceptor.gff_canonical && canonical_acceptor.predicted == 0;
+                            SpliceSite *canonical_acceptor = t->exons[ei+1]->splice_sites->canonical_acceptors;
+                            uint32_t lost_acceptor = canonical_acceptor->predicted && canonical_acceptor->prior_probability == 0;
 
                             // If there are no valid splicing pairs, in a +- 15 bp window around the canonicals
                             if (lost_donor && lost_acceptor) {
                                 NonCodingRegion ncr = {
-                                    { canonical_donor.position, canonical_donor.position },
-                                    { canonical_donor.canonical_position, canonical_acceptor.canonical_position },
-                                    &canonical_donor,
-                                    &canonical_acceptor,
+                                    { canonical_donor->position, canonical_donor->position },
+                                    { canonical_donor->canonical_position, canonical_acceptor->canonical_position },
+                                    canonical_donor,
+                                    canonical_acceptor,
                                     0
                                 }; // No splicing happens for this donor
                                 kv_push(NonCodingRegion, nc_regions[n_nc_regions], ncr);
@@ -2174,76 +2174,77 @@ int main(int argc, char *argv[]) {
                             kvec_t(SpliceSite) donors; kv_init(donors);
                             SpliceSites target_donor_sites = *t->exons[ei]->splice_sites;
                             for (int i = 0; i < target_donor_sites.n_canonical_donors; i++) {
-                                SpliceSite donor = target_donor_sites.canonical_donors[i];
-                                if (donor.prior_probability == 0) continue;
-
-                                kv_push(SpliceSite, donors, donor);
+                                SpliceSite *donor = target_donor_sites.canonical_donors + i;
+                                if (donor->prior_probability == 0) continue;
+                                kv_push(SpliceSite, donors, *donor);
                             }
                             for (int i = 0; i < target_donor_sites.n_cryptic_donors; i++) {
-                                kv_push(SpliceSite, donors, target_donor_sites.cryptic_donors[i]);
+                                SpliceSite *donor = target_donor_sites.cryptic_donors + i;
+                                if (donor->prior_probability == 0 || (labs((int64_t) donor->position - (int64_t) canonical_donor->position)) > 500) continue;
+                                kv_push(SpliceSite, donors, *donor);
                             }
                             if (lost_donor && ei-1 >= first_cds) {
                                 SpliceSites alternative_donor_sites = *t->exons[ei-1]->splice_sites;
                                 for (int i = 0; i < alternative_donor_sites.n_canonical_donors; i++) {
-                                    SpliceSite donor = alternative_donor_sites.canonical_donors[i];
-                                    if (donor.prior_probability == 0 || (labs((int64_t) donor.position - (int64_t) canonical_donor.position)) > 500) continue;
-
-                                    kv_push(SpliceSite, donors, donor);
+                                    SpliceSite *donor = alternative_donor_sites.canonical_donors + i;
+                                    if (donor->prior_probability == 0 || (labs((int64_t) donor->position - (int64_t) canonical_donor->position)) > 500) continue;
+                                    kv_push(SpliceSite, donors, *donor);
                                 }
                                 for (int i = 0; i < alternative_donor_sites.n_cryptic_donors; i++) {
-                                    SpliceSite donor = alternative_donor_sites.cryptic_donors[i];
-                                    if ((labs((int64_t) donor.position - (int64_t) canonical_donor.position)) > 500) continue;
-                                    kv_push(SpliceSite, donors, donor);
+                                    SpliceSite *donor = alternative_donor_sites.cryptic_donors + i;
+                                    if ((labs((int64_t) donor->position - (int64_t) canonical_donor->position)) > 500) continue;
+                                    kv_push(SpliceSite, donors, *donor);
                                 }
                             }
 
                             kvec_t(SpliceSite) acceptors; kv_init(acceptors);
                             SpliceSites target_acceptor_sites = *t->exons[ei+1]->splice_sites;
                             for (int i = 0; i < target_acceptor_sites.n_canonical_acceptors; i++) {
-                                SpliceSite acceptor = target_acceptor_sites.canonical_acceptors[i];
-                                if (acceptor.prior_probability == 0) continue;
+                                SpliceSite *acceptor = target_acceptor_sites.canonical_acceptors + i;
+                                if (acceptor->prior_probability == 0) continue;
 
-                                kv_push(SpliceSite, acceptors, acceptor);
+                                kv_push(SpliceSite, acceptors, *acceptor);
                             }
                             for (int i = 0; i < target_acceptor_sites.n_cryptic_acceptors; i++) {
-                                kv_push(SpliceSite, acceptors, target_acceptor_sites.cryptic_acceptors[i]);
+                                SpliceSite *acceptor = target_acceptor_sites.cryptic_acceptors + i;
+                                if (acceptor->prior_probability == 0 || (labs((int64_t) acceptor->position - (int64_t) canonical_acceptor->position)) > 500) continue;
+                                kv_push(SpliceSite, acceptors, *acceptor);
                             }
                             if (lost_acceptor && ei+2 < last_cds) {
                                 SpliceSites alternative_acceptor_sites = *t->exons[ei+2]->splice_sites;
                                 for (int i = 0; i < alternative_acceptor_sites.n_canonical_acceptors; i++) {
-                                    SpliceSite acceptor = alternative_acceptor_sites.canonical_acceptors[i];
-                                    if (acceptor.prior_probability == 0 || (labs((int64_t) acceptor.position - (int64_t) canonical_acceptor.position)) > 500) continue;
-
-                                    kv_push(SpliceSite, acceptors, acceptor);
+                                    SpliceSite *acceptor = alternative_acceptor_sites.canonical_acceptors + i;
+                                    if (acceptor->prior_probability == 0 || (labs((int64_t) acceptor->position - (int64_t) canonical_acceptor->position)) > 500) continue;
+                                    kv_push(SpliceSite, acceptors, *acceptor);
                                 }
                                 for (int i = 0; i < alternative_acceptor_sites.n_cryptic_acceptors; i++) {
-                                    SpliceSite acceptor = alternative_acceptor_sites.cryptic_acceptors[i];
-                                    if (acceptor.prior_probability == 0 || (labs((int64_t) acceptor.position - (int64_t) canonical_acceptor.position)) > 500) continue;
-                                    kv_push(SpliceSite, acceptors, acceptor);
+                                    SpliceSite *acceptor = alternative_acceptor_sites.cryptic_acceptors + i;
+                                    if (acceptor->prior_probability == 0 || (labs((int64_t) acceptor->position - (int64_t) canonical_acceptor->position)) > 500) continue;
+                                    kv_push(SpliceSite, acceptors, *acceptor);
                                 }
                             }
 
                             // If no pairs have been found, add as empty
                             if (donors.n == 0 || acceptors.n == 0) {
                                 for (int i = 0; i < donors.n; i++) {
-                                    SpliceSite donor = kv_A(donors, i);
+                                    SpliceSite *donor = donors.a + i;
                                     NonCodingRegion ncr = {
-                                        { donor.position, donor.position },
-                                        { donor.canonical_position, canonical_acceptor.canonical_position },
-                                        &donor,
-                                        &canonical_acceptor,
+                                        { donor->position, donor->position },
+                                        { donor->canonical_position, canonical_acceptor->canonical_position },
+                                        donor,
+                                        canonical_acceptor,
                                         0
                                     }; // No splicing happens for this donor
                                     kv_push(NonCodingRegion, nc_regions[n_nc_regions], ncr);
                                 }
 
                                 for (int i = 0; i < acceptors.n; i++) {
-                                    SpliceSite acceptor = kv_A(acceptors, i);
+                                    SpliceSite *acceptor = acceptors.a + i;
                                     NonCodingRegion ncr = {
-                                        { canonical_donor.position, canonical_donor.position },
-                                        { canonical_donor.canonical_position, acceptor.canonical_position },
-                                        &canonical_donor,
-                                        &acceptor,
+                                        { canonical_donor->position, canonical_donor->position },
+                                        { canonical_donor->canonical_position, acceptor->canonical_position },
+                                        canonical_donor,
+                                        acceptor,
                                         0
                                     }; // No splicing happens for this donor
                                     kv_push(NonCodingRegion, nc_regions[n_nc_regions], ncr);
@@ -2254,14 +2255,14 @@ int main(int argc, char *argv[]) {
                             }
 
                             for (int i = 0; i < donors.n; i++) {
-                                SpliceSite donor = kv_A(donors, i);
+                                SpliceSite *donor = donors.a + i;
                                 for (int j = 0; j < acceptors.n; j++) {
-                                    SpliceSite acceptor = kv_A(acceptors, j);
+                                    SpliceSite *acceptor = acceptors.a + j;
                                     NonCodingRegion ncr = {
-                                        { donor.position, acceptor.position },
-                                        { donor.canonical_position, acceptor.canonical_position },
-                                        &donor,
-                                        &acceptor,
+                                        { donor->position, acceptor->position },
+                                        { donor->canonical_position, acceptor->canonical_position },
+                                        donor,
+                                        acceptor,
                                         0
                                     }; // No splicing happens for this donor
                                     kv_push(NonCodingRegion, nc_regions[n_nc_regions], ncr);
@@ -2303,10 +2304,10 @@ int main(int argc, char *argv[]) {
                             if (ei-1 < first_cds) continue;
 
                             SpliceSite *canonical_donor = t->exons[ei]->splice_sites->canonical_donors;
-                            uint32_t lost_donor = !canonical_donor->gff_canonical && canonical_donor->predicted && canonical_donor->posterior_probability == 0;
+                            uint32_t lost_donor = canonical_donor->predicted && canonical_donor->posterior_probability == 0;
 
                             SpliceSite *canonical_acceptor = t->exons[ei-1]->splice_sites->canonical_acceptors;
-                            uint32_t lost_acceptor = !canonical_acceptor->gff_canonical && canonical_acceptor->predicted && canonical_acceptor->posterior_probability == 0;
+                            uint32_t lost_acceptor = canonical_acceptor->predicted && canonical_acceptor->posterior_probability == 0;
 
                             // If there are no valid splicing pairs, in a +- 15 bp window around the canonicals
                             if (lost_donor && lost_acceptor) {
@@ -2328,11 +2329,12 @@ int main(int argc, char *argv[]) {
                             for (int i = 0; i < target_donor_sites.n_canonical_donors; i++) {
                                 SpliceSite *donor = target_donor_sites.canonical_donors + i;
                                 if (donor->prior_probability == 0) continue;
-
                                 kv_push(SpliceSite, donors, *donor);
                             }
                             for (int i = 0; i < target_donor_sites.n_cryptic_donors; i++) {
-                                kv_push(SpliceSite, donors, target_donor_sites.cryptic_donors[i]);
+                                SpliceSite *donor = target_donor_sites.cryptic_donors + i;
+                                if (donor->prior_probability == 0 || (labs((int64_t) donor->position - (int64_t) canonical_donor->position)) > 500) continue;
+                                kv_push(SpliceSite, donors, *donor);
                             }
                             if (lost_donor && ei+1 < last_cds-1) {
                                 SpliceSites alternative_donor_sites = *t->exons[ei+1]->splice_sites;
@@ -2354,11 +2356,12 @@ int main(int argc, char *argv[]) {
                             for (int i = 0; i < target_acceptor_sites.n_canonical_acceptors; i++) {
                                 SpliceSite *acceptor = target_acceptor_sites.canonical_acceptors + i;
                                 if (acceptor->prior_probability == 0) continue;
-
                                 kv_push(SpliceSite, acceptors, *acceptor);
                             }
                             for (int i = 0; i < target_acceptor_sites.n_cryptic_acceptors; i++) {
-                                kv_push(SpliceSite, acceptors, target_acceptor_sites.cryptic_acceptors[i]);
+                                SpliceSite *acceptor = target_acceptor_sites.cryptic_acceptors + i;
+                                if (acceptor->prior_probability == 0 || (labs((int64_t) acceptor->position - (int64_t) canonical_acceptor->position)) > 500) continue;
+                                kv_push(SpliceSite, acceptors, *acceptor);
                             }
                             if (lost_acceptor && ei-2 > first_cds) {
                                 SpliceSites alternative_acceptor_sites = *t->exons[ei-2]->splice_sites;
@@ -2738,7 +2741,8 @@ int main(int argc, char *argv[]) {
                             int donor_offset = strand_correction * (ncr.coords.start - ncr.canonical_coords.start);
                             // if (donor_offset != 0) {
                             if (ncr.donor != NULL) {
-                                int64_t position = ncr.canonical_coords.start < ncr.coords.start ? ncr.canonical_coords.start : ncr.coords.start;
+                                // int64_t position = ncr.canonical_coords.start < ncr.coords.start ? ncr.canonical_coords.start : ncr.coords.start;
+                                int64_t position = ncr.coords.start;
                                 int64_t isoform_position;
 
                                 if (get_position_in_isoform(position, ncrs, &hap_in, t->strand, gene->coords, &isoform_position) == 0) {
@@ -2755,7 +2759,8 @@ int main(int argc, char *argv[]) {
                             int acceptor_offset = strand_correction * (ncr.coords.end - ncr.canonical_coords.end);
                             // if (acceptor_offset != 0) {
                             if (ncr.acceptor != NULL) {
-                                int64_t position = ncr.canonical_coords.end < ncr.coords.end ? ncr.canonical_coords.end : ncr.coords.end;
+                                // int64_t position = ncr.canonical_coords.end < ncr.coords.end ? ncr.canonical_coords.end : ncr.coords.end;
+                                int64_t position = ncr.coords.end;
                                 int64_t isoform_position;
 
                                 if (get_position_in_isoform(position, ncrs, &hap_in, t->strand, gene->coords, &isoform_position) == 0) {
@@ -2843,7 +2848,7 @@ int main(int argc, char *argv[]) {
 
                         int affected_bases = 0; // TODO: Right now this value is absolute, after the refactor it shouldn't be
                         int rescued = 0;
-                        int rescue_checked = 0;
+                        int stop_checked = 0, frameshift_checked = 0;
                         enum RescueType rescue_type = NO_RESCUE;
                         enum PTVType ptv_type = NO_PTV;
                         int touched = 0;
@@ -2851,7 +2856,7 @@ int main(int argc, char *argv[]) {
                             IsoformVariant iso_shift = kv_A(shifts, ri);
                             if (iso_shift.r != r) continue;
 
-                            if (rescue_checked) continue;
+                            if (stop_checked) continue;
 
                             touched = 1;
                             if (csq->triggers[STOP_TRIGGER]) {
@@ -2888,7 +2893,7 @@ int main(int argc, char *argv[]) {
                                         rescued = 1;
                                     }
                                 } else if (csq->triggers[STOP_TRIGGER] == STOP_RESCUE_VALUE) {
-                                    rescue_checked = 1;
+                                    stop_checked = 1;
                                 }
 
                                 if (is_stop && csq->triggers[STOP_TRIGGER] == STOP_GAIN_VALUE) {
@@ -2899,7 +2904,7 @@ int main(int argc, char *argv[]) {
                             int should_check_induced = 0;
                             Range possible_induced_sequence = {0};
 
-                            if (csq->triggers[SPLICE_TRIGGER] && rescue_type == NO_RESCUE && !rescue_checked && iso_shift.shift_type == SPLICE) {
+                            if (csq->triggers[SPLICE_TRIGGER] && !stop_checked && iso_shift.shift_type == SPLICE) {
                                 if (iso_shift.shift == 0) {
                                     rescue_type = COMPLETE_RESCUE;
                                     rescued = 1;
@@ -2927,9 +2932,9 @@ int main(int argc, char *argv[]) {
                                 }
                             }
 
-                            if ((csq->triggers[FRAMESHIFT_TRIGGER] || csq->triggers[SPLICE_TRIGGER]) && 
-                                (rescue_type == NO_RESCUE || rescue_type == INTRON_RETENTION || rescue_type == EXON_SKIPPING || ptv_type == FRAMESHIFT) && !rescue_checked) {
+                            if ((csq->triggers[FRAMESHIFT_TRIGGER] || csq->triggers[SPLICE_TRIGGER]) && ptv_type == FRAMESHIFT && !stop_checked) {
                                 if (iso_shift.shift == 0) continue;
+                                frameshift_checked = 1;
 
                                 if (iso_shift.shift % 3 == 0 && abs(iso_shift.shift) < MAX_FRAMESHIFT_RADIUS) { // TODO: Is this possible?
                                     rescued = 1;
@@ -3010,10 +3015,10 @@ int main(int argc, char *argv[]) {
                             // rescue_type = NO_RESCUE;
                         }
 
-                        // if (!touched && csq->triggers[SPLICE_TRIGGER] == CANONICAL_SPLICE_VALUE && rescue_type == NO_RESCUE) {
-                        //     rescued = 1;
-                        //     rescue_type = COMPLETE_RESCUE;
-                        // }
+                        if (!touched && !stop_checked && !frameshift_checked && csq->triggers[SPLICE_TRIGGER] == CANONICAL_SPLICE_VALUE && rescue_type == NO_RESCUE) {
+                            rescued = 1;
+                            rescue_type = COMPLETE_RESCUE;
+                        }
 
                         float isoform_prior = 1.0;
                         for (int i = 0; i > ncrs->n; i++) {
