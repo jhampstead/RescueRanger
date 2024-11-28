@@ -30,6 +30,32 @@ enum PTVType {
     FRAMESHIFT
 };
 
+typedef enum PredictionFlags {
+    UNPHASED_VARIANT_IN_PREDICTION = 1 << 0,
+    SKIPPED_VARIANT_IN_PREDICTION = 1 << 1,
+    VARIANT_LARGER_THAN_SPLICE_WINDOW = 1 << 2,
+    RESCUED_BY_SPLICE_FRAMESHIFT = 1 << 3,
+    POSSIBLE_REINITIATION = 1 << 4,
+    MANUFACTURED_SPLICE_RESCUE = 1 << 5,
+    HAPLOTYPE_SPECIFIC_DONOR = 1 << 6,
+    HAPLOTYPE_SPECIFIC_ACCEPTOR = 1 << 7,
+    CRYPTIC_DONOR = 1 << 8,
+    CRYPTIC_ACCEPTOR = 1 << 9,
+    WEAK_CANONICAL_DONOR = 1 << 10,
+    WEAK_CANONICAL_ACCEPTOR = 1 << 11,
+    ABLATED_CANONICAL_DONOR = 1 << 12,
+    ABLATED_CANONICAL_ACCEPTOR = 1 << 13,
+    ABLATED_CRYPTIC_DONOR = 1 << 14,
+    ABLATED_CRYPTIC_ACCEPTOR = 1 << 15,
+    UPSTREAM_PTV = 1 << 16,
+    UTR5_SPLICE_DONOR = 1 << 17,
+    UTR5_SPLICE_ACCEPTOR = 1 << 18,
+    UTR3_SPLICE_ACCEPTOR = 1 << 19,
+    UTR3_SPLICE_DONOR = 1 << 20,
+    LAST_EXON = 1 << 21,
+    SINGLE_EXON = 1 << 22
+};
+
 typedef struct Isoform {
     // NonCodingRegion *ncrs; // non-coding regions defining the spliced boundaries of this isoform
     float prior_probability; // prior probability of the isoform
@@ -169,6 +195,7 @@ typedef struct Record {
     Transcripts *tscripts;
     Genes *transcript_genes;
     Genes *genes;
+    uint32_t flags;
 } Record;
 
 typedef kvec_t(Record *) Records;
