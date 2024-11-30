@@ -2973,7 +2973,7 @@ int main(int argc, char *argv[]) {
                                 }
                             }
 
-                            if ((csq->triggers[FRAMESHIFT_TRIGGER] || csq->triggers[SPLICE_TRIGGER]) && ptv_type == FRAMESHIFT && !stop_checked) {
+                            if ((csq->triggers[FRAMESHIFT_TRIGGER] || csq->triggers[SPLICE_TRIGGER]) && (ptv_type == FRAMESHIFT || ptv_type == NO_RESCUE || rescued == 1) && !stop_checked) {
                                 if (iso_shift.shift == 0) continue;
                                 frameshift_checked = 1;
 
