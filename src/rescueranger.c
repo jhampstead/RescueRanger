@@ -1233,6 +1233,47 @@ int32_t* find_possible_reinitiation_positions(char* reinitiation_sequence, int* 
     return reinitiation_positions;
 }
 
+char* get_prediction_flags(uint32_t flags, kstring_t *concentenated_flags) {
+    const char *flag_names[] = {
+        "unphased_variant_in_prediction",
+        "skipped_variant_in_prediction",
+        "variant_larger_than_splice_window",
+        "rescued_by_splice_frameshift",
+        "possible_reinitiation",
+        "manufactured_splice_rescue",
+        "haplotype_specific_donor",
+        "haplotype_specific_acceptor",
+        "cryptic_donor",
+        "cryptic_acceptor",
+        "weak_canonical_donor",
+        "weak_canonical_acceptor",
+        "ablated_canonical_donor",
+        "ablated_canonical_acceptor",
+        "ablated_cryptic_donor",
+        "ablated_cryptic_acceptor",
+        "upstream_ptv",
+        "5utr_splice_donor",
+        "5utr_splice_acceptor",
+        "3utr_splice_acceptor",
+        "3utr_splice_donor",
+        "last_exon",
+        "single_exon"
+    };
+
+    size_t flag_count = sizeof(flag_names) / sizeof(flag_names[0]);
+    int is_first = 1;
+
+    for (size_t i = 0; i < flag_count; i++) {
+        if (flags & (1 << i)) {
+            if (!is_first) {
+                kputs(",", concatenated_flags); // append delimiter if not the first flag
+            }
+            kputs(flag_names[i], concatenated_flags); // append the flag name
+            is_first = 0;
+        }
+    }
+}
+
 
 int main(int argc, char *argv[]) {
     log_set_level(2);
