@@ -13,10 +13,15 @@
 #include "cpliceai/range.h"
 #include "cpliceai/utils.h"
 
+enum UTRType {
+    UTR5 = 1,
+    UTR3 = 2
+};
+
 enum RescueType {
     NO_RESCUE = 0,
     COMPLETE_RESCUE,
-    POSSIBLE_REINITIATION,
+    POSSIBLE_REINITIATION_SITE,
     FRAME_RESTORING_INDEL,
     PARTIAL_EXON_SKIPPING,
     PARTIAL_INTRON_RETENTION,
@@ -30,7 +35,7 @@ enum PTVType {
     FRAMESHIFT
 };
 
-typedef enum PredictionFlags {
+enum PredictionFlags {
     UNPHASED_VARIANT_IN_PREDICTION = 1 << 0,
     SKIPPED_VARIANT_IN_PREDICTION = 1 << 1,
     VARIANT_LARGER_THAN_SPLICE_WINDOW = 1 << 2,
@@ -48,12 +53,10 @@ typedef enum PredictionFlags {
     ABLATED_CRYPTIC_DONOR = 1 << 14,
     ABLATED_CRYPTIC_ACCEPTOR = 1 << 15,
     UPSTREAM_PTV = 1 << 16,
-    UTR5_SPLICE_DONOR = 1 << 17,
-    UTR5_SPLICE_ACCEPTOR = 1 << 18,
-    UTR3_SPLICE_ACCEPTOR = 1 << 19,
-    UTR3_SPLICE_DONOR = 1 << 20,
-    LAST_EXON = 1 << 21,
-    SINGLE_EXON = 1 << 22
+    UTR5_SPLICE_VARIANT = 1 << 17,
+    UTR3_SPLICE_VARIANT = 1 << 18,
+    LAST_EXON = 1 << 19,
+    SINGLE_EXON = 1 << 20
 };
 
 typedef struct Isoform {
@@ -137,15 +140,7 @@ typedef struct Gene {
     uint32_t strand;
 } Gene;
 
-typedef struct NonCodingRegion {
-    Range coords;
-    Range canonical_coords;
-    SpliceSite *donor, *acceptor;
-    int is_utr;
-} NonCodingRegion;
-
 typedef kvec_t(Range) Ranges;
-typedef kvec_t(NonCodingRegion) NonCodingRegions;
 typedef kvec_t(Gene *) Genes;
 
 KHASH_MAP_INIT_INT64(RangeHash, Range *);
@@ -195,10 +190,21 @@ typedef struct Record {
     Transcripts *tscripts;
     Genes *transcript_genes;
     Genes *genes;
-    uint32_t flags;
+    uint32_t *flags;
+    uint8_t skipped, unphased;
 } Record;
 
 typedef kvec_t(Record *) Records;
+
+typedef struct NonCodingRegion {
+    Range coords;
+    Range canonical_coords;
+    SpliceSite *donor, *acceptor;
+    enum UTRType is_utr;
+    Records records;
+} NonCodingRegion;
+
+typedef kvec_t(NonCodingRegion) NonCodingRegions;
 
 typedef struct HdrFormat {
     char *data_; // Only used for storing data, access this data should be done through id2str

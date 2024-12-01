@@ -164,6 +164,9 @@ KLIST_INIT(RecordContext, IsoformVariant, empty_free);
 #define frameshift_lt(a, b) ((a).seq_pos < (b).seq_pos)
 KSORT_INIT(frameshift_sort, IsoformVariant, frameshift_lt)
 
+#define frameshift_gt(a, b) ((a).seq_pos > (b).seq_pos)
+KSORT_INIT(frameshift_reverse_sort, IsoformVariant, frameshift_gt)
+
 Range variant_to_range(const bcf1_t *v, const int allele) {
     return (Range) { v->pos, v->pos + strlen(v->d.allele[allele]) };
 }
@@ -278,6 +281,7 @@ PhasedRecords *split_records_by_phase(Records *vs, bcf_hdr_t *hdr) {
 
         // TODO: Add a CLI option to set this behaviour
         if (!bcf_gt_is_phased(gt[0]) && !bcf_gt_is_phased(gt[1])) { // No phasing for heterozygous variants, including on both for now
+            r->unphased = 1;
             kv_push(Record *, *(pvs->a[0]), r);
             kv_push(Record *, *(pvs->a[1]), r);
             log_debug("Adding %s:%li (heterozygous, no phase)", bcf_hdr_id2name(hdr, r->v->rid), r->v->pos); 
@@ -365,6 +369,24 @@ int prediction_offset(bcf1_t *v, Records *rs) {
     }
 
     return offset;
+}
+
+void add_phasing_for_prediction_records(Records *rs, Range prediction_range) {
+    for (int i = 0; i < rs->n; i++) {
+        Record *r = kv_A(*rs, i);
+
+        Range ref;
+        if (!intersect_ranges((Range) {r->v->pos, r->v->pos + r->v->rlen}, prediction_range, &ref) || range_len(ref) == 0) continue;
+
+        Range alt;
+        if (!intersect_ranges((Range) {r->v->pos, r->v->pos + strlen(r->v->d.allele[1])}, prediction_range, &alt) || range_len(alt) == 0) continue;
+
+        for (int j = 0; j < r->transcript_genes->n; j++) {
+            if (r->skipped) r->flags[j] |= SKIPPED_VARIANT_IN_PREDICTION;
+            if (r->unphased) r->flags[j] |= UNPHASED_VARIANT_IN_PREDICTION;
+        }
+    }
+
 }
 
 int find_gene_region_for_variant(bcf1_t *v, bcf_hdr_t *hdr, gff_t *gff, IRegion *region) {
@@ -573,6 +595,21 @@ static int get_position_in_isoform(const int64_t position, const NonCodingRegion
     return 0;
 }
 
+static int is_utr_variant(const Record *r, const NonCodingRegions *ncrs, const Records *rs, const int strand, const Range bounds) {
+    const int64_t position = r->v->pos;
+    const int64_t isoform_position = position - haplotype_offset(rs, (Range) { bounds.start, position-1 });
+    const Range variant = { isoform_position, isoform_position + r->v->rlen };
+
+    for (int i = 0; i < ncrs->n; i++) {
+        NonCodingRegion ncr = kv_A(*ncrs, i);
+        if (!ncr.is_utr) continue;
+
+        if (ranges_overlap(ncr.coords, variant)) return ncr.is_utr;
+    }
+
+    return 0;
+}
+
 void calculate_rescue_probabilities(Isoforms *isoforms_struct) {
     isoforms_struct->rescue_probability = 0.0f;
     RescueProbabilities *rescue_probs = malloc(sizeof(RescueProbabilities));
@@ -682,7 +719,7 @@ kstring_t generate_rescue_type_tag(Isoforms *isoforms_struct) { // INFO/RESCUE_T
             case COMPLETE_RESCUE:
                 kputs("complete_rescue", &tag);
                 break;
-            case POSSIBLE_REINITIATION:
+            case POSSIBLE_REINITIATION_SITE:
                 kputs("possible_reinitiation", &tag);
                 break;
             case FRAME_RESTORING_INDEL:
@@ -1233,7 +1270,7 @@ int32_t* find_possible_reinitiation_positions(char* reinitiation_sequence, int* 
     return reinitiation_positions;
 }
 
-char* get_prediction_flags(uint32_t flags, kstring_t *concentenated_flags) {
+void get_prediction_flags(uint32_t flags, kstring_t *concatenated_flags) {
     const char *flag_names[] = {
         "unphased_variant_in_prediction",
         "skipped_variant_in_prediction",
@@ -1252,10 +1289,8 @@ char* get_prediction_flags(uint32_t flags, kstring_t *concentenated_flags) {
         "ablated_cryptic_donor",
         "ablated_cryptic_acceptor",
         "upstream_ptv",
-        "5utr_splice_donor",
-        "5utr_splice_acceptor",
-        "3utr_splice_acceptor",
-        "3utr_splice_donor",
+        "5utr_splice_variant",
+        "3utr_splice_variant",
         "last_exon",
         "single_exon"
     };
@@ -1266,7 +1301,7 @@ char* get_prediction_flags(uint32_t flags, kstring_t *concentenated_flags) {
     for (size_t i = 0; i < flag_count; i++) {
         if (flags & (1 << i)) {
             if (!is_first) {
-                kputs(",", concatenated_flags); // append delimiter if not the first flag
+                kputs(":", concatenated_flags); // append delimiter if not the first flag
             }
             kputs(flag_names[i], concatenated_flags); // append the flag name
             is_first = 0;
@@ -1274,6 +1309,9 @@ char* get_prediction_flags(uint32_t flags, kstring_t *concentenated_flags) {
     }
 }
 
+void set_record_flag(Record *r, int transcript_index, int phase_index, uint32_t flag_value) {
+     r->flags[transcript_index * NUM_PHASES + phase_index] |= flag_value;
+}
 
 int main(int argc, char *argv[]) {
     log_set_level(2);
@@ -1466,6 +1504,8 @@ int main(int argc, char *argv[]) {
 
             r->isoforms = malloc(r->tscripts->n * NUM_PHASES * sizeof(Isoforms));
             for (int k = 0; k < r->tscripts->n * NUM_PHASES; k++) r->isoforms[k].valid = 0;
+
+            r->flags = calloc(r->tscripts->n * NUM_PHASES, sizeof(uint32_t));
         }
     }
 
@@ -1710,10 +1750,12 @@ int main(int argc, char *argv[]) {
                 log_info("%s:%li (splice)", bcf_hdr_id2name(hdr, r->v->rid), r->v->pos); 
 
                 if (strlen(r->v->d.allele[1]) > CAI_DISTANCE) {
+                    r->skipped = 1;
                     log_warn("Skipping on %s:%li, insertion is too long", bcf_hdr_id2name(hdr, r->v->rid), r->v->pos);
                     continue;
                 }
                 if (r->v->rlen > CAI_DISTANCE) {
+                    r->skipped = 1;
                     log_warn("Skipping prediction on %s:%li, deletion is too long", bcf_hdr_id2name(hdr, r->v->rid), r->v->pos);
                     continue;
                 }
@@ -1859,6 +1901,22 @@ int main(int argc, char *argv[]) {
 
                     // If there's less than 0.2 change between ref and hap alt, don't predict for competitors and pairs
                     if (score.ag < SPLICEAI_RESCUE_THRESHOLD && score.al < SPLICEAI_RESCUE_THRESHOLD && score.dg < SPLICEAI_RESCUE_THRESHOLD && score.dl < SPLICEAI_RESCUE_THRESHOLD) continue;
+
+                    for (int i = 0; i < num_splice_probabilities; i++) {
+                        SpliceProbability probability = splice_probabilities[i];
+                        // if (probability.prior_probability > 0 && probability.canonical_position != probability.position) set_record_flag(r, int transcript_index, p, probability.type == );
+
+                        for (int t = 0; t < r->transcript_genes->n; t++) {
+                            Gene *transcript_gene = kv_A(*r->transcript_genes, t);
+                            if (transcript_gene == NULL || transcript_gene->gff_id != gene->gff_id) continue;
+
+                            if (probability.canonical_position == probability.position && probability.prior_probability == 0) {
+                                if (probability.type == DONOR) set_record_flag(r, t, p, ABLATED_CANONICAL_DONOR);
+                                if (probability.type == ACCEPTOR) set_record_flag(r, t, p, ABLATED_CANONICAL_ACCEPTOR);
+                            }
+                        }
+
+                    }
 
                     for (int i = 0; i < r->tscripts->n; i++) {
                         Transcript *t = kv_A(*r->tscripts, i);
@@ -2170,8 +2228,10 @@ int main(int argc, char *argv[]) {
                                     { gene->coords.start, e->cds->start },
                                     NULL, 
                                     NULL,
-                                    1
+                                    UTR5
                                 };
+                                kv_init(ncr.records);
+                                kv_push(Record *, ncr.records, r);
                                 kv_push(NonCodingRegion, nc_regions[n_nc_regions], ncr);
                                 n_nc_regions++;
                             }
@@ -2182,8 +2242,10 @@ int main(int argc, char *argv[]) {
                                     { e->cds->end, gene_end },
                                     NULL,
                                     NULL,
-                                    1
+                                    UTR3
                                 };
+                                kv_init(ncr.records);
+                                kv_push(Record *, ncr.records, r);
                                 kv_push(NonCodingRegion, nc_regions[n_nc_regions], ncr);
                                 n_nc_regions++;
                                 break; // End of transcript
@@ -2324,8 +2386,10 @@ int main(int argc, char *argv[]) {
                                     { gene_end, e->cds->start },
                                     NULL,
                                     NULL,
-                                    1
+                                    UTR5
                                 };
+                                kv_init(ncr.records);
+                                kv_push(Record *, ncr.records, r);
                                 kv_push(NonCodingRegion, nc_regions[n_nc_regions], ncr);
                                 n_nc_regions++;
                             }
@@ -2335,8 +2399,10 @@ int main(int argc, char *argv[]) {
                                     { e->cds->end, gene->coords.start },
                                     NULL,
                                     NULL,
-                                    1
+                                    UTR3
                                 };
+                                kv_init(ncr.records);
+                                kv_push(Record *, ncr.records, r);
                                 kv_push(NonCodingRegion, nc_regions[n_nc_regions], ncr);
                                 n_nc_regions++;
                                 break; // End of transcript
@@ -2546,7 +2612,6 @@ int main(int argc, char *argv[]) {
                         log_debug("Gene length is: %i", hap_seq.l);
 
                         Range *isoform_bounds = NULL;
-                        // int affected_bases = 0;
 
                         int gene_start = gene->coords.start;
                         if (t->strand == STRAND_FWD) {
@@ -2561,11 +2626,6 @@ int main(int argc, char *argv[]) {
                                 }
 
                                 int bases_shifted = range_len(ncr.canonical_coords) - range_len(ncr.coords);
-                                // if (bases_shifted != 0) {
-                                //     affected_bases += bases_shifted;
-                                // }
-
-                                // log_info("Adding region %i, %i:%i - %i:%i to isoform %i", j, seq_idx, intron_start, ncr.coords.start, ncr.coords.end, i);
                                 length += intron_start - seq_idx;
 
                                 if (length > 0 && isoform_bounds == NULL) {
@@ -2583,7 +2643,6 @@ int main(int argc, char *argv[]) {
                                 isoform_bounds->start = 0;
                             }
                             if (hap_seq.l != seq_idx) isoform_bounds->end = hap_seq.l;
-                            // kputsn(hap_seq.s + seq_idx, hap_seq.l - seq_idx, &spliced_seq);
                         } else if (t->strand == STRAND_REV) {
                             int length = 0;
                             for (int j = ncrs->n-1; j >= 0; j--) {
@@ -2595,11 +2654,6 @@ int main(int argc, char *argv[]) {
                                 }
 
                                 int bases_shifted = range_len(ncr.canonical_coords) - range_len(ncr.coords);
-                                // if (bases_shifted != 0) {
-                                //     affected_bases += bases_shifted;
-                                // }
-
-                                // log_info("Adding region %i, %i:%i - %i:%i to isoform %i", j, seq_idx, intron_start, ncr.coords.end, ncr.coords.start, i);
                                 length += intron_start - seq_idx;
 
                                 if (length > 0 && isoform_bounds == NULL) {
@@ -2619,7 +2673,6 @@ int main(int argc, char *argv[]) {
                                 isoform_bounds->end = 0;
                             }
                             if (hap_seq.l != seq_idx) isoform_bounds->start = hap_seq.l;
-                            // kputsn(hap_seq.s + seq_idx, hap_seq.l - seq_idx, &spliced_seq);
                         }
 
                         // Convert strand to complementary, if necessary (keeps direction the same)
@@ -2725,11 +2778,16 @@ int main(int argc, char *argv[]) {
                         int64_t **splice_positions = malloc(2 * ncrs->n * sizeof(int64_t *));
                         int64_t splice_offsets[2*ncrs->n];
                         int num_splice_sites = 0;
-                        // if (t->strand == STRAND_FWD) {
                         int strand_correction = t->strand == STRAND_FWD ? 1 : -1;
                         for (int i = 0; i < ncrs->n; i++) {
                             NonCodingRegion ncr = kv_A(*ncrs, i);
                             int64_t isoform_position;
+
+                            for (int j = 0; j < ncr.records.n; j++) {
+                                enum UTRType utr_type = is_utr_variant(r, ncrs, &hap_in, t->strand, gene->coords);
+                                if (utr_type == UTR5) set_record_flag(r, ti, p, UTR5_SPLICE_VARIANT);
+                                if (utr_type == UTR3) set_record_flag(r, ti, p, UTR3_SPLICE_VARIANT);
+                            }
 
                             if (ncr.donor != NULL && ncr.acceptor != NULL && ncr.donor->prior_probability == 0 && ncr.acceptor->prior_probability == 0) {
                                 int64_t position = ncr.canonical_coords.start;
@@ -2738,14 +2796,20 @@ int main(int argc, char *argv[]) {
                                 if (get_position_in_isoform(position, ncrs, &hap_in, t->strand, gene->coords, &isoform_position) == 0) {
                                     Records *records = (Records *) ncr.donor->records_ptr;
                                     for (int j = 0; j < records->n; j++) {
-                                        IsoformVariant variant = {SPLICE, isoform_position, offset, kv_A(*records, j) };
+                                        Record *r = kv_A(*records, j);
+                                        if (!ncr.donor->gff_canonical && offset != 0) set_record_flag(r, ti, p, CRYPTIC_DONOR);
+
+                                        IsoformVariant variant = {SPLICE, isoform_position, offset, r };
                                         kv_push(IsoformVariant, splice_shifts, variant);
                                         num_splice_sites++;
                                     }
 
                                     records = (Records *) ncr.acceptor->records_ptr;
                                     for (int j = 0; j < records->n; j++) {
-                                        IsoformVariant variant = {SPLICE, isoform_position, offset, kv_A(*records, j) };
+                                        Record *r = kv_A(*records, j);
+                                        if (!ncr.acceptor->gff_canonical && offset != 0) set_record_flag(r, ti, p, CRYPTIC_ACCEPTOR);
+
+                                        IsoformVariant variant = {SPLICE, isoform_position, offset, r };
                                         kv_push(IsoformVariant, splice_shifts, variant);
                                         num_splice_sites++;
                                     }
@@ -2758,7 +2822,10 @@ int main(int argc, char *argv[]) {
                                 if (get_position_in_isoform(position, ncrs, &hap_in, t->strand, gene->coords, &isoform_position) == 0) {
                                     Records *records = (Records *) ncr.donor->records_ptr;
                                     for (int j = 0; j < records->n; j++) {
-                                        IsoformVariant variant = {SPLICE, isoform_position, offset, kv_A(*records, j) };
+                                        Record *r = kv_A(*records, j);
+                                        if (!ncr.donor->gff_canonical && offset != 0) set_record_flag(r, ti, p, CRYPTIC_DONOR);
+
+                                        IsoformVariant variant = {SPLICE, isoform_position, offset, r };
                                         kv_push(IsoformVariant, splice_shifts, variant);
                                         num_splice_sites++;
                                     }
@@ -2771,7 +2838,10 @@ int main(int argc, char *argv[]) {
                                 if (get_position_in_isoform(position, ncrs, &hap_in, t->strand, gene->coords, &isoform_position) == 0) {
                                     Records *records = (Records *) ncr.acceptor->records_ptr;
                                     for (int j = 0; j < records->n; j++) {
-                                        IsoformVariant variant = {SPLICE, isoform_position, offset, kv_A(*records, j) };
+                                        Record *r = kv_A(*records, j);
+                                        if (!ncr.acceptor->gff_canonical && offset != 0) set_record_flag(kv_A(*records, j), ti, p, CRYPTIC_ACCEPTOR);
+
+                                        IsoformVariant variant = {SPLICE, isoform_position, offset, r };
                                         kv_push(IsoformVariant, splice_shifts, variant);
                                         num_splice_sites++;
                                     }
@@ -2780,16 +2850,17 @@ int main(int argc, char *argv[]) {
                             }
 
                             int donor_offset = strand_correction * (ncr.coords.start - ncr.canonical_coords.start);
-                            // if (donor_offset != 0) {
                             if (ncr.donor != NULL) {
-                                // int64_t position = ncr.canonical_coords.start < ncr.coords.start ? ncr.canonical_coords.start : ncr.coords.start;
                                 int64_t position = ncr.coords.start;
                                 int64_t isoform_position;
 
                                 if (get_position_in_isoform(position, ncrs, &hap_in, t->strand, gene->coords, &isoform_position) == 0) {
                                     Records *records = (Records *) ncr.donor->records_ptr;
                                     for (int j = 0; j < records->n; j++) {
-                                        IsoformVariant variant = {SPLICE, isoform_position, donor_offset, kv_A(*records, j) };
+                                        Record *r = kv_A(*records, j);
+                                        if (!ncr.donor->gff_canonical && donor_offset != 0) set_record_flag(r, ti, p, CRYPTIC_DONOR);
+
+                                        IsoformVariant variant = {SPLICE, isoform_position, donor_offset, r };
                                         kv_push(IsoformVariant, splice_shifts, variant);
                                         num_splice_sites++;
                                     }
@@ -2798,22 +2869,24 @@ int main(int argc, char *argv[]) {
 
 
                             int acceptor_offset = strand_correction * (ncr.coords.end - ncr.canonical_coords.end);
-                            // if (acceptor_offset != 0) {
                             if (ncr.acceptor != NULL) {
-                                // int64_t position = ncr.canonical_coords.end < ncr.coords.end ? ncr.canonical_coords.end : ncr.coords.end;
                                 int64_t position = ncr.coords.end;
                                 int64_t isoform_position;
 
                                 if (get_position_in_isoform(position, ncrs, &hap_in, t->strand, gene->coords, &isoform_position) == 0) {
                                     Records *records = (Records *) ncr.acceptor->records_ptr;
                                     for (int j = 0; j < records->n; j++) {
-                                        IsoformVariant variant = {SPLICE, isoform_position, acceptor_offset, kv_A(*records, j) };
+                                        Record *r = kv_A(*records, j);
+                                        if (!ncr.acceptor->gff_canonical && acceptor_offset != 0) set_record_flag(r, ti, p, CRYPTIC_ACCEPTOR);
+
+                                        IsoformVariant variant = {SPLICE, isoform_position, acceptor_offset, r };
                                         kv_push(IsoformVariant, splice_shifts, variant);
                                         num_splice_sites++;
                                     }
                                 }
                             }
                         }
+
 
                         kvec_t(IsoformVariant) shifts;
                         kv_init(shifts);
@@ -2825,7 +2898,6 @@ int main(int argc, char *argv[]) {
                             // ks_introsort_frameshift_sort(shifts.n, shifts.a);
                         } else if (splice_shifts.n == 0) {
                             kv_copy(IsoformVariant, shifts, variant_shifts);
-                            // ks_introsort_frameshift_sort(shifts.n, shifts.a);
                         } else {
                             if (t->strand == STRAND_FWD) {
                                 size_t ri = 0, si = 0;
@@ -2856,6 +2928,25 @@ int main(int argc, char *argv[]) {
                             }
                         }
 
+                        if (shifts.n > 0) ks_introsort_frameshift_sort(shifts.n, shifts.a);
+
+                        if (t->strand == STRAND_REV) ks_introsort_frameshift_reverse_sort(shifts.n, shifts.a);
+
+                        for (int ri = 0; ri < shifts.n; ri++) {
+                            IsoformVariant iso_shift = kv_A(shifts, ri);
+                            if (iso_shift.r == r) break;
+
+                            for (int ti2 = 0; ti2 < iso_shift.r->tscripts->n; ti2++) {
+                                Transcript *tscript = kv_A(*iso_shift.r->tscripts, ti2);
+                                if (tscript == NULL || tscript->id != t->id) continue;
+
+                                if (tscript->triggers[SPLICE_TRIGGER] == AF_SPLICE_VALUE | tscript->triggers[STOP_TRIGGER] == STOP_GAIN_VALUE) continue;
+
+                                if (iso_shift.r->isoforms[ti2].valid &
+                                    (iso_shift.r->isoforms[ti2].rescue == 0 | iso_shift.r->isoforms[ti2].ptv == 1)) set_record_flag(r, ti, p, UPSTREAM_PTV);
+                            }
+
+                        }
 
                         // Filter to shifts that overlap the isoform
                         size_t j = 0; // Index for the next valid position
@@ -2865,7 +2956,6 @@ int main(int argc, char *argv[]) {
 
                             int vposition = shift.r->v->pos - haplotype_offset(&hap_in, (Range) { gene->coords.start, shift.r->v->pos });
                             if (vposition >= shifted_isoform.start && vposition < shifted_isoform.end) {
-                                // (t->strand == STRAND_REV && vposition >= shifted_isoform.end && vposition < shifted_isoform.start)) 
                                 kv_A(shifts, j++) = kv_A(shifts, i);
                             }
                         }
@@ -2890,6 +2980,7 @@ int main(int argc, char *argv[]) {
                         int affected_bases = 0; // TODO: Right now this value is absolute, after the refactor it shouldn't be
                         int rescued = 0;
                         int stop_checked = 0, frameshift_checked = 0;
+                        int stop_rescued = 0;
                         enum RescueType rescue_type = NO_RESCUE;
                         enum PTVType ptv_type = NO_PTV;
                         int touched = 0;
@@ -2932,6 +3023,7 @@ int main(int argc, char *argv[]) {
                                     if (rescue_type == NO_RESCUE) {
                                         rescue_type = COMPLETE_RESCUE;
                                         rescued = 1;
+                                        stop_rescued = 1;
                                     }
                                 } else if (csq->triggers[STOP_TRIGGER] == STOP_RESCUE_VALUE) {
                                     stop_checked = 1;
@@ -2985,6 +3077,7 @@ int main(int argc, char *argv[]) {
                                     int32_t summed_shift = 0;
                                     int32_t shift_start = 0;
                                     int included_current_shift = 0;
+                                    int induced_frameshift_rescue = 0;
                                     for (int i = 0; i < shifts.n; i++) {
                                         IsoformVariant shift = kv_A(shifts, i);
                                         if (shift.shift == 0) continue; // Rescued splice, do nothing
@@ -2994,6 +3087,7 @@ int main(int argc, char *argv[]) {
                                             summed_shift = shift.shift;
                                             shift_start = shift.seq_pos;
                                             included_current_shift = 0 | (shift.r == r);
+                                            induced_frameshift_rescue = shift.shift_type == SPLICE;
                                             continue;
                                         }
 
@@ -3001,6 +3095,7 @@ int main(int argc, char *argv[]) {
                                         if (!included_current_shift && shift.r == r) included_current_shift = 1;
 
                                         summed_shift += shift.shift;
+                                        induced_frameshift_rescue = shift.shift_type == SPLICE && shift.shift % 3 != 0;
                                         if (summed_shift % 3 != 0) continue;
 
                                         if (included_current_shift && shift.seq_pos + MAX_FRAMESHIFT_RADIUS > iso_shift.seq_pos && shift.seq_pos - MAX_FRAMESHIFT_RADIUS < iso_shift.seq_pos) {
@@ -3008,6 +3103,8 @@ int main(int argc, char *argv[]) {
                                             rescue_type = (rescue_type == NO_RESCUE) ? FRAME_RESTORING_INDEL : rescue_type; // Only set to rescue type
                                             int32_t shift_end = shift.seq_pos;
                                             affected_bases = abs(shift_end - shift_start);
+
+                                            if (induced_frameshift_rescue) r->flags[ti * NUM_PHASES + p] |= RESCUED_BY_SPLICE_FRAMESHIFT;
 
                                             if (ptv_type == FRAMESHIFT) ptv_type = NO_PTV;
 
@@ -3028,6 +3125,8 @@ int main(int argc, char *argv[]) {
                                     }
                                 }
                             }
+
+                            // if (csq->triggers[STOP_GAINED] == STOP_RESCUE_VALUE && stop_rescued && ptv_type == FRAMESHIFT) {
 
                             if (!should_check_induced) continue;
 
@@ -3099,6 +3198,11 @@ int main(int argc, char *argv[]) {
                     kv_destroy(hap_in);
                     free(hap_seq.s);
                 }
+
+                // for (int t = 0; t < r->tscripts->n; t++) {
+                //     if (r->skipped) r->flags[t * NUM_PHASES + p] |= SKIPPED_VARIANT_IN_PREDICTION;
+                //     if (r->unphased) r->flags[t * NUM_PHASES + p] |= UNPHASED_VARIANT_IN_PREDICTION;
+                // }
             }
 
             kv_destroy(*batch);
@@ -3307,6 +3411,63 @@ int main(int argc, char *argv[]) {
             bcf_update_info_string(hdr, r->v, PTV_TYPE_TAG, ptv_type_tag.s);
 
         }
+
+        for (int i = 0; i < block.records->n; i++) {
+            Record *r = kv_A(*block.records, i);
+            if (!block.is_coding || r->transcript_genes == NULL) continue;
+
+            kstring_t tags = {0};
+
+            for (int t = 0; t < r->transcript_genes->n; t++) {
+                int phased_donor[NUM_PHASES] = {0};
+                int phased_acceptor[NUM_PHASES] = {0};
+                for (int p = 0; p < NUM_PHASES; p++) {
+                    Gene *transcript_gene = kv_A(*r->transcript_genes, t);
+                    if (transcript_gene == NULL) continue;
+                    for (int g = 0; g < r->genes->n; g++) {
+                        Gene *gene = kv_A(*r->genes, g);
+                        if (transcript_gene->gff_id != gene->gff_id) continue;
+                        if (r->complete_scores[g * NUM_PHASES + p] == NULL) continue;
+
+                        if (fabs(r->complete_scores[g * NUM_PHASES + p]->ag) > SPLICEAI_RESCUE_THRESHOLD) phased_acceptor[p] = 1;
+                        if (fabs(r->complete_scores[g * NUM_PHASES + p]->al) > SPLICEAI_RESCUE_THRESHOLD) phased_acceptor[p] = 1;
+                        if (fabs(r->complete_scores[g * NUM_PHASES + p]->dg) > SPLICEAI_RESCUE_THRESHOLD) phased_donor[p] = 1;
+                        if (fabs(r->complete_scores[g * NUM_PHASES + p]->dl) > SPLICEAI_RESCUE_THRESHOLD) phased_donor[p] = 1;
+                    }
+                }
+
+                if (phased_donor[0] & phased_donor[1]) {
+                    set_record_flag(r, t, 0, HAPLOTYPE_SPECIFIC_DONOR);
+                    set_record_flag(r, t, 1, HAPLOTYPE_SPECIFIC_DONOR);
+                }
+                if (phased_acceptor[0] & phased_acceptor[1]) {
+                    set_record_flag(r, t, 0, HAPLOTYPE_SPECIFIC_ACCEPTOR);
+                    set_record_flag(r, t, 1, HAPLOTYPE_SPECIFIC_ACCEPTOR);
+                }
+            }
+
+            for (int t = 0; t < r->transcript_genes->n; t++) {
+                if (t > 0) { kputc(',', &tags); }
+
+                for (int p = 0; p < NUM_PHASES; p++) {
+                    if (p > 0) { kputc('&', &tags); }
+
+                    uint32_t flags = r->flags[t * NUM_PHASES + p];
+                    if (!flags) { 
+                        kputc('.', &tags); 
+                        continue;
+                    }
+
+                    kstring_t s = {0};
+                    get_prediction_flags(flags, &s);
+                    kputs(s.s, &tags);
+                }
+            }
+
+            bcf_update_info_string(hdr, r->v, PREDICTION_FLAGS_TAG, tags.s);
+        }
+
+
     }
 
     log_info("Number of splice triggers: %d", splice_trigger_count);

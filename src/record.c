@@ -233,7 +233,9 @@ Record *init_record(bcf1_t *v, VepCsqs *csqs) {
     r->vep = NULL;
     r->isoforms = NULL;
     r->complete_scores = NULL;
-    // r->hap_scores = NULL;
+
+    r->skipped = 0;
+    r->unphased = 0;
 
     if (csqs == NULL) {
         return r;
