@@ -299,35 +299,51 @@ PhasedRecords *split_records_by_phase(Records *vs, bcf_hdr_t *hdr) {
 }
 
 void remove_unworkable_variants(Records *vs, const bcf_hdr_t *hdr) {
-    Range last_variant = {0};
-    IRegion last_deletion = {-1, -1, -1};
-    int *should_delete = calloc(vs->n, sizeof(int));
-    for (int j = 0; j < vs->n; j++) {
-        bcf1_t *v = kv_A(*vs, j)->v;
+    Range last_variant_range = {0};
+    int last_variant_type = 0;
 
-        Range bounds = variant_to_range(v, 0);
+    Range current_variant_range = {0};
+    int current_variant_type = {0};
+
+    // int *should_delete = calloc(vs->n, sizeof(int));
+    int should_delete[vs->n]; for (int i = 0; i < vs->n; i++) should_delete[i] = 0;
+
+    for (int i = 0; i < vs->n; i++) {
+        bcf1_t *v = kv_A(*vs, i)->v;
+
+        if (current_variant_range.end > last_variant_range.end) {
+            last_variant_range = current_variant_range;
+            last_variant_type = current_variant_type;
+        }
+
+        current_variant_range = variant_to_range(v, 0);
         Range intersection;
-        int overlaps = intersect_ranges(bounds, last_variant, &intersection);
+        int overlaps = intersect_ranges(current_variant_range, last_variant_range, &intersection);
 
-        if (overlaps && range_len(intersection) > 0) {
-            log_warn("Skipping on %s:%li, overlaps previous variant", bcf_hdr_id2name(hdr, v->rid), v->pos);
-            should_delete[j] = 1;
+        if (range_len(variant_to_range(v, 1)) > 1) { // Insertion
+            current_variant_type = 1;
+            current_variant_range.start++;
+
+            if (last_variant_type == 0) { // SNV
+                continue; // Cannot overlap a SNV
+            } else if (last_variant_type == -1) { // Deletion
+                // Insertions are not skipped as long as they don't fall inside of another deletion
+                if (current_variant_range.start <= last_variant_range.start | current_variant_range.end >= last_variant_range.end) continue;
+            } else { // Insertion
+                // Insertions are not skipped as long as their start does not overlap another insertions
+                if (last_variant_range.start != current_variant_range.start | last_variant_range.end != current_variant_range.end) continue;
+            }
+        } else if (range_len(current_variant_range) > 1) { // Deletion
+            current_variant_type = -1;
+            current_variant_range.start++;
+            if (current_variant_range.start >= last_variant_range.end) continue;
+        } else { // SNV
+            current_variant_type = 0;
+            if (!overlaps || range_len(intersection) == 0) continue;
         }
 
-        // if (strlen(v->d.allele[1]) > CAI_DISTANCE) {
-        //     log_warn("Skipping on %s:%li, insertion is too long", bcf_hdr_id2name(hdr, v->rid), v->pos);
-        //     should_delete[j] = 1;
-        // }
-        // if (v->rlen > CAI_DISTANCE) {
-        //     log_warn("Skipping on %s:%li, deletion is too long", bcf_hdr_id2name(hdr, v->rid), v->pos);
-        //     should_delete[j] = 1;
-        // }
-
-        if (range_len(intersection) > 0) {
-            last_variant = (Range) { bounds.start, last_variant.end > bounds.end ? last_variant.end : bounds.end };
-        } else {
-            last_variant = bounds;
-        }
+        log_warn("Skipping on %s:38397836%li, overlaps previous variant", bcf_hdr_id2name(hdr, v->rid), v->pos);
+        should_delete[i] = 1;
     }
 
     int num_variants = vs->n;
@@ -482,7 +498,7 @@ float *match_predictions_to_reference(const float *predictions, const bcf1_t *v,
             float best_scores[NUM_SCORES] = {0};
             get_best_insertion_score(predictions + hap_idx + segment_len, alt_len, best_scores);
             memcpy(corrected_predictions + ref_segment.start, best_scores, NUM_SCORES * sizeof(float));
-         } else { // offset > 0
+        } else { // offset > 0
             memcpy(corrected_predictions + ref_segment.start, predictions + hap_idx + segment_len, NUM_SCORES * sizeof(float));
             memset(corrected_predictions + (ref_segment.start + NUM_SCORES), 0, offset * NUM_SCORES * sizeof(float));
         }
@@ -530,17 +546,28 @@ static void get_haplotype_sequence(const kstring_t reference_sequence, const Rec
             alt_segment = range_len(alt);
         }
 
-        // Copy over reference sequence without any variation
-        if (ref_segment > 0) strncpy(haplotype_sequence.s + hap_idx, reference_sequence.s + ref_idx, ref_segment);
+        char *ref_seq_pos = reference_sequence.s + ref_idx;
+        char *alt_seq_pos = r->v->d.allele[1];
 
-        ref_idx += ref_segment;
-        hap_idx += ref_segment;
+        // Offset start and segment lengths for the leading reference base when dealing with indels
+        int is_indel = ((ref.start == intersected_ref.start & range_len(ref) > 1) | (alt.start == intersected_alt.start & range_len(alt) > 1));
+        // if ((ref.start == intersected_ref.start & range_len(ref) > 1) | (alt.start == intersected_alt.start & range_len(alt) > 1)) {
+        //     alt_seq_pos++;
+        //     ref_segment++;
+        //     alt_segment--;
+        // }
+
+        // Copy over reference sequence without any variation
+        if (ref_segment + is_indel > 0) strncpy(haplotype_sequence.s + hap_idx, ref_seq_pos, ref_segment + is_indel);
+
+        ref_idx += ref_segment + is_indel;
+        hap_idx += ref_segment + is_indel;
 
         // Copy over variant
-        if (alt_segment > 0) strncpy(haplotype_sequence.s + hap_idx, r->v->d.allele[1], alt_segment);
+        if (alt_segment - is_indel > 0) strncpy(haplotype_sequence.s + hap_idx, alt_seq_pos + is_indel, alt_segment - is_indel);
 
-        ref_idx += range_len(intersected_ref);
-        hap_idx += alt_segment;
+        ref_idx += range_len(intersected_ref) - is_indel;
+        hap_idx += alt_segment - is_indel;
     }
 
     // Copy over remaining sequence from reference and complete sequence string
@@ -2796,22 +2823,26 @@ int main(int argc, char *argv[]) {
                                 if (get_position_in_isoform(position, ncrs, &hap_in, t->strand, gene->coords, &isoform_position) == 0) {
                                     Records *records = (Records *) ncr.donor->records_ptr;
                                     for (int j = 0; j < records->n; j++) {
-                                        Record *r = kv_A(*records, j);
-                                        if (!ncr.donor->gff_canonical && offset != 0) set_record_flag(r, ti, p, CRYPTIC_DONOR);
+                                        Record *rr = kv_A(*records, j);
 
-                                        IsoformVariant variant = {SPLICE, isoform_position, offset, r };
+                                        IsoformVariant variant = {SPLICE, isoform_position, offset, rr };
                                         kv_push(IsoformVariant, splice_shifts, variant);
                                         num_splice_sites++;
+
+                                        if (rr != r) continue;
+                                        if (!ncr.donor->gff_canonical && offset != 0) set_record_flag(rr, ti, p, CRYPTIC_DONOR);
                                     }
 
                                     records = (Records *) ncr.acceptor->records_ptr;
                                     for (int j = 0; j < records->n; j++) {
-                                        Record *r = kv_A(*records, j);
-                                        if (!ncr.acceptor->gff_canonical && offset != 0) set_record_flag(r, ti, p, CRYPTIC_ACCEPTOR);
+                                        Record *rr = kv_A(*records, j);
 
-                                        IsoformVariant variant = {SPLICE, isoform_position, offset, r };
+                                        IsoformVariant variant = {SPLICE, isoform_position, offset, rr };
                                         kv_push(IsoformVariant, splice_shifts, variant);
                                         num_splice_sites++;
+
+                                        if (r != rr) continue;
+                                        if (!ncr.acceptor->gff_canonical && offset != 0) set_record_flag(rr, ti, p, CRYPTIC_ACCEPTOR);
                                     }
                                 }
                                 continue;
@@ -2822,12 +2853,14 @@ int main(int argc, char *argv[]) {
                                 if (get_position_in_isoform(position, ncrs, &hap_in, t->strand, gene->coords, &isoform_position) == 0) {
                                     Records *records = (Records *) ncr.donor->records_ptr;
                                     for (int j = 0; j < records->n; j++) {
-                                        Record *r = kv_A(*records, j);
-                                        if (!ncr.donor->gff_canonical && offset != 0) set_record_flag(r, ti, p, CRYPTIC_DONOR);
+                                        Record *rr = kv_A(*records, j);
 
-                                        IsoformVariant variant = {SPLICE, isoform_position, offset, r };
+                                        IsoformVariant variant = {SPLICE, isoform_position, offset, rr };
                                         kv_push(IsoformVariant, splice_shifts, variant);
                                         num_splice_sites++;
+
+                                        if (rr != r) continue;
+                                        if (!ncr.donor->gff_canonical && offset != 0) set_record_flag(rr, ti, p, CRYPTIC_DONOR);
                                     }
                                 }
                                 continue;
@@ -2838,12 +2871,14 @@ int main(int argc, char *argv[]) {
                                 if (get_position_in_isoform(position, ncrs, &hap_in, t->strand, gene->coords, &isoform_position) == 0) {
                                     Records *records = (Records *) ncr.acceptor->records_ptr;
                                     for (int j = 0; j < records->n; j++) {
-                                        Record *r = kv_A(*records, j);
-                                        if (!ncr.acceptor->gff_canonical && offset != 0) set_record_flag(kv_A(*records, j), ti, p, CRYPTIC_ACCEPTOR);
+                                        Record *rr = kv_A(*records, j);
 
-                                        IsoformVariant variant = {SPLICE, isoform_position, offset, r };
+                                        IsoformVariant variant = {SPLICE, isoform_position, offset, rr };
                                         kv_push(IsoformVariant, splice_shifts, variant);
                                         num_splice_sites++;
+
+                                        if (rr != r) continue;
+                                        if (!ncr.acceptor->gff_canonical && offset != 0) set_record_flag(rr, ti, p, CRYPTIC_ACCEPTOR);
                                     }
                                 }
                                 continue;
@@ -2857,12 +2892,14 @@ int main(int argc, char *argv[]) {
                                 if (get_position_in_isoform(position, ncrs, &hap_in, t->strand, gene->coords, &isoform_position) == 0) {
                                     Records *records = (Records *) ncr.donor->records_ptr;
                                     for (int j = 0; j < records->n; j++) {
-                                        Record *r = kv_A(*records, j);
-                                        if (!ncr.donor->gff_canonical && donor_offset != 0) set_record_flag(r, ti, p, CRYPTIC_DONOR);
+                                        Record *rr = kv_A(*records, j);
 
-                                        IsoformVariant variant = {SPLICE, isoform_position, donor_offset, r };
+                                        IsoformVariant variant = {SPLICE, isoform_position, donor_offset, rr };
                                         kv_push(IsoformVariant, splice_shifts, variant);
                                         num_splice_sites++;
+
+                                        if (rr != r) continue;
+                                        if (!ncr.donor->gff_canonical && donor_offset != 0) set_record_flag(rr, ti, p, CRYPTIC_DONOR);
                                     }
                                 }
                             }
@@ -2876,12 +2913,14 @@ int main(int argc, char *argv[]) {
                                 if (get_position_in_isoform(position, ncrs, &hap_in, t->strand, gene->coords, &isoform_position) == 0) {
                                     Records *records = (Records *) ncr.acceptor->records_ptr;
                                     for (int j = 0; j < records->n; j++) {
-                                        Record *r = kv_A(*records, j);
-                                        if (!ncr.acceptor->gff_canonical && acceptor_offset != 0) set_record_flag(r, ti, p, CRYPTIC_ACCEPTOR);
+                                        Record *rr = kv_A(*records, j);
 
-                                        IsoformVariant variant = {SPLICE, isoform_position, acceptor_offset, r };
+                                        IsoformVariant variant = {SPLICE, isoform_position, acceptor_offset, rr };
                                         kv_push(IsoformVariant, splice_shifts, variant);
                                         num_splice_sites++;
+
+                                        if (rr != r) continue;
+                                        if (!ncr.acceptor->gff_canonical && acceptor_offset != 0) set_record_flag(rr, ti, p, CRYPTIC_ACCEPTOR);
                                     }
                                 }
                             }
@@ -3126,8 +3165,6 @@ int main(int argc, char *argv[]) {
                                 }
                             }
 
-                            // if (csq->triggers[STOP_GAINED] == STOP_RESCUE_VALUE && stop_rescued && ptv_type == FRAMESHIFT) {
-
                             if (!should_check_induced) continue;
 
                             const char *codon = spliced_seq.s + possible_induced_sequence.start;
@@ -3151,8 +3188,6 @@ int main(int argc, char *argv[]) {
                                 continue;
                             }
 
-                            // rescue_checked = 1;
-                            // rescue_type = NO_RESCUE;
                         }
 
                         if (!touched && !stop_checked && !frameshift_checked && csq->triggers[SPLICE_TRIGGER] == CANONICAL_SPLICE_VALUE && rescue_type == NO_RESCUE) {
@@ -3161,8 +3196,10 @@ int main(int argc, char *argv[]) {
                         }
 
                         float isoform_prior = 1.0;
-                        for (int i = 0; i > ncrs->n; i++) {
+                        for (int i = 0; i < ncrs->n; i++) {
                             NonCodingRegion ncr = kv_A(*ncrs, i);
+                            if (ncr.coords.start == ncr.coords.end) continue; // Skips should not be included
+
                             if (ncr.donor != NULL) isoform_prior *= ncr.donor->prior_probability;
                             if (ncr.acceptor != NULL) isoform_prior *= ncr.acceptor->prior_probability;
                         }
@@ -3199,10 +3236,6 @@ int main(int argc, char *argv[]) {
                     free(hap_seq.s);
                 }
 
-                // for (int t = 0; t < r->tscripts->n; t++) {
-                //     if (r->skipped) r->flags[t * NUM_PHASES + p] |= SKIPPED_VARIANT_IN_PREDICTION;
-                //     if (r->unphased) r->flags[t * NUM_PHASES + p] |= UNPHASED_VARIANT_IN_PREDICTION;
-                // }
             }
 
             kv_destroy(*batch);
