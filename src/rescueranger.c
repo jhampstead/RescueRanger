@@ -489,25 +489,35 @@ float *match_predictions_to_reference(const float *predictions, const bcf1_t *v,
 
         // Copy segments between variants/boundaries
         int segment_len = (ref_segment.start - ref_idx);
-        memcpy(corrected_predictions + ref_idx, predictions + hap_idx, segment_len * sizeof(float));
+        if (segment_len > 0) memcpy(corrected_predictions + ref_idx, predictions + hap_idx, segment_len * sizeof(float));
 
+        int variant_offset = haplotype_offset(rs, (Range) { pred_range.start, pred_range.start + ref.start }) * NUM_SCORES;
         int offset = ref_len - alt_len; // Naive offset in end position vs ref and alt
+        float *corrected_start = corrected_predictions + ref_segment.start;
         if (offset == 0) {
-            memcpy(corrected_predictions + ref_segment.start, predictions + hap_idx + segment_len, range_len(ref_segment) * sizeof(float));
+            memcpy(corrected_start, predictions + ref_segment.start - variant_offset, range_len(ref_segment) * sizeof(float));
+            // memcpy(corrected_predictions + ref_segment.start, predictions + hap_idx + segment_len, range_len(ref_segment) * sizeof(float));
         } else if (offset < 0) {
             float best_scores[NUM_SCORES] = {0};
-            get_best_insertion_score(predictions + hap_idx + segment_len, alt_len, best_scores);
-            memcpy(corrected_predictions + ref_segment.start, best_scores, NUM_SCORES * sizeof(float));
+            get_best_insertion_score(predictions + ref_segment.start - variant_offset, alt_len, best_scores);
+            memcpy(corrected_start, best_scores, NUM_SCORES * sizeof(float));
+            // memcpy(corrected_predictions + ref_segment.start, best_scores, NUM_SCORES * sizeof(float));
         } else { // offset > 0
-            memcpy(corrected_predictions + ref_segment.start, predictions + hap_idx + segment_len, NUM_SCORES * sizeof(float));
-            memset(corrected_predictions + (ref_segment.start + NUM_SCORES), 0, offset * NUM_SCORES * sizeof(float));
+            // Only set if it would not already have been set
+            // if (ref_segment.start > ref_idx) 
+            memcpy(corrected_start, predictions + ref_segment.start - variant_offset, NUM_SCORES * sizeof(float));
+            memset(corrected_start + NUM_SCORES, 0, offset * NUM_SCORES + sizeof(float));
+            // memcpy(corrected_predictions + ref_segment.start, predictions + hap_idx + segment_len, NUM_SCORES * sizeof(float));
+            // memset(corrected_predictions + (ref_segment.start + NUM_SCORES), 0, offset * NUM_SCORES * sizeof(float));
         }
 
-        hap_idx += segment_len + alt_len*NUM_SCORES;
-        ref_idx = ref_segment.end;
+
+        // hap_idx += segment_len + alt_len*NUM_SCORES;
+        if (ref_segment.end > ref_idx) ref_idx = ref_segment.end;
     }
 
-    memcpy(corrected_predictions + ref_idx, predictions + hap_idx, (num_reference_predictions - ref_idx) * sizeof(float));
+    int variant_offset = haplotype_offset(rs, pred_range) * NUM_SCORES;
+    memcpy(corrected_predictions + ref_idx, predictions + ref_idx - variant_offset, (num_reference_predictions - ref_idx) * sizeof(float));
 
     return corrected_predictions;
 }
@@ -3030,7 +3040,7 @@ int main(int argc, char *argv[]) {
                             if (stop_checked) continue;
 
                             touched = 1;
-                            if (csq->triggers[STOP_TRIGGER]) {
+                            if (csq->triggers[STOP_TRIGGER] && iso_shift.shift_type == INDEL) {
                                 int codon_start;
                                 if (t->strand == STRAND_FWD) {
                                     codon_start = (int) ((iso_shift.seq_pos - shifted_isoform.start + 1) / 3) * 3;
