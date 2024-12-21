@@ -1,82 +1,102 @@
 #include "utils.h"
 #include "region.h"
-#include <string.h>
+#include <cpliceai/utils.h>
 
-int get_allele_offset(int64_t pos, int rlen, int alen, int boundary_start, int boundary_end) {
-    if (pos - boundary_start < 0) { // Insertion overlapping start
-        return 1 - (rlen + (pos - boundary_start));
-    } else if (pos + rlen - boundary_end > 0) { // Insertion overlapping end
-        return 1 - (rlen - (pos + rlen - boundary_end));
+
+Range variant_to_range(const bcf1_t *v, const int allele) {
+    return (Range) { v->pos, v->pos + strlen(v->d.allele[allele]) };
+}
+
+int allele_offset(const bcf1_t *v, const int ref_index, const int alt_index, const Range bounds) {
+    Range ref = variant_to_range(v, ref_index);
+    Range ref_range;
+    if (intersect_ranges(ref, bounds, &ref_range) == 0 || range_len(ref_range) == 0) {
+        return 0;
     }
-    return alen - rlen; // WARN: Only supports a single alternate allele per variant
+
+    Range alt = variant_to_range(v, alt_index);
+    Range intersected_alt;
+    int alt_len = 0;
+    if (intersect_ranges((Range) {v->pos, v->pos+1}, bounds, &intersected_alt) != 0 && range_len(intersected_alt) > 0) {
+        alt_len = range_len(alt);
+    }
+
+    return range_len(ref_range) - alt_len;
 }
 
-int get_allele_offset_variant(bcf1_t *v, int boundary_start, int boundary_end) {
-    return get_allele_offset(v->pos, v->rlen, strlen(v->d.allele[1]), boundary_start, boundary_end);
-}
-
-int64_t get_position_in_haplotype(int64_t pos, Records *rs, int64_t start, int64_t stop) {
+int haplotype_offset(const Records *rs, const Range bounds) {
     int offset = 0;
+
     for (int i = 0; i < rs->n; i++) {
         Record *r = kv_A(*rs, i);
-        if (r->v->pos >= pos) break;
-
-        offset += get_allele_offset_variant(r->v, start, stop);
+        offset += allele_offset(r->v, 0, 1, bounds);
     }
 
-    return pos + offset;
+    return offset;
 }
 
-int get_haplotype_sequence(kstring_t ref, Records *rs, int seq_offset, int pos_offset, kstring_t *out_hap) {
-    // Prepare kstring
-    kstring_t seq;
-    seq.m = ref.l - seq_offset + 1; 
-    seq.l = 0;
-    seq.s = malloc(seq.m);
+int prediction_offset(const bcf1_t *v, const Records *rs) {
+    return haplotype_offset(rs, (Range) { v->pos - 50, v->pos + 51 }); // TODO: Change to a const/defined variable
+}
 
-    // Current state tracking
-    int prev_cpy_end = 0;
-    int c_offset = 0;
+void get_best_insertion_score(const float *insert_start, const int length, float *best) {
+    for (int i = 0; i < length; i+=3) {
+        for (int j = 0; j < 3; j++) {
+            if (insert_start[i + j] > best[j]) best[j] = insert_start[i+j];
+        }
+    }
+}
 
-    IRegion del_region = {-1, -1, -1};
+float *match_predictions_to_reference(const float *predictions, const bcf1_t *v, const Records *rs, const size_t num_reference_predictions) {
+    float *corrected_predictions = malloc(num_reference_predictions * sizeof(float));
+    Range pred_range = {v->pos - (50), v->pos + 51}; // +1 for open ended coordinates
 
-    int prev_alt_allele_len = 0;
-    for (int i = 0; i < rs->n; i++) {
-        // Get current variant info
-        Record *r = kv_A(*rs, i);
+    int ref_idx = 0, hap_idx = 0;
+    for (int l = 0; l < rs->n; l++) {
+        Record *r = kv_A(*rs, l);
 
-        int var_idx = r->v->pos - pos_offset;
-        if (var_idx < 0) { // If a deletion overlaps the start
-            prev_cpy_end -= var_idx;
-            continue;
+        Range ref;
+        if (intersect_ranges(variant_to_range(r->v, 0), pred_range, &ref) == 0) continue;
+        shift_range(&ref, -pred_range.start);
+        int ref_len = range_len(ref);
+        if (ref_len == 0) continue;
+
+        Range alt = variant_to_range(r->v, 1);
+        Range intersected_alt;
+        int alt_segment = 0;
+        if (intersect_ranges(alt, pred_range, &intersected_alt) > 0) {
+            // shift_range(&alt, -pred_range.start);
+            alt_segment = range_len(alt);
         }
 
-        if (var_idx + r->v->rlen > ref.l) { // If a deletion overlaps the end
-            ref.l -= (var_idx + r->v->rlen) - ref.l;
-            continue;
+        int skipped_alt_bases = (intersected_alt.start - alt.start);
+        if (alt_segment > 0) alt_segment -= skipped_alt_bases;
+        Range ref_segment = scale_range(ref, NUM_SCORES);
+
+        // Copy segments between variants/boundaries
+        int segment_len = (ref_segment.start - ref_idx);
+        if (segment_len > 0) memcpy(corrected_predictions + ref_idx, predictions + hap_idx, segment_len * sizeof(float));
+
+        int variant_offset = haplotype_offset(rs, (Range) { pred_range.start, pred_range.start + ref.start }) * NUM_SCORES;
+        int offset = ref_len - alt_segment; // Naive offset in end position vs ref and alt
+        float *corrected_start = corrected_predictions + ref_segment.start;
+        if (offset == 0) {
+            memcpy(corrected_start, predictions + ref_segment.start - variant_offset, range_len(ref_segment) * sizeof(float));
+        } else if (offset < 0) {
+            float best_scores[NUM_SCORES] = {0};
+            get_best_insertion_score(predictions + ref_segment.start - variant_offset, alt_segment * NUM_SCORES, best_scores);
+            memcpy(corrected_start, best_scores, NUM_SCORES * sizeof(float));
+        } else { // offset > 0
+            memcpy(corrected_start, predictions + ref_segment.start - variant_offset, NUM_SCORES * sizeof(float));
+            memset(corrected_start + NUM_SCORES, 0, (offset - (skipped_alt_bases > 0)) * NUM_SCORES * sizeof(float));
         }
 
-        char *dst = seq.s + prev_cpy_end + c_offset;
-        char *src = ref.s + prev_cpy_end;
-        int segment_len = var_idx - prev_cpy_end;
-        kputsn(src, segment_len, &seq);
 
-        // Copy over variant
-        int alt_allele_len = strlen(r->v->d.allele[1]);
-        kputsn(r->v->d.allele[1], alt_allele_len, &seq);
-
-        // Update state for next iteration
-        prev_cpy_end = var_idx + r->v->rlen;
-        c_offset += alt_allele_len - r->v->rlen;
-
-        if (alt_allele_len == 1 && r->v->rlen > 1) del_region = variant_to_iregion(r->v);
+        if (ref_segment.end > ref_idx) ref_idx = ref_segment.end;
     }
 
-    // Copy over remaining reference sequence
-    kputsn(ref.s + prev_cpy_end, ref.l - prev_cpy_end, &seq);
+    int variant_offset = haplotype_offset(rs, pred_range) * NUM_SCORES;
+    memcpy(corrected_predictions + ref_idx, predictions + ref_idx - variant_offset, (num_reference_predictions - ref_idx) * sizeof(float));
 
-    *out_hap = seq;
-
-    return 0;
+    return corrected_predictions;
 }
-

@@ -28,6 +28,8 @@
 #include "logging/log.h"
 #include "region.h"
 #include "record.h"
+#include "utils.h"
+#include "haplotype.h"
 
 #define BUFFER_SIZE 2024
 #define ID 0
@@ -167,10 +169,6 @@ KSORT_INIT(frameshift_sort, IsoformVariant, frameshift_lt)
 #define frameshift_gt(a, b) ((a).seq_pos > (b).seq_pos)
 KSORT_INIT(frameshift_reverse_sort, IsoformVariant, frameshift_gt)
 
-Range variant_to_range(const bcf1_t *v, const int allele) {
-    return (Range) { v->pos, v->pos + strlen(v->d.allele[allele]) };
-}
-
 int find_gf_tscripts_by_iregion(IRegion iregion, bcf_hdr_t *hdr, gff_t *gff, gf_tscripts **out_gf_tscripts) {
     regidx_t *gff_tscripts = (regidx_t *) gff_get(gff, idx_tscript);
     regitr_t *itr = regitr_init(gff_tscripts);
@@ -245,13 +243,13 @@ void predict_for_seq(Model *models, const char *seq, int seq_len, int strand, fl
     if (strand == STRAND_REV) reverse_prediction(*predictions, *num_predictions, 3);
 }
 
-void get_best_insertion_score(const float *insert_start, const int length, float *best) {
-    for (int i = 0; i < length; i+=3) {
-        for (int j = 0; j < 3; j++) {
-            if (insert_start[i + j] > best[j]) best[j] = insert_start[i+j];
-        }
-    }
-}
+// void get_best_insertion_score(const float *insert_start, const int length, float *best) {
+//     for (int i = 0; i < length; i+=3) {
+//         for (int j = 0; j < 3; j++) {
+//             if (insert_start[i + j] > best[j]) best[j] = insert_start[i+j];
+//         }
+//     }
+// }
 
 void unpack_variants(Records *vs) {
     for (int i = 0; i < vs->n; i++) {
@@ -364,29 +362,29 @@ void remove_unworkable_variants(Records *vs, const bcf_hdr_t *hdr) {
     }
 }
 
-int prediction_offset(bcf1_t *v, Records *rs) {
-    Range pred_range = {v->pos - (CAI_DISTANCE), v->pos + CAI_DISTANCE+1};
-
-    int offset = 0;
-    for (int i = 0; i < rs->n; i++) {
-        Record *r = kv_A(*rs, i);
-
-        Range ref;
-        if (intersect_ranges((Range) {r->v->pos, r->v->pos + r->v->rlen}, pred_range, &ref) == 0) continue;
-        int ref_len = range_len(ref);
-        if (ref_len == 0) continue;
-
-        Range alt = variant_to_range(r->v, 1);
-        Range intersect_alt;
-        int alt_len = 0;
-        if (intersect_ranges(alt, pred_range, &intersect_alt) > 0) {
-            alt_len = range_len(alt);
-        }
-        offset += ref_len - alt_len;
-    }
-
-    return offset;
-}
+// int prediction_offset(bcf1_t *v, Records *rs) {
+//     Range pred_range = {v->pos - (CAI_DISTANCE), v->pos + CAI_DISTANCE+1};
+//
+//     int offset = 0;
+//     for (int i = 0; i < rs->n; i++) {
+//         Record *r = kv_A(*rs, i);
+//
+//         Range ref;
+//         if (intersect_ranges((Range) {r->v->pos, r->v->pos + r->v->rlen}, pred_range, &ref) == 0) continue;
+//         int ref_len = range_len(ref);
+//         if (ref_len == 0) continue;
+//
+//         Range alt = variant_to_range(r->v, 1);
+//         Range intersect_alt;
+//         int alt_len = 0;
+//         if (intersect_ranges(alt, pred_range, &intersect_alt) > 0) {
+//             alt_len = range_len(alt);
+//         }
+//         offset += ref_len - alt_len;
+//     }
+//
+//     return offset;
+// }
 
 void add_phasing_for_prediction_records(Records *rs, Range prediction_range) {
     for (int i = 0; i < rs->n; i++) {
@@ -437,164 +435,66 @@ int find_gene_region_for_variant(bcf1_t *v, bcf_hdr_t *hdr, gff_t *gff, IRegion 
     return 0;
 }
 
-int allele_offset(const bcf1_t *v, const int ref_index, const int alt_index, const Range bounds) {
-    Range ref = variant_to_range(v, ref_index);
-    Range ref_range;
-    if (intersect_ranges(ref, bounds, &ref_range) == 0 || range_len(ref_range) == 0) {
-        return 0;
-    }
-
-    Range alt = variant_to_range(v, alt_index);
-    Range intersected_alt;
-    int alt_len = 0;
-    if (intersect_ranges((Range) {v->pos, v->pos+1}, bounds, &intersected_alt) != 0 && range_len(intersected_alt) > 0) {
-        alt_len = range_len(alt);
-    }
-
-    return range_len(ref_range) - alt_len;
-}
-
-int haplotype_offset(const Records *rs, const Range bounds) {
-    int offset = 0;
-
-    for (int i = 0; i < rs->n; i++) {
-        Record *r = kv_A(*rs, i);
-        offset += allele_offset(r->v, 0, 1, bounds);
-    }
-
-    return offset;
-}
-
-float *match_predictions_to_reference(const float *predictions, const bcf1_t *v, const Records *rs, const size_t num_reference_predictions) {
-    float *corrected_predictions = malloc(num_reference_predictions * sizeof(float));
-    Range pred_range = {v->pos - (CAI_DISTANCE), v->pos + CAI_DISTANCE+1}; // +1 for open ended coordinates
-
-    int ref_idx = 0, hap_idx = 0;
-    for (int l = 0; l < rs->n; l++) {
-        Record *r = kv_A(*rs, l);
-
-        Range ref;
-        if (intersect_ranges(variant_to_range(r->v, 0), pred_range, &ref) == 0) continue;
-        shift_range(&ref, -pred_range.start);
-        int ref_len = range_len(ref);
-        if (ref_len == 0) continue;
-
-        Range alt = variant_to_range(r->v, 1);
-        Range intersect_alt;
-        int alt_len = 0;
-        if (intersect_ranges(alt, pred_range, &intersect_alt) > 0) {
-            shift_range(&alt, -pred_range.start);
-            alt_len = range_len(alt);
-        }
-
-        Range ref_segment = scale_range(ref, NUM_SCORES);
-
-        // Copy segments between variants/boundaries
-        int segment_len = (ref_segment.start - ref_idx);
-        if (segment_len > 0) memcpy(corrected_predictions + ref_idx, predictions + hap_idx, segment_len * sizeof(float));
-
-        int variant_offset = haplotype_offset(rs, (Range) { pred_range.start, pred_range.start + ref.start }) * NUM_SCORES;
-        int offset = ref_len - alt_len; // Naive offset in end position vs ref and alt
-        float *corrected_start = corrected_predictions + ref_segment.start;
-        if (offset == 0) {
-            memcpy(corrected_start, predictions + ref_segment.start - variant_offset, range_len(ref_segment) * sizeof(float));
-            // memcpy(corrected_predictions + ref_segment.start, predictions + hap_idx + segment_len, range_len(ref_segment) * sizeof(float));
-        } else if (offset < 0) {
-            float best_scores[NUM_SCORES] = {0};
-            get_best_insertion_score(predictions + ref_segment.start - variant_offset, alt_len, best_scores);
-            memcpy(corrected_start, best_scores, NUM_SCORES * sizeof(float));
-            // memcpy(corrected_predictions + ref_segment.start, best_scores, NUM_SCORES * sizeof(float));
-        } else { // offset > 0
-            // Only set if it would not already have been set
-            // if (ref_segment.start > ref_idx) 
-            memcpy(corrected_start, predictions + ref_segment.start - variant_offset, NUM_SCORES * sizeof(float));
-            memset(corrected_start + NUM_SCORES, 0, offset * NUM_SCORES + sizeof(float));
-            // memcpy(corrected_predictions + ref_segment.start, predictions + hap_idx + segment_len, NUM_SCORES * sizeof(float));
-            // memset(corrected_predictions + (ref_segment.start + NUM_SCORES), 0, offset * NUM_SCORES * sizeof(float));
-        }
-
-
-        // hap_idx += segment_len + alt_len*NUM_SCORES;
-        if (ref_segment.end > ref_idx) ref_idx = ref_segment.end;
-    }
-
-    int variant_offset = haplotype_offset(rs, pred_range) * NUM_SCORES;
-    memcpy(corrected_predictions + ref_idx, predictions + ref_idx - variant_offset, (num_reference_predictions - ref_idx) * sizeof(float));
-
-    return corrected_predictions;
-}
-
-static void get_haplotype_sequence(const kstring_t reference_sequence, const Records *rs, const Range gene, kstring_t *out_hap) {
-    const int sequence_offset = haplotype_offset(rs, gene);
-
-    // Prepare kstring
-    kstring_t haplotype_sequence = {0};
-    // haplotype_sequence.l = reference_sequence.l - sequence_offset;
-    // haplotype_sequence.m = haplotype_sequence.l + 1; 
-    // haplotype_sequence.s = malloc(haplotype_sequence.m);
-
-    int ref_idx = 0;
-    int hap_idx = 0;
-
-    for (int i = 0; i < rs->n; i++) {
-        Record *r = kv_A(*rs, i);
-
-        // Get reference position, intersected to gene boundaries to manage start overlap
-        Range ref = variant_to_range(r->v, 0);
-        Range intersected_ref = {0}; 
-        if (intersect_ranges(ref, gene, &intersected_ref) == 0) continue;
-        shift_range(&ref, -gene.start);
-        shift_range(&intersected_ref, -gene.start);
-        int ref_segment = intersected_ref.start - ref_idx;
-
-        // Get alt position, intersected to gene boundaries
-        Range alt = variant_to_range(r->v, 1);
-        Range intersected_alt = {0}; 
-        int alt_segment = 0;
-        if (intersect_ranges(alt, gene, &intersected_alt) && range_len(intersected_alt) > 0) {
-            shift_range(&alt, -gene.start);
-            shift_range(&intersected_alt, -gene.start);
-
-            alt_segment = range_len(alt);
-        }
-
-        char *ref_seq_pos = reference_sequence.s + ref_idx;
-        char *alt_seq_pos = r->v->d.allele[1];
-
-        // Offset start and segment lengths for the leading reference base when dealing with indels
-        int is_indel = ((ref.start == intersected_ref.start & range_len(ref) > 1) | (alt.start == intersected_alt.start & range_len(alt) > 1));
-        // if ((ref.start == intersected_ref.start & range_len(ref) > 1) | (alt.start == intersected_alt.start & range_len(alt) > 1)) {
-        //     alt_seq_pos++;
-        //     ref_segment++;
-        //     alt_segment--;
-        // }
-
-        // Copy over reference sequence without any variation
-        // if (ref_segment + is_indel > 0) strncpy(haplotype_sequence.s + hap_idx, ref_seq_pos, ref_segment + is_indel);
-        if (ref_segment + is_indel > 0) kputsn(ref_seq_pos, ref_segment + is_indel, &haplotype_sequence);
-
-        ref_idx += ref_segment + is_indel;
-        hap_idx += ref_segment + is_indel;
-
-        // Copy over variant
-        // if (alt_segment - is_indel > 0) strncpy(haplotype_sequence.s + hap_idx, alt_seq_pos + is_indel, alt_segment - is_indel);
-        if (alt_segment - is_indel > 0) kputsn(alt_seq_pos + is_indel, alt_segment - is_indel, &haplotype_sequence);
-
-        ref_idx += range_len(intersected_ref) - is_indel;
-        hap_idx += alt_segment - is_indel;
-    }
-
-    // Copy over remaining sequence from reference and complete sequence string
-    int remainder = reference_sequence.l - ref_idx;
-    if (remainder > 0) {
-        // haplotype_sequence.l = hap_idx;
-        kputsn(reference_sequence.s + ref_idx, remainder, &haplotype_sequence);
-    }
-    // if (remainder > 0) strncpy(haplotype_sequence.s + hap_idx, reference_sequence.s + ref_idx, remainder);
-    // haplotype_sequence.s[haplotype_sequence.l] = '\0';
- 
-    *out_hap = haplotype_sequence;
-}
+// float *match_predictions_to_reference(const float *predictions, const bcf1_t *v, const Records *rs, const size_t num_reference_predictions) {
+//     float *corrected_predictions = malloc(num_reference_predictions * sizeof(float));
+//     Range pred_range = {v->pos - (CAI_DISTANCE), v->pos + CAI_DISTANCE+1}; // +1 for open ended coordinates
+//
+//     int ref_idx = 0, hap_idx = 0;
+//     for (int l = 0; l < rs->n; l++) {
+//         Record *r = kv_A(*rs, l);
+//
+//         Range ref;
+//         if (intersect_ranges(variant_to_range(r->v, 0), pred_range, &ref) == 0) continue;
+//         shift_range(&ref, -pred_range.start);
+//         int ref_len = range_len(ref);
+//         if (ref_len == 0) continue;
+//
+//         Range alt = variant_to_range(r->v, 1);
+//         Range intersected_alt;
+//         int alt_segment = 0;
+//         if (intersect_ranges(alt, pred_range, &intersected_alt) > 0) {
+//             shift_range(&alt, -pred_range.start);
+//             alt_segment = range_len(alt);
+//         }
+//
+//         int skipped_alt_bases = (intersected_alt.start - alt.start);
+//         if (alt_segment > 0) alt_segment -= skipped_alt_bases;
+//         Range ref_segment = scale_range(ref, NUM_SCORES);
+//
+//         // Copy segments between variants/boundaries
+//         int segment_len = (ref_segment.start - ref_idx);
+//         if (segment_len > 0) memcpy(corrected_predictions + ref_idx, predictions + hap_idx, segment_len * sizeof(float));
+//
+//         int variant_offset = haplotype_offset(rs, (Range) { pred_range.start, pred_range.start + ref.start }) * NUM_SCORES;
+//         int offset = ref_len - alt_segment; // Naive offset in end position vs ref and alt
+//         float *corrected_start = corrected_predictions + ref_segment.start;
+//         if (offset == 0) {
+//             memcpy(corrected_start, predictions + ref_segment.start - variant_offset, range_len(ref_segment) * sizeof(float));
+//             // memcpy(corrected_predictions + ref_segment.start, predictions + hap_idx + segment_len, range_len(ref_segment) * sizeof(float));
+//         } else if (offset < 0) {
+//             float best_scores[NUM_SCORES] = {0};
+//             get_best_insertion_score(predictions + ref_segment.start - variant_offset, alt_segment, best_scores);
+//             memcpy(corrected_start, best_scores, NUM_SCORES * sizeof(float));
+//             // memcpy(corrected_predictions + ref_segment.start, best_scores, NUM_SCORES * sizeof(float));
+//         } else { // offset > 0
+//             // Only set if it would not already have been set
+//             // if (ref_segment.start > ref_idx) 
+//             memcpy(corrected_start, predictions + ref_segment.start - variant_offset, NUM_SCORES * sizeof(float));
+//             memset(corrected_start + NUM_SCORES, 0, offset * NUM_SCORES + sizeof(float));
+//             // memcpy(corrected_predictions + ref_segment.start, predictions + hap_idx + segment_len, NUM_SCORES * sizeof(float));
+//             // memset(corrected_predictions + (ref_segment.start + NUM_SCORES), 0, offset * NUM_SCORES * sizeof(float));
+//         }
+//
+//
+//         // hap_idx += segment_len + alt_len*NUM_SCORES;
+//         if (ref_segment.end > ref_idx) ref_idx = ref_segment.end;
+//     }
+//
+//     int variant_offset = haplotype_offset(rs, pred_range) * NUM_SCORES;
+//     memcpy(corrected_predictions + ref_idx, predictions + ref_idx - variant_offset, (num_reference_predictions - ref_idx) * sizeof(float));
+//
+//     return corrected_predictions;
+// }
 
 static int get_position_in_isoform(const int64_t position, const NonCodingRegions *ncrs, const Records *rs, const int strand, const Range bounds, int64_t *out_position) {
     int64_t isoform_position = position; //  - haplotype_offset(rs, bounds);
@@ -1100,7 +1000,7 @@ void store_splice_sites(SpliceProbability prediction, int *predict_for_pair, int
         splice_sites->canonical_donors[0].predicted = 1;
         splice_sites->canonical_donors[0].prior_probability = prediction.prior_probability;
         splice_sites->canonical_donors[0].posterior_probability = prediction.posterior_probability;
-    } else if (prediction.type == ACCEPTOR && prediction.posterior_probability == 0 && splice_sites->canonical_donors[0].gff_canonical) {
+    } else if (prediction.type == ACCEPTOR && prediction.posterior_probability == 0 && splice_sites->canonical_acceptors[0].gff_canonical) {
         kv_push(Record *, *((Records *) splice_sites->canonical_acceptors[0].records_ptr), prediction.record);
         splice_sites->canonical_acceptors[0].predicted = 1;
         splice_sites->canonical_acceptors[0].prior_probability = prediction.prior_probability;
@@ -3126,7 +3026,7 @@ int main(int argc, char *argv[]) {
                                 if (iso_shift.shift == 0) continue;
                                 frameshift_checked = 1;
 
-                                if (iso_shift.shift % 3 == 0 && abs(iso_shift.shift) < MAX_FRAMESHIFT_RADIUS) { // TODO: Is this possible?
+                                if (iso_shift.shift % 3 == 0 && abs(iso_shift.shift) < MAX_FRAMESHIFT_RADIUS) { // TODO: Is this possible
                                     rescued = 1;
                                     rescue_type = FRAME_RESTORING_INDEL;
                                     affected_bases = iso_shift.shift;
@@ -3138,6 +3038,9 @@ int main(int argc, char *argv[]) {
                                     for (int i = 0; i < shifts.n; i++) {
                                         IsoformVariant shift = kv_A(shifts, i);
                                         if (shift.shift == 0) continue; // Rescued splice, do nothing
+                                        if (abs(shift.shift) > MAX_FRAMESHIFT_RADIUS) continue;
+
+                                        int positive_shift = shift.shift > 0 ? shift.shift : 0;
 
                                         // If outside of rescue radius
                                         if (shift.seq_pos - MAX_FRAMESHIFT_RADIUS > shift_start) {

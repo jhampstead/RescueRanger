@@ -12,8 +12,11 @@ include_directories(include)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(HTSLIB REQUIRED htslib)
 pkg_check_modules(CPLICEAI REQUIRED cpliceai)
+pkg_check_modules(CHECK REQUIRED check)
 
 add_subdirectory(src)
 
-#include(CTest)
-#add_subdirectory(tests)
+add_subdirectory(tests)
+enable_testing()
+add_test(NAME test_test COMMAND test_test)
+

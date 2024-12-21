@@ -1,16 +1,27 @@
-add_subdirectory(unity)
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../src)
 
-# Runs all tests
-add_executable(region_test region_test.c)
-add_executable(utils_test utils_test.c)
+find_package(Check REQUIRED)
+include_directories(${CHECK_INCLUDE_DIRS})
+link_directories(${CHECK_LIBRARY_DIRS})
 
-target_link_libraries(region_test PRIVATE Unity Region)
-target_include_directories(region_test PRIVATE ${CMAKE_SOURCE_DIR}/src unity)
 
-target_link_libraries(utils_test PRIVATE Unity Utils Region Logging ${HTSLIB_LIBRARIES})
-target_include_directories(utils_test PRIVATE ${CMAKE_SOURCE_DIR}/src unity)
+set(TEST_SOURCES
+    mocks.c
+    check_haplotype.c
+    check_utils.c
+    check_main.c
+)
 
-# Add tests
-add_test(region region_test)
-add_test(utils utils_test)
+add_executable(unit_test ${TEST_SOURCES})
+add_dependencies(unit_test rescueranger)
+
+target_link_libraries(unit_test ${CHECK_LIBRARIES})
+
+target_link_libraries(unit_test ${HTSLIB_LIBRARIES})
+target_link_libraries(unit_test ${CPLICEAI_LIBRARIES})
+
+
+target_link_libraries(unit_test Record)
+target_link_libraries(unit_test Utils)
+target_link_libraries(unit_test Haplotype)
 
