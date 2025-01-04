@@ -99,6 +99,7 @@ typedef struct SpliceSite {
     uint32_t canonical_position;
     uint32_t predicted; // whether haplotype prediction has been run for the splice site
     uint32_t gff_canonical; // whether the splice site is canonical in the GFF
+    uint32_t lost;
     float prior_probability; // raw SpliceAI probability
     float posterior_probability; // scaled probability across window
 } SpliceSite;

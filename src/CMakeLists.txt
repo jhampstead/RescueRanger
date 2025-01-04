@@ -36,6 +36,10 @@ target_link_libraries(rescueranger Haplotype)
 add_library(Utils STATIC utils.c)
 target_link_libraries(rescueranger Utils)
 
+# Add
+add_library(Scores STATIC scores.c)
+target_link_libraries(rescueranger Scores)
+
 # Add BCFTools
 add_library(bcftools STATIC bcftools/regidx.c bcftools/gff.c)
 target_include_directories(rescueranger PRIVATE bcftools)
