@@ -769,7 +769,10 @@ static int transform_to_posterior_probabilities(const int target, const size_t n
         sum += probabilities[i];
     }
 
-    if (num_values == 0) return 0;
+    if (num_values == 0) {
+        memset(posterior_probabilities, 0.0, num_probabilities * sizeof(float));
+        return 0;
+    }
 
     for (i = target; i < num_probabilities; i+=NUM_SCORES) {
         if (probabilities[i] == 0) continue;
@@ -923,13 +926,13 @@ void get_prediction_pairs_for_site(int site, float *ref_predictions, size_t ref_
     for (int i = 0; i < 101; i++) ref_site_predictions[i] = ref_predictions[NUM_SCORES * i + site];
 
     float ref_site_prediction_posteriors[ref_len];
-    transform_to_posterior_probabilities(site, ref_len, ref_predictions, ref_site_prediction_posteriors);
+    int n_ref_sites = transform_to_posterior_probabilities(site, ref_len, ref_predictions, ref_site_prediction_posteriors);
 
     float halt_site_predictions[hap_alt_len];
     for (int i = 0; i < hap_alt_len; i++) halt_site_predictions[i] = hap_alt_predictions[NUM_SCORES * i + site];
 
     float halt_site_prediction_posteriors[hap_alt_len];
-    transform_to_posterior_probabilities(site, hap_alt_len, hap_alt_predictions, halt_site_prediction_posteriors);
+    int n_alt_sites = transform_to_posterior_probabilities(site, hap_alt_len, hap_alt_predictions, halt_site_prediction_posteriors);
 
     PairPrediction *ref_alt_map = NULL;
     size_t ref_alt_map_size = 0;
