@@ -737,22 +737,22 @@ static int add_rescueranger_tags(bcf_hdr_t *hdr) {
 }
 #undef TAG_SIZE
 
-static void filter_to_most_likely_prediction(size_t num_probabilities, float **probabilities) {
+static void filter_to_most_likely_prediction(size_t num_probabilities, float *probabilities) {
     for (int i = 0; i < num_probabilities; i += NUM_SCORES) {
         float max = 0;
         int max_idx = 0;
 
         for (int pred_idx = i; pred_idx < i+NUM_SCORES; pred_idx++) {
-            if ((*probabilities)[pred_idx] <= max) continue;
+            if (probabilities[pred_idx] <= max) continue;
 
-            max = (*probabilities)[pred_idx];
+            max = probabilities[pred_idx];
             max_idx = pred_idx;
         }
 
         for (int pred_idx = i; pred_idx < i+NUM_SCORES; pred_idx++) {
             if (pred_idx == max_idx) continue;
 
-            (*probabilities)[pred_idx] = 0;
+            probabilities[pred_idx] = 0;
         }
     }
 }
@@ -893,7 +893,7 @@ int trigger_cryptic_splice(bcf1_t *rec, bcf_hdr_t *hdr) {
     return 0;
 }
 
-float * predict_on_sequence(Model *models, char *seq, uint32_t position, Range prediction_boundaries, int strand, Records *rs) {
+float * predict_on_sequence(Model *models, const char *seq, const int width, uint32_t position, Range prediction_boundaries, int strand, Records *rs) {
     int64_t gene_start = prediction_boundaries.start;
     int64_t gene_end = prediction_boundaries.end;
     if (rs != NULL) gene_end -= haplotype_offset(rs, prediction_boundaries);
@@ -903,14 +903,14 @@ float * predict_on_sequence(Model *models, char *seq, uint32_t position, Range p
     int32_t start_offset = VARIANT_POS + (gene_start - vposition);
     int32_t end_offset = VARIANT_POS - (gene_end - vposition);
 
-    char *shifted_seq = seq - start_offset;
+    const char *shifted_seq = seq - start_offset;
     if (start_offset < 0) start_offset = 0;
     if (end_offset < 0) end_offset = 0;
 
     Range padding_boundary = { start_offset, end_offset };
-    char *padded_seq = pad_sequence(shifted_seq, padding_boundary, WIDTH);
+    char *padded_seq = pad_sequence(shifted_seq, padding_boundary, width);
     float *predictions; int num_predictions;
-    predict_for_seq(models, padded_seq, WIDTH, strand, &predictions, &num_predictions);
+    predict_for_seq(models, padded_seq, width, strand, &predictions, &num_predictions);
     free(padded_seq);
 
     return predictions;
@@ -922,7 +922,7 @@ void set_record_flag(Record *r, int transcript_index, int phase_index, uint32_t 
 
 void get_prediction_pairs_for_site(int site, float *ref_predictions, size_t ref_len, float *hap_alt_predictions, size_t hap_alt_len, Records *rs, Range pred_range, size_t *map_size, PairPrediction **map) {
     float ref_site_predictions[ref_len];
-    for (int i = 0; i < 101; i++) ref_site_predictions[i] = ref_predictions[NUM_SCORES * i + site];
+    for (int i = 0; i < ref_len; i++) ref_site_predictions[i] = ref_predictions[NUM_SCORES * i + site];
 
     float ref_site_prediction_posteriors[ref_len];
     int n_ref_sites = transform_to_posterior_probabilities(site, ref_len, ref_predictions, ref_site_prediction_posteriors);
@@ -1932,8 +1932,8 @@ int main(int argc, char *argv[]) {
                     *r->complete_scores[g * NUM_PHASES + p] = score;
 
                     // Remove predictions that are most likely to be neutral
-                    filter_to_most_likely_prediction(num_ref_predictions, &ref_predictions);
-                    filter_to_most_likely_prediction(num_hap_alt_predictions, &hap_alt_predictions);
+                    filter_to_most_likely_prediction(num_ref_predictions, ref_predictions);
+                    filter_to_most_likely_prediction(num_hap_alt_predictions, hap_alt_predictions);
 
 
                     int current_gene[r->tscripts->n];
@@ -2025,10 +2025,10 @@ int main(int argc, char *argv[]) {
 
                                         Range pred_range = { pair.position - 50, pair.position + 51 };
                                         int pred_offset = haplotype_offset(&hap_in, pred_range);
-                                        float *pair_predictions_ref = predict_on_sequence(models, gene->seq.s, pair.position, tgene->coords, tgene->strand, NULL);
-                                        float *pair_predictions_alt = predict_on_sequence(models, hap_alt.s, pair.position, tgene->coords, tgene->strand, &hap_in);
-                                        filter_to_most_likely_prediction(PRED_WIDTH * NUM_SCORES, &pair_predictions_ref);
-                                        filter_to_most_likely_prediction(PRED_WIDTH * NUM_SCORES - pred_offset, &pair_predictions_alt);
+                                        float *pair_predictions_ref = predict_on_sequence(models, gene->seq.s, WIDTH, pair.position, tgene->coords, tgene->strand, NULL);
+                                        float *pair_predictions_alt = predict_on_sequence(models, hap_alt.s, WIDTH-pred_offset, pair.position, tgene->coords, tgene->strand, &hap_in);
+                                        filter_to_most_likely_prediction(PRED_WIDTH * NUM_SCORES, pair_predictions_ref);
+                                        filter_to_most_likely_prediction((PRED_WIDTH-pred_offset) * NUM_SCORES, pair_predictions_alt);
 
 
                                         SpliceProbabilities pair_probabilities;
@@ -2086,10 +2086,10 @@ int main(int argc, char *argv[]) {
 
                                         Range pred_range = { pair.position - 50, pair.position + 51 };
                                         int pred_offset = haplotype_offset(&hap_in, pred_range);
-                                        float *pair_predictions_ref = predict_on_sequence(models, gene->seq.s, pair.position, tgene->coords, tgene->strand, NULL);
-                                        float *pair_predictions_alt = predict_on_sequence(models, hap_alt.s, pair.position, tgene->coords, tgene->strand, &hap_in);
-                                        filter_to_most_likely_prediction(PRED_WIDTH * NUM_SCORES, &pair_predictions_ref);
-                                        filter_to_most_likely_prediction(PRED_WIDTH * NUM_SCORES - pred_offset, &pair_predictions_alt);
+                                        float *pair_predictions_ref = predict_on_sequence(models, gene->seq.s, WIDTH, pair.position, tgene->coords, tgene->strand, NULL);
+                                        float *pair_predictions_alt = predict_on_sequence(models, hap_alt.s, WIDTH - pred_offset, pair.position, tgene->coords, tgene->strand, &hap_in);
+                                        filter_to_most_likely_prediction(PRED_WIDTH * NUM_SCORES, pair_predictions_ref);
+                                        filter_to_most_likely_prediction((PRED_WIDTH - pred_offset) * NUM_SCORES, pair_predictions_alt);
 
 
                                         SpliceProbabilities pair_probabilities;
@@ -2150,10 +2150,10 @@ int main(int argc, char *argv[]) {
 
                                         Range pred_range = { competitor.position - 50, competitor.position + 51 };
                                         int pred_offset = haplotype_offset(&hap_in, pred_range);
-                                        float *competitor_predictions_ref = predict_on_sequence(models, gene->seq.s, competitor.position, tgene->coords, tgene->strand, NULL);
-                                        float *competitor_predictions_alt = predict_on_sequence(models, hap_alt.s, competitor.position, tgene->coords, tgene->strand, &hap_in);
-                                        filter_to_most_likely_prediction(PRED_WIDTH * NUM_SCORES, &competitor_predictions_ref);
-                                        filter_to_most_likely_prediction(PRED_WIDTH * NUM_SCORES - pred_offset, &competitor_predictions_alt);
+                                        float *competitor_predictions_ref = predict_on_sequence(models, gene->seq.s, WIDTH, competitor.position, tgene->coords, tgene->strand, NULL);
+                                        float *competitor_predictions_alt = predict_on_sequence(models, hap_alt.s, WIDTH - pred_offset, competitor.position, tgene->coords, tgene->strand, &hap_in);
+                                        filter_to_most_likely_prediction(PRED_WIDTH * NUM_SCORES, competitor_predictions_ref);
+                                        filter_to_most_likely_prediction((PRED_WIDTH - pred_offset) * NUM_SCORES, competitor_predictions_alt);
 
 
                                         SpliceProbabilities competitor_probabilities;
@@ -2210,10 +2210,10 @@ int main(int argc, char *argv[]) {
 
                                         Range pred_range = { competitor.position - 50, competitor.position + 51 };
                                         int pred_offset = haplotype_offset(&hap_in, pred_range);
-                                        float *competitor_predictions_ref = predict_on_sequence(models, gene->seq.s, competitor.position, tgene->coords, tgene->strand, NULL);
-                                        float *competitor_predictions_alt = predict_on_sequence(models, hap_alt.s, competitor.position, tgene->coords, tgene->strand, &hap_in);
-                                        filter_to_most_likely_prediction(PRED_WIDTH * NUM_SCORES, &competitor_predictions_ref);
-                                        filter_to_most_likely_prediction(PRED_WIDTH * NUM_SCORES - pred_offset, &competitor_predictions_alt);
+                                        float *competitor_predictions_ref = predict_on_sequence(models, gene->seq.s, WIDTH, competitor.position, tgene->coords, tgene->strand, NULL);
+                                        float *competitor_predictions_alt = predict_on_sequence(models, hap_alt.s, WIDTH - pred_offset, competitor.position, tgene->coords, tgene->strand, &hap_in);
+                                        filter_to_most_likely_prediction(PRED_WIDTH * NUM_SCORES, competitor_predictions_ref);
+                                        filter_to_most_likely_prediction((PRED_WIDTH - pred_offset) * NUM_SCORES, competitor_predictions_alt);
 
 
                                         SpliceProbabilities competitor_probabilities;

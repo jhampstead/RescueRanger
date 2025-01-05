@@ -37,14 +37,16 @@ void parse_prediction_pairs(const float *ref_priors, const float *ref_posteriors
         int offset = allele_offset(r->v, 0, 1, pred_range);
         if (offset == 0) continue; // Doesn't need special handling, can be copied over in while loops
 
-        // Copy over preceding reference base
-        Prediction ref_pred = { false, curr_position, ref_priors[refs_idx], ref_posteriors[refs_idx] };
-        refs_idx++;
-        Prediction alt_pred = { false, curr_position, alt_priors[alts_idx], alt_posteriors[alts_idx] };
-        alts_idx++;
-        PairPrediction pp = {ref_pred, alt_pred};
-        kv_push(PairPrediction, map, pp);
-        curr_position++;
+        // Copy over preceding reference base, if it hasn't already (e.g. no overlapping reference base should be copied over in the case of touching indels)
+        if (curr_position == r->v->pos) {
+            Prediction ref_pred = { false, curr_position, ref_priors[refs_idx], ref_posteriors[refs_idx] };
+            refs_idx++;
+            Prediction alt_pred = { false, curr_position, alt_priors[alts_idx], alt_posteriors[alts_idx] };
+            alts_idx++;
+            PairPrediction pp = {ref_pred, alt_pred};
+            kv_push(PairPrediction, map, pp);
+            curr_position++;
+        }
 
 
         Prediction empty_pred = { true, 0, 0.0 };
