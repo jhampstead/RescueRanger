@@ -769,10 +769,9 @@ static int transform_to_posterior_probabilities(const int target, const size_t n
         sum += probabilities[i];
     }
 
-    if (num_values == 0) {
-        memset(posterior_probabilities, 0.0, num_probabilities * sizeof(float));
-        return 0;
-    }
+    memset(posterior_probabilities, 0.0, num_probabilities * sizeof(float));
+
+    if (num_values == 0) return 0;
 
     for (i = target; i < num_probabilities; i+=NUM_SCORES) {
         if (probabilities[i] == 0) continue;
