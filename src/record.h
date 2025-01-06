@@ -53,8 +53,8 @@ enum PredictionFlags {
     ABLATED_CRYPTIC_DONOR = 1 << 14,
     ABLATED_CRYPTIC_ACCEPTOR = 1 << 15,
     UPSTREAM_PTV = 1 << 16,
-    UTR5_SPLICE_VARIANT = 1 << 17,
-    UTR3_SPLICE_VARIANT = 1 << 18,
+    UTR5_VARIANT = 1 << 17,
+    UTR3_VARIANT = 1 << 18,
     LAST_EXON = 1 << 19,
     SINGLE_EXON = 1 << 20
 };

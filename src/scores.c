@@ -8,15 +8,15 @@ void parse_prediction_pairs(const float *ref_priors, const float *ref_posteriors
     uint64_t curr_position = pred_range.start;
     int refs_idx = 0, alts_idx = 0;
     for (int i = 0; i < rs->n; i++) {
-        Record *r = kv_A(*rs, i);
+        const Record *r = kv_A(*rs, i);
 
-        Range ref = variant_to_range(r->v, 0);
+        const Range ref = variant_to_range(r->v, 0);
         Range intersected_ref;
         if (intersect_ranges(ref, pred_range, &intersected_ref) == 0) continue;
         int ref_len = range_len(ref);
         if (ref_len == 0) continue;
 
-        Range alt;
+        const Range alt = variant_to_range(r->v, 1);
         Range intersected_alt;
         int alt_segment = 0;
         if (intersect_ranges(alt, pred_range, &intersected_alt) > 0) {
@@ -25,52 +25,56 @@ void parse_prediction_pairs(const float *ref_priors, const float *ref_posteriors
         }
 
         while (curr_position < r->v->pos) {
-            Prediction ref_pred = { false, curr_position, ref_priors[refs_idx], ref_posteriors[refs_idx] };
+            const Prediction ref_pred = { false, curr_position, ref_priors[refs_idx], ref_posteriors[refs_idx] };
             refs_idx++;
-            Prediction alt_pred = { false, curr_position, alt_priors[alts_idx], alt_posteriors[alts_idx] };
+            const Prediction alt_pred = { false, curr_position, alt_priors[alts_idx], alt_posteriors[alts_idx] };
             alts_idx++;
-            PairPrediction pp = {ref_pred, alt_pred};
+            const PairPrediction pp = {ref_pred, alt_pred};
             kv_push(PairPrediction, map, pp);
             curr_position++;
         }
 
-        int offset = allele_offset(r->v, 0, 1, pred_range);
+        const int offset = allele_offset(r->v, 0, 1, pred_range);
         if (offset == 0) continue; // Doesn't need special handling, can be copied over in while loops
 
         // Copy over preceding reference base, if it hasn't already (e.g. no overlapping reference base should be copied over in the case of touching indels)
         if (curr_position == r->v->pos) {
-            Prediction ref_pred = { false, curr_position, ref_priors[refs_idx], ref_posteriors[refs_idx] };
+            const Prediction ref_pred = { false, curr_position, ref_priors[refs_idx], ref_posteriors[refs_idx] };
             refs_idx++;
-            Prediction alt_pred = { false, curr_position, alt_priors[alts_idx], alt_posteriors[alts_idx] };
+            const Prediction alt_pred = { false, curr_position, alt_priors[alts_idx], alt_posteriors[alts_idx] };
             alts_idx++;
-            PairPrediction pp = {ref_pred, alt_pred};
+            const PairPrediction pp = {ref_pred, alt_pred};
             kv_push(PairPrediction, map, pp);
             curr_position++;
         }
 
 
-        Prediction empty_pred = { true, 0, 0.0 };
+        const Prediction empty_pred = { true, 0, 0.0, 0.0 };
         if (offset > 0) { // Deletion
-            Prediction ref_pred = { false, curr_position, ref_priors[refs_idx], ref_posteriors[refs_idx] };
-            refs_idx++;
-            PairPrediction pp = { ref_pred, empty_pred };
-            kv_push(PairPrediction, map, pp);
-            curr_position++;
+            for (int i = 0; i < offset; i++) {
+                const Prediction ref_pred = { false, curr_position, ref_priors[refs_idx], ref_posteriors[refs_idx] };
+                refs_idx++;
+                const PairPrediction pp = { ref_pred, empty_pred };
+                kv_push(PairPrediction, map, pp);
+                curr_position++;
+            }
         } else { // Offset < 0, insertion
-            Prediction alt_pred = { false, curr_position, alt_priors[alts_idx], alt_posteriors[alts_idx] };
-            alts_idx++;
-            PairPrediction pp = { empty_pred, alt_pred };
-            kv_push(PairPrediction, map, pp);
+            for (int i = 0; i < -offset; i++) {
+                const Prediction alt_pred = { false, curr_position, alt_priors[alts_idx], alt_posteriors[alts_idx] };
+                alts_idx++;
+                const PairPrediction pp = { empty_pred, alt_pred };
+                kv_push(PairPrediction, map, pp);
+            }
         }
 
     }
 
     while (curr_position < pred_range.end) {
-        Prediction ref_pred = { false, curr_position, ref_priors[refs_idx], ref_posteriors[refs_idx] };
+        const Prediction ref_pred = { false, curr_position, ref_priors[refs_idx], ref_posteriors[refs_idx] };
         refs_idx++;
-        Prediction alt_pred = { false, curr_position, alt_priors[alts_idx], alt_posteriors[alts_idx] };
+        const Prediction alt_pred = { false, curr_position, alt_priors[alts_idx], alt_posteriors[alts_idx] };
         alts_idx++;
-        PairPrediction pp = {ref_pred, alt_pred};
+        const PairPrediction pp = {ref_pred, alt_pred};
         kv_push(PairPrediction, map, pp);
         curr_position++;
     }

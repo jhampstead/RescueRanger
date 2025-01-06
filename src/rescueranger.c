@@ -508,11 +508,10 @@ static int get_position_in_isoform(const int64_t position, const NonCodingRegion
         for (int i = 0; i < ncrs->n; i++) {
             NonCodingRegion ncr = kv_A(*ncrs, i);
 
-            if (ncr.is_utr) continue;
-
-            if (position <= ncr.coords.start) break;
+            if (position < ncr.coords.start) break;
 
             if (position >= ncr.coords.end) {
+                if (ncr.is_utr) continue;
                 skipped_bases += range_len(ncr.coords) - 1;
                 continue;
             }
@@ -527,11 +526,10 @@ static int get_position_in_isoform(const int64_t position, const NonCodingRegion
         for (int i = 0; i < ncrs->n; i++) {
             NonCodingRegion ncr = kv_A(*ncrs, i);
 
-            if (ncr.is_utr) continue;
-
             if (position > ncr.coords.start) break; // Approaches from other end (3' <-- 5')
 
             if (position <= ncr.coords.end) {
+                if (ncr.is_utr) continue;
                 skipped_bases += range_len(ncr.coords) - 1;
                 continue;
             }
@@ -992,6 +990,13 @@ void get_splice_probabilities_from_map(Record *r, enum SpliceType type, int reco
 
             PairPrediction pair = map[i];
 
+            // if (fabs(pair.ref.prior - pair.alt.prior) > 0) {
+            //     if (pair.alt.prior > 0) set_record_flag(r, t, record_phase, CRYPTIC_DONOR);
+            //     if (pair.alt.prior == 0) set_record_flag(r, t, record_phase, ABLATED_CRYPTIC_DONOR);
+            //
+            //     if (pair.ref.prior == 0) set_record_flag(r, t, record_phase, HAPLOTYPE_SPECIFIC_DONOR);
+            // }
+
             if (pair.ref.prior == 0) {
                 if (pair.alt.prior == 0) continue;
 
@@ -1341,8 +1346,8 @@ void get_prediction_flags(uint32_t flags, kstring_t *concatenated_flags) {
         "ablated_cryptic_donor",
         "ablated_cryptic_acceptor",
         "upstream_ptv",
-        "5utr_splice_variant",
-        "3utr_splice_variant",
+        "5utr_variant",
+        "3utr_variant",
         "last_exon",
         "single_exon"
     };
@@ -1953,14 +1958,14 @@ int main(int argc, char *argv[]) {
                     PairPrediction *ref_alt_acceptor_map = NULL;
                     size_t ref_alt_acceptor_map_size = 0;
                     get_prediction_pairs_for_site(ACCEPTOR_POS, ref_predictions, 101, hap_alt_predictions, 101-pred_offset, &hap_in, pred_range, &ref_alt_acceptor_map_size, &ref_alt_acceptor_map);
-                    get_splice_probabilities_from_map(r, DONOR, p, current_gene, pred_range, ref_alt_acceptor_map_size, ref_alt_acceptor_map, &splice_probabilities);
+                    get_splice_probabilities_from_map(r, ACCEPTOR, p, current_gene, pred_range, ref_alt_acceptor_map_size, ref_alt_acceptor_map, &splice_probabilities);
 
 
                     // Get donor pairs
                     PairPrediction *ref_alt_donor_map = NULL;
                     size_t ref_alt_donor_map_size = 0;
                     get_prediction_pairs_for_site(DONOR_POS, ref_predictions, 101, hap_alt_predictions, 101-pred_offset, &hap_in, pred_range, &ref_alt_donor_map_size, &ref_alt_donor_map);
-                    get_splice_probabilities_from_map(r, ACCEPTOR, p, current_gene, pred_range, ref_alt_donor_map_size, ref_alt_donor_map, &splice_probabilities);
+                    get_splice_probabilities_from_map(r, DONOR, p, current_gene, pred_range, ref_alt_donor_map_size, ref_alt_donor_map, &splice_probabilities);
 
 
                     // Scale donor/acceptor probabilities by their prior
@@ -2897,9 +2902,11 @@ int main(int argc, char *argv[]) {
                             int64_t isoform_position;
 
                             for (int j = 0; j < ncr.records.n; j++) {
+                                Record *r = kv_A(ncr.records, j);
                                 enum UTRType utr_type = is_utr_variant(r, ncrs, &hap_in, t->strand, gene->coords);
-                                if (utr_type == UTR5) set_record_flag(r, ti, p, UTR5_SPLICE_VARIANT);
-                                if (utr_type == UTR3) set_record_flag(r, ti, p, UTR3_SPLICE_VARIANT);
+
+                                if (utr_type == UTR5) set_record_flag(r, ti, p, UTR5_VARIANT);
+                                if (utr_type == UTR3) set_record_flag(r, ti, p, UTR3_VARIANT);
                             }
 
                             if (ncr.donor != NULL && ncr.acceptor != NULL && ncr.donor->posterior_probability == 0 && ncr.acceptor->posterior_probability == 0) {
@@ -2922,7 +2929,7 @@ int main(int argc, char *argv[]) {
                                 }
 
                                 {
-                                    int64_t position = ncr.canonical_coords.start;
+                                    int64_t position = ncr.canonical_coords.end;
                                     int offset = range_len(ncr.canonical_coords);
 
                                     int coding = !get_position_in_isoform(position, ncrs, &hap_in, t->strand, gene->coords, &isoform_position);
@@ -2957,7 +2964,7 @@ int main(int argc, char *argv[]) {
                                 }
                                 continue;
                             } else if (ncr.acceptor != NULL && ncr.acceptor->posterior_probability == 0) {
-                                int64_t position = ncr.canonical_coords.start;
+                                int64_t position = ncr.canonical_coords.end;
                                 int offset = range_len(ncr.canonical_coords);
 
                                 int coding = !get_position_in_isoform(position, ncrs, &hap_in, t->strand, gene->coords, &isoform_position);
@@ -3083,7 +3090,7 @@ int main(int argc, char *argv[]) {
                             if (shift.r == NULL) continue;
 
                             int vposition = shift.r->v->pos - haplotype_offset(&hap_in, (Range) { gene->coords.start, shift.r->v->pos });
-                            if (vposition >= shifted_isoform.start && vposition < shifted_isoform.end) {
+                            if (shift.coding && vposition >= shifted_isoform.start && vposition < shifted_isoform.end) {
                                 kv_A(shifts, j++) = kv_A(shifts, i);
                             }
                         }
@@ -3283,7 +3290,7 @@ int main(int argc, char *argv[]) {
 
                         }
 
-                        if (!touched && !stop_checked && !frameshift_checked && csq->triggers[SPLICE_TRIGGER] == CANONICAL_SPLICE_VALUE && rescue_type == NO_RESCUE) {
+                        if (!touched && !stop_checked && !frameshift_checked && rescue_type == NO_RESCUE) {
                             rescued = 1;
                             rescue_type = COMPLETE_RESCUE;
                         }
@@ -3435,6 +3442,7 @@ int main(int argc, char *argv[]) {
                     continue;
                 }
 
+                TscriptCsqs *csq = kv_A(*r->vep, ti);
                 for (int p = 0; p < NUM_PHASES; p++) {
                     if (p > 0) {
                         kputc('&', &rescue_tag);
@@ -3443,7 +3451,7 @@ int main(int argc, char *argv[]) {
                     }
 
                     Isoforms isoforms = r->isoforms[ti * NUM_PHASES + p];
-                    if (!isoforms.valid) {
+                    if (!isoforms.valid | (((csq->triggers[STOP_TRIGGER] == STOP_GAIN_VALUE) | (csq->triggers[SPLICE_TRIGGER] == AF_SPLICE_VALUE)) & (isoforms.rescue == COMPLETE_RESCUE))) {
                         kputc('.', &rescue_tag);
                         kputc('.', &rescue_prob_tag);
                         kputs(".|.|.", &rescue_type_tag);
