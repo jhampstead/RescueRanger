@@ -51,7 +51,7 @@ float *match_predictions_to_reference(const float *predictions, const bcf1_t *v,
     float *corrected_predictions = malloc(num_reference_predictions * sizeof(float));
     Range pred_range = {v->pos - (50), v->pos + 51}; // +1 for open ended coordinates
 
-    int ref_idx = 0, hap_idx = 0;
+    int idx = 0;
     for (int l = 0; l < rs->n; l++) {
         Record *r = kv_A(*rs, l);
 
@@ -73,11 +73,12 @@ float *match_predictions_to_reference(const float *predictions, const bcf1_t *v,
         if (alt_segment > 0) alt_segment -= skipped_alt_bases;
         Range ref_segment = scale_range(ref, NUM_SCORES);
 
-        // Copy segments between variants/boundaries
-        int segment_len = (ref_segment.start - ref_idx);
-        if (segment_len > 0) memcpy(corrected_predictions + ref_idx, predictions + hap_idx, segment_len * sizeof(float));
-
         int variant_offset = haplotype_offset(rs, (Range) { pred_range.start, pred_range.start + ref.start }) * NUM_SCORES;
+
+        // Copy segments between variants/boundaries
+        int segment_len = (ref_segment.start - idx);
+        if (segment_len > 0) memcpy(corrected_predictions + idx, predictions + idx - variant_offset, segment_len * sizeof(float));
+
         int offset = ref_len - alt_segment; // Naive offset in end position vs ref and alt
         float *corrected_start = corrected_predictions + ref_segment.start;
         if (offset == 0) {
@@ -92,11 +93,13 @@ float *match_predictions_to_reference(const float *predictions, const bcf1_t *v,
         }
 
 
-        if (ref_segment.end > ref_idx) ref_idx = ref_segment.end;
+        if (ref_segment.end > idx) {
+            idx = ref_segment.end;
+        }
     }
 
     int variant_offset = haplotype_offset(rs, pred_range) * NUM_SCORES;
-    memcpy(corrected_predictions + ref_idx, predictions + ref_idx - variant_offset, (num_reference_predictions - ref_idx) * sizeof(float));
+    memcpy(corrected_predictions + idx, predictions + idx - variant_offset, (num_reference_predictions - idx) * sizeof(float));
 
     return corrected_predictions;
 }

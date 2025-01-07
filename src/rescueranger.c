@@ -56,7 +56,7 @@
 #define WIDTH 10101
 #define VARIANT_POS 5050
 #define SPLICEAI_THRESHOLD 0.8
-#define SPLICEAI_RESCUE_THRESHOLD 0.2
+#define SPLICEAI_RESCUE_THRESHOLD 0.1
 #define SPLICEAI_CRYPTIC_SPLICE_THRESHOLD 0.5
 
 #define SPLICEAI_DS_AG_INDEX 2  // Index of DS_AG in the INFO/SpliceAI field
@@ -966,18 +966,18 @@ void get_splice_probabilities_from_map(Record *r, enum SpliceType type, int reco
                 canonical_sites[i] = 1;
 
                 if (pair.ref.prior == 0) {
-                    set_record_flag(r, t, record_phase, WEAK_CANONICAL_DONOR);
+                    type == DONOR ? set_record_flag(r, t, record_phase, WEAK_CANONICAL_DONOR) : set_record_flag(r, t, record_phase, WEAK_CANONICAL_ACCEPTOR);
 
                     if (pair.alt.missing | (pair.alt.prior == 0)) continue;
 
-                    set_record_flag(r, t, record_phase, HAPLOTYPE_SPECIFIC_DONOR);
+                    type == DONOR ? set_record_flag(r, t, record_phase, HAPLOTYPE_SPECIFIC_DONOR) : set_record_flag(r, t, record_phase, HAPLOTYPE_SPECIFIC_ACCEPTOR);
 
                     SpliceProbability p = { r, type, pair.alt.prior, pair.alt.posterior, pair.alt.missing ? pair.ref.position : pair.alt.position, type == DONOR ? exon->bounds->end : exon->bounds->start };
                     kv_push(SpliceProbability, *probabilities, p);
                 } else {
                     if (!pair.alt.missing && pair.alt.prior > 0) continue; // No change
 
-                    set_record_flag(r, t, record_phase, ABLATED_CANONICAL_DONOR);
+                    type == DONOR ? set_record_flag(r, t, record_phase, ABLATED_CANONICAL_DONOR) : set_record_flag(r, t, record_phase, ABLATED_CANONICAL_ACCEPTOR);
 
                     SpliceProbability p = { r, type, pair.alt.prior, pair.alt.posterior, pair.alt.missing ? pair.ref.position : pair.alt.position, type == DONOR ? exon->bounds->end : exon->bounds->start };
                     kv_push(SpliceProbability, *probabilities, p);
@@ -990,23 +990,16 @@ void get_splice_probabilities_from_map(Record *r, enum SpliceType type, int reco
 
             PairPrediction pair = map[i];
 
-            // if (fabs(pair.ref.prior - pair.alt.prior) > 0) {
-            //     if (pair.alt.prior > 0) set_record_flag(r, t, record_phase, CRYPTIC_DONOR);
-            //     if (pair.alt.prior == 0) set_record_flag(r, t, record_phase, ABLATED_CRYPTIC_DONOR);
-            //
-            //     if (pair.ref.prior == 0) set_record_flag(r, t, record_phase, HAPLOTYPE_SPECIFIC_DONOR);
-            // }
-
             if (pair.ref.prior == 0) {
                 if (pair.alt.prior == 0) continue;
 
-                set_record_flag(r, t, record_phase, CRYPTIC_DONOR);
-                set_record_flag(r, t, record_phase, HAPLOTYPE_SPECIFIC_DONOR);
+                type == DONOR ? set_record_flag(r, t, record_phase, CRYPTIC_DONOR) : set_record_flag(r, t, record_phase, CRYPTIC_ACCEPTOR);
+                type == DONOR ? set_record_flag(r, t, record_phase, HAPLOTYPE_SPECIFIC_DONOR) : set_record_flag(r, t, record_phase, HAPLOTYPE_SPECIFIC_ACCEPTOR);
             } else {
                 if (pair.alt.prior > 0) {
-                    set_record_flag(r, t, record_phase, CRYPTIC_DONOR);
+                    type == DONOR ? set_record_flag(r, t, record_phase, CRYPTIC_DONOR) : set_record_flag(r, t, record_phase, CRYPTIC_ACCEPTOR);
                 } else {
-                    set_record_flag(r, t, record_phase, ABLATED_CRYPTIC_DONOR);
+                    type == DONOR ? set_record_flag(r, t, record_phase, ABLATED_CRYPTIC_DONOR) : set_record_flag(r, t, record_phase, ABLATED_CRYPTIC_ACCEPTOR);
                 }
             }
 
@@ -1936,6 +1929,9 @@ int main(int argc, char *argv[]) {
                     r->complete_scores[g * NUM_PHASES + p] = malloc(sizeof(Score));
                     *r->complete_scores[g * NUM_PHASES + p] = score;
 
+                    // If there's less than 0.2 change between ref and hap alt, don't predict for competitors and pairs
+                    if (score.ag < SPLICEAI_RESCUE_THRESHOLD && score.al < SPLICEAI_RESCUE_THRESHOLD && score.dg < SPLICEAI_RESCUE_THRESHOLD && score.dl < SPLICEAI_RESCUE_THRESHOLD) continue;
+
                     // Remove predictions that are most likely to be neutral
                     filter_to_most_likely_prediction(num_ref_predictions, ref_predictions);
                     filter_to_most_likely_prediction(num_hap_alt_predictions, hap_alt_predictions);
@@ -1950,7 +1946,6 @@ int main(int argc, char *argv[]) {
                     }
 
                     Range pred_range = { r->v->pos - 50, r->v->pos + 51 };
-
                     SpliceProbabilities splice_probabilities;
                     kv_init(splice_probabilities);
 
@@ -1966,14 +1961,6 @@ int main(int argc, char *argv[]) {
                     size_t ref_alt_donor_map_size = 0;
                     get_prediction_pairs_for_site(DONOR_POS, ref_predictions, 101, hap_alt_predictions, 101-pred_offset, &hap_in, pred_range, &ref_alt_donor_map_size, &ref_alt_donor_map);
                     get_splice_probabilities_from_map(r, DONOR, p, current_gene, pred_range, ref_alt_donor_map_size, ref_alt_donor_map, &splice_probabilities);
-
-
-                    // Scale donor/acceptor probabilities by their prior
-                    // SpliceProbability *splice_probabilities;
-                    // int num_splice_probabilities = create_splice_probabilities(vposition, r, r->tscripts, current_gene, num_hap_alt_predictions, hap_alt_predictions, &splice_probabilities);
-
-                    // If there's less than 0.2 change between ref and hap alt, don't predict for competitors and pairs
-                    if (score.ag < SPLICEAI_RESCUE_THRESHOLD && score.al < SPLICEAI_RESCUE_THRESHOLD && score.dg < SPLICEAI_RESCUE_THRESHOLD && score.dl < SPLICEAI_RESCUE_THRESHOLD) continue;
 
                     for (int i = 0; i < r->tscripts->n; i++) {
                         Transcript *t = kv_A(*r->tscripts, i);
@@ -3067,20 +3054,47 @@ int main(int argc, char *argv[]) {
 
                         if (t->strand == STRAND_REV) ks_introsort_frameshift_reverse_sort(shifts.n, shifts.a);
 
-                        for (int ri = 0; ri < shifts.n; ri++) {
-                            IsoformVariant iso_shift = kv_A(shifts, ri);
-                            if (iso_shift.r == r) break;
+                        // for (int ri = 0; ri < shifts.n; ri++) {
+                        //     IsoformVariant iso_shift = kv_A(shifts, ri);
+                        //     if (iso_shift.r == r) break;
+                        //
+                        //     for (int ti2 = 0; ti2 < iso_shift.r->tscripts->n; ti2++) {
+                        //         Transcript *tscript = kv_A(*iso_shift.r->tscripts, ti2);
+                        //         if (tscript == NULL || tscript->id != t->id) continue;
+                        //
+                        //         if ((tscript->triggers[SPLICE_TRIGGER] == AF_SPLICE_VALUE) | (tscript->triggers[STOP_TRIGGER] == STOP_GAIN_VALUE)) continue;
+                        //
+                        //         if (iso_shift.r->isoforms[ti2].valid &
+                        //             ((iso_shift.r->isoforms[ti2].rescue == 0) | (iso_shift.r->isoforms[ti2].ptv == 1))) set_record_flag(r, ti, p, UPSTREAM_PTV);
+                        //     }
+                        //
+                        // }
 
-                            for (int ti2 = 0; ti2 < iso_shift.r->tscripts->n; ti2++) {
-                                Transcript *tscript = kv_A(*iso_shift.r->tscripts, ti2);
-                                if (tscript == NULL || tscript->id != t->id) continue;
+                        for (int i = 0; i < shifts.n; i++) {
+                            IsoformVariant iso_shift = kv_A(shifts, i);
+                            if (iso_shift.r != r) continue;
 
-                                if ((tscript->triggers[SPLICE_TRIGGER] == AF_SPLICE_VALUE) | (tscript->triggers[STOP_TRIGGER] == STOP_GAIN_VALUE)) continue;
+                            for (int j = 0; j < i; j++) {
+                                IsoformVariant upstream_shift = kv_A(shifts, j);
+                                if (upstream_shift.r == iso_shift.r) continue;
 
-                                if (iso_shift.r->isoforms[ti2].valid &
-                                    ((iso_shift.r->isoforms[ti2].rescue == 0) | (iso_shift.r->isoforms[ti2].ptv == 1))) set_record_flag(r, ti, p, UPSTREAM_PTV);
+                                for (int ti2 = 0; ti2 < upstream_shift.r->tscripts->n; ti2++) {
+                                    Transcript *tscript = kv_A(*upstream_shift.r->tscripts, ti2);
+                                    if (tscript == NULL || tscript->id != t->id) continue;
+
+                                    TscriptCsqs *csq = kv_A(*upstream_shift.r->vep, ti2);
+                                    if (!upstream_shift.r->isoforms->valid | 
+                                        (!(
+                                         (upstream_shift.r->isoforms->rescue == 0) & 
+                                         ((csq->triggers[SPLICE_TRIGGER] == CANONICAL_SPLICE_VALUE) |
+                                         (csq->triggers[FRAMESHIFT_TRIGGER]) |
+                                         (csq->triggers[STOP_TRIGGER] == STOP_RESCUE_VALUE))
+                                         ) & 
+                                        !upstream_shift.r->isoforms->ptv)) continue;
+
+                                    set_record_flag(r, ti, p, UPSTREAM_PTV);
+                                }
                             }
-
                         }
 
                         // Filter to shifts that overlap the isoform
@@ -3219,10 +3233,8 @@ int main(int argc, char *argv[]) {
                                         if (shift.shift == 0) continue; // Rescued splice, do nothing
                                         if (abs(shift.shift) > MAX_FRAMESHIFT_RADIUS) continue;
 
-                                        int positive_shift = shift.shift > 0 ? shift.shift : 0;
-
                                         // If outside of rescue radius
-                                        if (shift.seq_pos - MAX_FRAMESHIFT_RADIUS > shift_start) {
+                                        if (abs(((int32_t) shift_start) - ((int32_t) shift.seq_pos)) > MAX_FRAMESHIFT_RADIUS) {
                                             summed_shift = shift.shift;
                                             shift_start = shift.seq_pos;
                                             included_current_shift = 0 | (shift.r == r);
@@ -3451,7 +3463,10 @@ int main(int argc, char *argv[]) {
                     }
 
                     Isoforms isoforms = r->isoforms[ti * NUM_PHASES + p];
-                    if (!isoforms.valid | (((csq->triggers[STOP_TRIGGER] == STOP_GAIN_VALUE) | (csq->triggers[SPLICE_TRIGGER] == AF_SPLICE_VALUE)) & (isoforms.rescue == COMPLETE_RESCUE))) {
+                    if (!isoforms.valid | (
+                        (((csq->triggers[STOP_TRIGGER] == STOP_GAIN_VALUE) | (csq->triggers[SPLICE_TRIGGER] == AF_SPLICE_VALUE)) & (isoforms.rescue == COMPLETE_RESCUE)) &
+                        !((csq->triggers[SPLICE_TRIGGER] == CANONICAL_SPLICE_VALUE) | (csq->triggers[FRAMESHIFT_TRIGGER]) | (csq->triggers[STOP_TRIGGER] == STOP_RESCUE_VALUE)))
+                    ) {
                         kputc('.', &rescue_tag);
                         kputc('.', &rescue_prob_tag);
                         kputs(".|.|.", &rescue_type_tag);
@@ -3550,6 +3565,14 @@ int main(int argc, char *argv[]) {
             Record *r = kv_A(*block.records, i);
             if (!block.is_coding || r->transcript_genes == NULL) continue;
 
+            int triggered = 0;
+            for (int j = 0; j < r->vep->n; j++) {
+                TscriptCsqs *csq = kv_A(*r->vep, j);
+                if (csq->triggers[SPLICE_TRIGGER] || csq->triggers[FRAMESHIFT_TRIGGER] || csq->triggers[STOP_TRIGGER]) triggered = 1;
+            }
+
+            if (!triggered) continue;
+
             kstring_t tags = {0};
 
             for (int t = 0; t < r->transcript_genes->n; t++) {
@@ -3569,15 +3592,6 @@ int main(int argc, char *argv[]) {
                         if (fabs(r->complete_scores[g * NUM_PHASES + p]->dl) > SPLICEAI_RESCUE_THRESHOLD) phased_donor[p] = 1;
                     }
                 }
-
-                // if (phased_donor[0] & phased_donor[1]) {
-                //     set_record_flag(r, t, 0, HAPLOTYPE_SPECIFIC_DONOR);
-                //     set_record_flag(r, t, 1, HAPLOTYPE_SPECIFIC_DONOR);
-                // }
-                // if (phased_acceptor[0] & phased_acceptor[1]) {
-                //     set_record_flag(r, t, 0, HAPLOTYPE_SPECIFIC_ACCEPTOR);
-                //     set_record_flag(r, t, 1, HAPLOTYPE_SPECIFIC_ACCEPTOR);
-                // }
             }
 
             for (int t = 0; t < r->transcript_genes->n; t++) {
@@ -3614,25 +3628,6 @@ int main(int argc, char *argv[]) {
             bcf_write(fp_out, hdr, r->v);
         }
     }
-
-
-    // Free genes hashmap
-    // for (int k = kh_begin(genes); k != kh_end(genes); ++k) {
-    //     if (kh_exist(genes, k)) {
-    //         Gene *gene = kh_value(genes, k);
-    //         free(gene->seq.s);
-    //         free(gene);
-    //     }
-    // }
-    // kh_destroy_GeneHash(genes);
-
-    // Free CDS ranges
-    // for (int k = kh_begin(cds_ranges); k != kh_end(cds_ranges); ++k) {
-    //     if (!kh_exist(cds_ranges, k)) break;
-    //
-    //     Range *cd = kh_value(cds_ranges, k);
-    //     free(cd);
-    // }
 
     // Free batches
     for (int i = 0; i < batches.n; i++) {

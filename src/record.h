@@ -154,6 +154,7 @@ typedef struct ConsequencePredictions {
     kstring_t **is_rescue;
     kstring_t **rescue_type;
     kstring_t **is_ptv;
+
     kstring_t **ptv_type;
     kstring_t **flags;
     size_t num_consequences;
