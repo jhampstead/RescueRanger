@@ -117,7 +117,8 @@ typedef struct SpliceSites {
 
 typedef struct Exon {
     Range *cds;
-    Range *bounds;
+    Range *ref_bounds;
+    Range *hap_bounds;
     SpliceSites *splice_sites;
 } Exon;
 

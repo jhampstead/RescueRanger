@@ -500,6 +500,97 @@ int find_gene_region_for_variant(bcf1_t *v, bcf_hdr_t *hdr, gff_t *gff, IRegion 
 //     return corrected_predictions;
 // }
 
+static int get_range_in_isoform(const bcf1_t *v, const NonCodingRegions *ncrs, const Records *rs, const int strand, const Range bounds, int64_t *out_position, int allele_lengths[2]) {
+    const Range ref = variant_to_range(v, 0);
+    const Range alt = variant_to_range(v, 1);
+
+    int64_t isoform_position = ref.start; //  - haplotype_offset(rs, bounds);
+    int skipped_bases = 0;
+    if (strand == STRAND_FWD) {
+        isoform_position -= haplotype_offset(rs, (Range) { bounds.start, ref.start-1 });
+        for (int i = 0; i < ncrs->n; i++) {
+            NonCodingRegion ncr = kv_A(*ncrs, i);
+
+            if (ref.end <= ncr.coords.start) break; // Range is open-ended, so end <= start is the way to go
+
+            if (ref.start >= ncr.coords.end) {
+                if (ncr.is_utr) continue;
+                skipped_bases += range_len(ncr.coords) - 1;
+                continue;
+            }
+
+            if (ref.end > ncr.coords.end) { // If variant overlaps intron end (should only happen in case of deletions)
+                Range noncoding_variant;
+                intersect_ranges(ref, ncr.coords, &noncoding_variant);
+                isoform_position -= (skipped_bases + range_len(ncr.coords) - 1); // Should also skip noncoding region!
+                *out_position = isoform_position;
+                allele_lengths[0] = range_len(ref) - range_len(noncoding_variant);
+                allele_lengths[1] = 0; // Start of allele is in intron, so is skipped
+                return 0;
+            }
+
+            if ((ref.end > ncr.coords.start) & (ref.start < ncr.coords.start)) { // If variant overlaps intron start (should only happen in case of deletions)
+                Range noncoding_variant;
+                intersect_ranges(ref, ncr.coords, &noncoding_variant);
+                isoform_position -= skipped_bases;
+                *out_position = isoform_position;
+                allele_lengths[0] = range_len(ref) - range_len(noncoding_variant);
+                allele_lengths[1] = 1;
+                return 0;
+            }
+
+            isoform_position -= skipped_bases;
+            *out_position = isoform_position;
+            return 1; // Variant falls within a non-coding region
+        }
+        isoform_position -= skipped_bases;
+    } else if (strand == STRAND_REV) {
+        isoform_position -= haplotype_offset(rs, (Range) { bounds.start, ref.start-1 });
+        for (int i = 0; i < ncrs->n; i++) {
+            NonCodingRegion ncr = kv_A(*ncrs, i);
+
+            if (ref.start > ncr.coords.start) break; // Approaches from other end (3' <-- 5')
+
+            if (ref.end < ncr.coords.end) {
+                if (ncr.is_utr) continue;
+                skipped_bases += range_len(ncr.coords) - 1;
+                continue;
+            }
+
+            if (ref.start <= ncr.coords.end) { // If variant overlaps intron boundary (should only happen in case of deletions)
+                Range noncoding_variant;
+                intersect_ranges(ref, ncr.coords, &noncoding_variant);
+                isoform_position += (skipped_bases + range_len(ncr.coords) - 1);
+                *out_position = isoform_position;
+                allele_lengths[0] = range_len(ref) - range_len(noncoding_variant);
+                allele_lengths[1] = 0;
+                return 0;
+            }
+
+            if ((ref.start < ncr.coords.start) & (ref.end > ncr.coords.start)) {
+                Range coding_variant;
+                intersect_ranges(ref, ncr.coords, &coding_variant);
+                isoform_position += skipped_bases;
+                *out_position = isoform_position;
+                allele_lengths[0] = range_len(ref) - range_len(coding_variant);
+                allele_lengths[1] = 1;
+                return 0;
+            }
+
+            isoform_position += skipped_bases;
+            *out_position = isoform_position;
+            return 1; // Variant falls within a non-coding region
+        }
+        isoform_position += skipped_bases;
+    }
+
+    *out_position = isoform_position;
+    allele_lengths[0] = range_len(ref);
+    allele_lengths[1] = range_len(alt);
+
+    return 0; // Coding variant
+}
+
 static int get_position_in_isoform(const int64_t position, const NonCodingRegions *ncrs, const Records *rs, const int strand, const Range bounds, int64_t *out_position) {
     int64_t isoform_position = position; //  - haplotype_offset(rs, bounds);
     int skipped_bases = 0;
@@ -755,7 +846,28 @@ static void filter_to_most_likely_prediction(size_t num_probabilities, float *pr
     }
 }
 
-static int transform_to_posterior_probabilities(const int target, const size_t num_probabilities, const float *probabilities, float *posterior_probabilities) {
+static int transform_to_posterior_probabilities(const size_t num_probabilities, const float *probabilties, float *posterior_probabilities) {
+    float sum = 0;
+    int num_values = 0;
+
+    for (int i = 0; i < num_probabilities; i++) {
+        if (probabilties[i] == 0) continue;
+
+        num_values++;
+        sum += probabilties[i];
+    }
+    memset(posterior_probabilities, 0.0, num_probabilities * sizeof(float));
+
+    for (int i = 0; i < num_probabilities; i++) {
+        if (probabilties[i] == 0) continue;
+
+        posterior_probabilities[i] = probabilties[i] / sum;
+    }
+
+    return num_values;
+}
+
+static int transform_to_posterior_site_probabilities(const int target, const size_t num_probabilities, const float *probabilities, float *posterior_probabilities) {
     int i = 0;
     float sum = 0;
     int num_values = 0;
@@ -819,11 +931,11 @@ static int set_transcript_exons(Transcript *transcript, const char *chr, gff_t *
         Range cds_intersection = {0};
         if (cds != NULL) intersect_ranges(*exon, *cds, &cds_intersection);
         if (range_len(cds_intersection) == 0) {
-            *transcript->exons[transcript->nexons++] = (Exon) { NULL, exon, NULL };
+            *transcript->exons[transcript->nexons++] = (Exon) { NULL, exon, NULL, NULL };
             continue;
         }
 
-        *transcript->exons[transcript->nexons++] = (Exon) { cds, exon, NULL };
+        *transcript->exons[transcript->nexons++] = (Exon) { cds, exon, NULL, NULL };
         ci++;
     }
 
@@ -837,9 +949,9 @@ static void shift_exons_to_haplotype_sequence(const Transcript *t, const Range g
         Exon *exon = t->exons[i];
 
         // Shift ranges to by start of gene to make them relative to gene start
-        shift_range(exon->bounds, -gene.start);
-        exon->bounds->start -= haplotype_offset(rs, (Range) { gene.start, exon->bounds->start });
-        exon->bounds->end -= haplotype_offset(rs, (Range) { gene.start, exon->bounds->end });
+        shift_range(exon->hap_bounds, -gene.start);
+        exon->hap_bounds->start -= haplotype_offset(rs, (Range) { gene.start, exon->hap_bounds->start });
+        exon->hap_bounds->end -= haplotype_offset(rs, (Range) { gene.start, exon->hap_bounds->end });
 
         if (exon->cds == NULL) continue; // Can't shift the CDS if it doesn't exist
         shift_range(exon->cds, -gene.start);
@@ -923,13 +1035,13 @@ void get_prediction_pairs_for_site(int site, float *ref_predictions, size_t ref_
     for (int i = 0; i < ref_len; i++) ref_site_predictions[i] = ref_predictions[NUM_SCORES * i + site];
 
     float ref_site_prediction_posteriors[ref_len];
-    int n_ref_sites = transform_to_posterior_probabilities(site, ref_len, ref_predictions, ref_site_prediction_posteriors);
+    int n_ref_sites = transform_to_posterior_probabilities(ref_len, ref_site_predictions, ref_site_prediction_posteriors);
 
     float halt_site_predictions[hap_alt_len];
     for (int i = 0; i < hap_alt_len; i++) halt_site_predictions[i] = hap_alt_predictions[NUM_SCORES * i + site];
 
     float halt_site_prediction_posteriors[hap_alt_len];
-    int n_alt_sites = transform_to_posterior_probabilities(site, hap_alt_len, hap_alt_predictions, halt_site_prediction_posteriors);
+    int n_alt_sites = transform_to_posterior_probabilities(hap_alt_len, halt_site_predictions, halt_site_prediction_posteriors);
 
     PairPrediction *ref_alt_map = NULL;
     size_t ref_alt_map_size = 0;
@@ -937,6 +1049,12 @@ void get_prediction_pairs_for_site(int site, float *ref_predictions, size_t ref_
 
     *map = ref_alt_map;
     *map_size = ref_alt_map_size;
+}
+
+void kv_push_new_probability(SpliceProbabilities *ps, SpliceProbability p) {
+    for (int i = 0; i < ps->n; i++) if (p.position == kv_A(*ps, i).position) return;
+
+    kv_push(SpliceProbability, *ps, p);
 }
 
 void get_splice_probabilities_from_map(Record *r, enum SpliceType type, int record_phase, int *gene_mask, Range pred_range, size_t map_size, PairPrediction *map, SpliceProbabilities *probabilities) {
@@ -952,16 +1070,19 @@ void get_splice_probabilities_from_map(Record *r, enum SpliceType type, int reco
         for (int e = 0; e < transcript->nexons; e++) {
             Exon *exon = transcript->exons[e];
 
-            if ((transcript->strand == STRAND_REV && e == 0) | (transcript->strand == STRAND_FWD && e >= transcript->nexons-1)) continue;
-            if (!((exon->bounds->end >= pred_range.start) & (exon->bounds->end < pred_range.end))) continue;
+            int exon_boundary_position = type == DONOR ? exon->ref_bounds->end : exon->ref_bounds->start;
+
+            if ((type == DONOR) & ((transcript->strand == STRAND_REV && e == 0) | (transcript->strand == STRAND_FWD && e >= transcript->nexons-1))) continue;
+            if ((type == ACCEPTOR) & ((transcript->strand == STRAND_REV && e >= transcript->nexons-1) | (transcript->strand == STRAND_FWD && e == 0))) continue;
+            if (!((exon_boundary_position >= pred_range.start) & (exon_boundary_position < pred_range.end))) continue;
 
 
-            int index = (int32_t) exon->bounds->end - r->v->pos + CAI_DISTANCE;
+            int index = (int32_t) exon_boundary_position - pred_range.start;
 
             for (int i = 0; i < map_size; i++) {
                 PairPrediction pair = map[i];
                 if (pair.ref.missing) continue;
-                if (pair.ref.position != exon->bounds->end) continue;
+                if (pair.ref.position != exon_boundary_position) continue;
 
                 canonical_sites[i] = 1;
 
@@ -972,15 +1093,15 @@ void get_splice_probabilities_from_map(Record *r, enum SpliceType type, int reco
 
                     type == DONOR ? set_record_flag(r, t, record_phase, HAPLOTYPE_SPECIFIC_DONOR) : set_record_flag(r, t, record_phase, HAPLOTYPE_SPECIFIC_ACCEPTOR);
 
-                    SpliceProbability p = { r, type, pair.alt.prior, pair.alt.posterior, pair.alt.missing ? pair.ref.position : pair.alt.position, type == DONOR ? exon->bounds->end : exon->bounds->start };
-                    kv_push(SpliceProbability, *probabilities, p);
+                    SpliceProbability p = { r, type, pair.alt.prior, pair.alt.posterior, pair.alt.missing ? pair.ref.position : pair.alt.position, exon_boundary_position };
+                    kv_push_new_probability(probabilities, p);
                 } else {
                     if (!pair.alt.missing && pair.alt.prior > 0) continue; // No change
 
                     type == DONOR ? set_record_flag(r, t, record_phase, ABLATED_CANONICAL_DONOR) : set_record_flag(r, t, record_phase, ABLATED_CANONICAL_ACCEPTOR);
 
-                    SpliceProbability p = { r, type, pair.alt.prior, pair.alt.posterior, pair.alt.missing ? pair.ref.position : pair.alt.position, type == DONOR ? exon->bounds->end : exon->bounds->start };
-                    kv_push(SpliceProbability, *probabilities, p);
+                    SpliceProbability p = { r, type, pair.alt.prior, pair.alt.posterior, pair.alt.missing ? pair.ref.position : pair.alt.position, exon_boundary_position};
+                    kv_push_new_probability(probabilities, p);
                 }
             }
         }
@@ -1004,7 +1125,7 @@ void get_splice_probabilities_from_map(Record *r, enum SpliceType type, int reco
             }
 
             SpliceProbability p = { r, type, pair.alt.prior, pair.alt.posterior, pair.alt.missing ? pair.ref.position : pair.alt.position, 0 };
-            kv_push(SpliceProbability, *probabilities, p);
+            kv_push_new_probability(probabilities, p);
         }
     }
 }
@@ -1099,20 +1220,32 @@ int check_proximity(uint32_t predicted_position, uint32_t canonical_site_positio
     return abs((int32_t)predicted_position - (int32_t)canonical_site_position) <= PROXIMITY_THRESHOLD;
 }
 
+void kv_push_new_record(Records *rs, Record *r) {
+    for (int i = 0; i < rs->n; i++) if (r == kv_A(*rs, i)) return;
+
+    kv_push(Record *, *rs, r);
+}
+
 void store_splice_sites(SpliceProbability prediction, int *predict_for_pair, int *predict_for_competitor, SpliceSites *splice_sites) {
-    if (prediction.type == DONOR && prediction.posterior_probability == 0 && splice_sites->canonical_donors[0].gff_canonical) {
-        kv_push(Record *, *((Records *) splice_sites->canonical_donors[0].records_ptr), prediction.record);
+    if (prediction.type == DONOR && prediction.posterior_probability == 0 && prediction.position == splice_sites->canonical_donors[0].position) {
+        kv_push_new_record((Records *) splice_sites->canonical_donors[0].records_ptr, prediction.record);
         splice_sites->canonical_donors[0].predicted = 1;
         splice_sites->canonical_donors[0].prior_probability = prediction.prior_probability;
         splice_sites->canonical_donors[0].posterior_probability = prediction.posterior_probability;
-    } else if (prediction.type == ACCEPTOR && prediction.posterior_probability == 0 && splice_sites->canonical_acceptors[0].gff_canonical) {
-        kv_push(Record *, *((Records *) splice_sites->canonical_acceptors[0].records_ptr), prediction.record);
+        splice_sites->canonical_donors[0].lost = 1;
+        *predict_for_pair = 1;
+        *predict_for_competitor = 1;
+    } else if (prediction.type == ACCEPTOR && prediction.posterior_probability == 0 && prediction.position == splice_sites->canonical_acceptors[0].position) {
+        kv_push_new_record((Records *) splice_sites->canonical_acceptors[0].records_ptr, prediction.record);
         splice_sites->canonical_acceptors[0].predicted = 1;
         splice_sites->canonical_acceptors[0].prior_probability = prediction.prior_probability;
         splice_sites->canonical_acceptors[0].posterior_probability = prediction.posterior_probability;
+        splice_sites->canonical_acceptors[0].lost = 1;
+        *predict_for_pair = 1;
+        *predict_for_competitor = 1;
     } else if (prediction.type == DONOR & prediction.posterior_probability > 0) {
         if (splice_sites->canonical_donors[0].gff_canonical && prediction.posterior_probability == 1.0 && prediction.position == splice_sites->canonical_donors[0].position) { // If canonical exists and is the only splice site within the window
-            kv_push(Record *, *((Records *) splice_sites->canonical_donors[0].records_ptr), prediction.record);
+            kv_push_new_record((Records *) splice_sites->canonical_donors[0].records_ptr, prediction.record);
             splice_sites->canonical_donors[0].predicted = 1;
             splice_sites->canonical_donors[0].prior_probability = prediction.prior_probability;
             splice_sites->canonical_donors[0].posterior_probability = prediction.posterior_probability;
@@ -1124,7 +1257,7 @@ void store_splice_sites(SpliceProbability prediction, int *predict_for_pair, int
                 if (splice_sites->canonical_donors[i].position == prediction.position) {
                     canonical_donor_exists = 1;
 
-                    kv_push(Record *, *((Records *) splice_sites->canonical_donors[i].records_ptr), prediction.record);
+                    kv_push_new_record((Records *) splice_sites->canonical_donors[i].records_ptr, prediction.record);
                     if (splice_sites->canonical_donors[i].predicted == 1) {
                         canonical_donor_predicted = 1;
                     }
@@ -1136,7 +1269,7 @@ void store_splice_sites(SpliceProbability prediction, int *predict_for_pair, int
                 *predict_for_pair = 1;
                 for (int i = 0; i < splice_sites->n_canonical_donors; i++) {
                     if (splice_sites->canonical_donors[i].position == prediction.position) {
-                        // kv_push(Record *, *((Records *) splice_sites->canonical_donors[0].records_ptr), prediction.record);
+                        kv_push_new_record((Records *) splice_sites->canonical_donors[0].records_ptr, prediction.record);
                         splice_sites->canonical_donors[i].canonical_position = prediction.canonical_position;
                         splice_sites->canonical_donors[i].predicted = 1;
                         splice_sites->canonical_donors[i].prior_probability = prediction.prior_probability;
@@ -1151,7 +1284,7 @@ void store_splice_sites(SpliceProbability prediction, int *predict_for_pair, int
                 Records *splice_records = malloc(sizeof(Records));
                 kv_init(*splice_records);
                 kv_push(Record *, *splice_records, prediction.record);
-                SpliceSite site = { splice_records, prediction.position, prediction.canonical_position, 1, 0, prediction.prior_probability, prediction.posterior_probability };
+                SpliceSite site = { splice_records, prediction.position, prediction.canonical_position, 1, 0, 0, prediction.prior_probability, prediction.posterior_probability };
                 splice_sites->canonical_donors[splice_sites->n_canonical_donors++] = site;
             }
         // Store cryptic donor site
@@ -1162,7 +1295,7 @@ void store_splice_sites(SpliceProbability prediction, int *predict_for_pair, int
                 if (splice_sites->cryptic_donors[i].position == prediction.position) {
                     cryptic_donor_exists = 1;
 
-                    kv_push(Record *, *((Records *) splice_sites->cryptic_donors[i].records_ptr), prediction.record);
+                    kv_push_new_record((Records *) splice_sites->cryptic_donors[i].records_ptr, prediction.record);
                 }
             }
 
@@ -1175,14 +1308,14 @@ void store_splice_sites(SpliceProbability prediction, int *predict_for_pair, int
                 kv_init(*splice_records);
                 kv_push(Record *, *splice_records, prediction.record);
 
-                SpliceSite site = { splice_records, prediction.position, prediction.canonical_position, 1, 0, prediction.prior_probability, prediction.posterior_probability };
+                SpliceSite site = { splice_records, prediction.position, prediction.canonical_position, 1, 0, 0, prediction.prior_probability, prediction.posterior_probability };
                 splice_sites->cryptic_donors[splice_sites->n_cryptic_donors++] = site;
             }
         }
     } else if (prediction.type == ACCEPTOR & prediction.posterior_probability > 0) {
         // Store canonical acceptor site
         if (splice_sites->canonical_acceptors[0].gff_canonical && prediction.posterior_probability == 1.0 && prediction.position == splice_sites->canonical_acceptors[0].position) { // If canonical exists and is the only splice site within the window
-            kv_push(Record *, *((Records *) splice_sites->canonical_acceptors[0].records_ptr), prediction.record);
+            kv_push_new_record((Records *) splice_sites->canonical_acceptors[0].records_ptr, prediction.record);
             splice_sites->canonical_acceptors[0].predicted = 1;
             splice_sites->canonical_acceptors[0].prior_probability = prediction.prior_probability;
             splice_sites->canonical_acceptors[0].posterior_probability = prediction.posterior_probability;
@@ -1194,7 +1327,7 @@ void store_splice_sites(SpliceProbability prediction, int *predict_for_pair, int
                 if (splice_sites->canonical_acceptors[i].position == prediction.position) {
                     canonical_acceptor_exists = 1;
 
-                    kv_push(Record *, *((Records *) splice_sites->canonical_acceptors[i].records_ptr), prediction.record);
+                    kv_push_new_record((Records *) splice_sites->canonical_acceptors[i].records_ptr, prediction.record);
                     if (splice_sites->canonical_acceptors[i].predicted == 1) {
                         canonical_acceptor_predicted = 1;
                     }
@@ -1206,7 +1339,7 @@ void store_splice_sites(SpliceProbability prediction, int *predict_for_pair, int
                 *predict_for_pair = 1;
                 for (int i = 0; i < splice_sites->n_canonical_acceptors; i++) {
                     if (splice_sites->canonical_acceptors[i].position == prediction.position) {
-                        kv_push(Record *, *((Records *) splice_sites->canonical_acceptors[i].records_ptr), prediction.record);
+                        kv_push_new_record((Records *) splice_sites->canonical_acceptors[i].records_ptr, prediction.record);
                         // splice_sites->canonical_acceptors[i].canonical_position = prediction.canonical_position;
                         splice_sites->canonical_acceptors[i].predicted = 1;
                         splice_sites->canonical_acceptors[i].prior_probability = prediction.prior_probability;
@@ -1221,7 +1354,7 @@ void store_splice_sites(SpliceProbability prediction, int *predict_for_pair, int
                 Records *splice_records = malloc(sizeof(Records));
                 kv_init(*splice_records);
                 kv_push(Record *, *splice_records, prediction.record);
-                SpliceSite site = { splice_records, prediction.position, prediction.canonical_position, 1, 0, prediction.prior_probability, prediction.posterior_probability };
+                SpliceSite site = { splice_records, prediction.position, prediction.canonical_position, 1, 0, 0, prediction.prior_probability, prediction.posterior_probability };
                 splice_sites->canonical_acceptors[splice_sites->n_canonical_acceptors++] = site;
             }
         // Store cryptic acceptor site
@@ -1232,7 +1365,7 @@ void store_splice_sites(SpliceProbability prediction, int *predict_for_pair, int
                 if (splice_sites->cryptic_acceptors[i].position == prediction.position) {
                     cryptic_acceptor_exists = 1;
 
-                    kv_push(Record *, *((Records *) splice_sites->cryptic_acceptors[i].records_ptr), prediction.record);
+                    kv_push_new_record((Records *) splice_sites->cryptic_acceptors[i].records_ptr, prediction.record);
                 }
             }
 
@@ -1718,8 +1851,8 @@ int main(int argc, char *argv[]) {
                         int kept_start = 1, kept_end = 1;
 
                         // Checks if donor/acceptor sites were lost due to a deletion  TODO: Check effect of +1 here in gdb
-                        Range canonical_start = (Range) { e->bounds->start, e->bounds->start }; // +1?
-                        Range canonical_end = (Range) { e->bounds->end, e->bounds->end }; // +1?
+                        Range canonical_start = (Range) { e->ref_bounds->start, e->ref_bounds->start }; // +1?
+                        Range canonical_end = (Range) { e->ref_bounds->end, e->ref_bounds->end }; // +1?
                         for (int ri = 0; ri < hap_in.n; ri++) {
                             Record *hap_r = kv_A(hap_in, ri);
                             int is_deletion = allele_offset(hap_r->v, 0, 1, gene->coords) > 0;
@@ -1732,8 +1865,8 @@ int main(int argc, char *argv[]) {
                             if (intersect_ranges(ref, canonical_end, &intersection) && range_len(intersection) > 0) kept_end = 0;
                         }
 
-                        uint32_t exon_hap_start = e->bounds->start - haplotype_offset(&hap_in, (Range) { gene->coords.start, e->bounds->start });
-                        uint32_t exon_hap_end = e->bounds->end - haplotype_offset(&hap_in, (Range) { gene->coords.start, e->bounds->end });
+                        uint32_t exon_hap_start = e->ref_bounds->start - haplotype_offset(&hap_in, (Range) { gene->coords.start, e->ref_bounds->start - 1});
+                        uint32_t exon_hap_end = e->ref_bounds->end - haplotype_offset(&hap_in, (Range) { gene->coords.start, e->ref_bounds->end - 2});
 
                         SpliceSites *sites = malloc(sizeof(SpliceSites));
                         init_splice_site(&sites->canonical_acceptors, &sites->n_canonical_acceptors, &sites->m_canonical_acceptors);
@@ -1741,32 +1874,35 @@ int main(int argc, char *argv[]) {
                         init_splice_site(&sites->cryptic_acceptors, &sites->n_cryptic_acceptors, &sites->m_cryptic_acceptors);
                         init_splice_site(&sites->cryptic_donors, &sites->n_cryptic_donors, &sites->m_cryptic_donors);
 
+                        e->hap_bounds = malloc(sizeof(Range));
+
                         if (t->strand == STRAND_FWD) {
                             if (ei > 0) {
                                 Records *splice_records = malloc(sizeof(Records));
                                 kv_init(*splice_records);
-                                sites->canonical_acceptors[sites->n_canonical_acceptors++] = (SpliceSite) { splice_records, exon_hap_start, exon_hap_start, 0, kept_start, 1.0, 1.0 };
+                                sites->canonical_acceptors[sites->n_canonical_acceptors++] = (SpliceSite) { splice_records, exon_hap_start, exon_hap_start, 0, kept_start, 0, 1.0, 1.0 };
                             }
                             if (ei < t->nexons-1) {
                                 Records *splice_records = malloc(sizeof(Records));
                                 kv_init(*splice_records);
-                                sites->canonical_donors[sites->n_canonical_donors++] = (SpliceSite) { splice_records, exon_hap_end, exon_hap_end, 0, kept_end, 1.0, 1.0 };
+                                sites->canonical_donors[sites->n_canonical_donors++] = (SpliceSite) { splice_records, exon_hap_end, exon_hap_end, 0, kept_end, 0, 1.0, 1.0 };
                             }
 
-                            *e->bounds = (Range) {exon_hap_start, exon_hap_end};
+                            *e->hap_bounds = (Range) {exon_hap_start, exon_hap_end};
                         } else if (t->strand == STRAND_REV) {
                             if (ei < t->nexons-1) {
                                 Records *splice_records = malloc(sizeof(Records));
                                 kv_init(*splice_records);
-                                sites->canonical_acceptors[sites->n_canonical_acceptors++] = (SpliceSite) { splice_records, exon_hap_end, exon_hap_end, 0, kept_end, 1.0, 1.0 };
+                                sites->canonical_acceptors[sites->n_canonical_acceptors++] = (SpliceSite) { splice_records, exon_hap_end, exon_hap_end, 0, kept_end, 0, 1.0, 1.0 };
                             }
                             if (ei > 0) {
                                 Records *splice_records = malloc(sizeof(Records));
                                 kv_init(*splice_records);
-                                sites->canonical_donors[sites->n_canonical_donors++] = (SpliceSite) { splice_records, exon_hap_start, exon_hap_start, 0, kept_start, 1.0, 1.0 };
+                                sites->canonical_donors[sites->n_canonical_donors++] = (SpliceSite) { splice_records, exon_hap_start, exon_hap_start, 0, kept_start, 0, 1.0, 1.0 };
                             }
 
-                            *e->bounds = (Range) {exon_hap_end, exon_hap_start};
+                            *e->hap_bounds = (Range) {exon_hap_end, exon_hap_start};
+                            *e->ref_bounds = (Range) {e->ref_bounds->end, e->ref_bounds->start};
                         }
 
                         e->splice_sites = sites;
@@ -1987,11 +2123,11 @@ int main(int argc, char *argv[]) {
                                 if (prediction.type == DONOR) {
                                     if (ei == t->nexons-1 && t->strand == STRAND_FWD) continue; // Last exon, cannot form a pair with a downstream acceptor
                                     if (ei == 0 && t->strand == STRAND_REV) continue;
-                                    positions = (Range) { e->bounds->start + 1, t->exons[ei + direction]->bounds->start };
+                                    positions = (Range) { e->hap_bounds->start + 1, t->exons[ei + direction]->hap_bounds->start };
                                 } else { // ACCEPTOR
                                     if (ei == 0 && t->strand == STRAND_FWD) continue;
                                     if (ei == t->nexons-1 && t->strand == STRAND_REV) continue;
-                                    positions = (Range) { t->exons[ei - direction]->bounds->end, e->bounds->end - 1 };
+                                    positions = (Range) { t->exons[ei - direction]->hap_bounds->end, e->hap_bounds->end - 1 };
                                 }
 
                                 Range intersection;
@@ -2013,6 +2149,8 @@ int main(int argc, char *argv[]) {
                                         if (pi < 0 || pi >= t->nexons) continue;
                                         SpliceSite pair = t->exons[pi]->splice_sites->canonical_acceptors[0];
 
+                                        kv_push_new_record((Records *) pair.records_ptr, prediction.record);
+
                                         if (pair.predicted) continue;
 
                                         Range pred_range = { pair.position - 50, pair.position + 51 };
@@ -2030,14 +2168,14 @@ int main(int argc, char *argv[]) {
                                         PairPrediction *ref_alt_acceptor_map = NULL;
                                         size_t ref_alt_acceptor_map_size = 0;
                                         get_prediction_pairs_for_site(ACCEPTOR_POS, pair_predictions_ref, 101, pair_predictions_alt, 101-pred_offset, &hap_in, pred_range, &ref_alt_acceptor_map_size, &ref_alt_acceptor_map);
-                                        get_splice_probabilities_from_map(r, DONOR, p, current_gene, pred_range, ref_alt_acceptor_map_size, ref_alt_acceptor_map, &pair_probabilities);
+                                        get_splice_probabilities_from_map(r, ACCEPTOR, p, current_gene, pred_range, ref_alt_acceptor_map_size, ref_alt_acceptor_map, &pair_probabilities);
 
 
                                         // Get donor pairs
                                         PairPrediction *ref_alt_donor_map = NULL;
                                         size_t ref_alt_donor_map_size = 0;
                                         get_prediction_pairs_for_site(DONOR_POS, pair_predictions_ref, 101, pair_predictions_alt, 101-pred_offset, &hap_in, pred_range, &ref_alt_donor_map_size, &ref_alt_donor_map);
-                                        get_splice_probabilities_from_map(r, ACCEPTOR, p, current_gene, pred_range, ref_alt_donor_map_size, ref_alt_donor_map, &pair_probabilities);
+                                        get_splice_probabilities_from_map(r, DONOR, p, current_gene, pred_range, ref_alt_donor_map_size, ref_alt_donor_map, &pair_probabilities);
 
 
                                         for (int pi = 0; pi < pair_probabilities.n; pi++) {
@@ -2050,11 +2188,11 @@ int main(int argc, char *argv[]) {
                                                 if (pair_prediction.type == DONOR) {
                                                     if (ei == t->nexons-1 && t->strand == STRAND_FWD) continue; // Last exon, cannot form a pair with a downstream acceptor
                                                     if (ei == 0 && t->strand == STRAND_REV) continue;
-                                                    positions = (Range) { e->bounds->start + 1, t->exons[ei + direction]->bounds->start };
+                                                    positions = (Range) { e->hap_bounds->start + 1, t->exons[ei + direction]->hap_bounds->start };
                                                 } else { // ACCEPTOR
                                                     if (ei == 0 && t->strand == STRAND_FWD) continue;
                                                     if (ei == t->nexons-1 && t->strand == STRAND_REV) continue;
-                                                    positions = (Range) { t->exons[ei - direction]->bounds->end, e->bounds->end - 1 };
+                                                    positions = (Range) { t->exons[ei - direction]->hap_bounds->end, e->hap_bounds->end - 1 };
                                                 }
 
                                                 Range intersection;
@@ -2074,6 +2212,8 @@ int main(int argc, char *argv[]) {
                                         if (pi < 0 || pi >= t->nexons) continue;
                                         SpliceSite pair = t->exons[pi]->splice_sites->canonical_donors[0];
 
+                                        kv_push_new_record((Records *) pair.records_ptr, prediction.record);
+
                                         if (pair.predicted) continue;
 
                                         Range pred_range = { pair.position - 50, pair.position + 51 };
@@ -2091,14 +2231,14 @@ int main(int argc, char *argv[]) {
                                         PairPrediction *ref_alt_acceptor_map = NULL;
                                         size_t ref_alt_acceptor_map_size = 0;
                                         get_prediction_pairs_for_site(ACCEPTOR_POS, pair_predictions_ref, 101, pair_predictions_alt, 101-pred_offset, &hap_in, pred_range, &ref_alt_acceptor_map_size, &ref_alt_acceptor_map);
-                                        get_splice_probabilities_from_map(r, DONOR, p, current_gene, pred_range, ref_alt_acceptor_map_size, ref_alt_acceptor_map, &pair_probabilities);
+                                        get_splice_probabilities_from_map(r, ACCEPTOR, p, current_gene, pred_range, ref_alt_acceptor_map_size, ref_alt_acceptor_map, &pair_probabilities);
 
 
                                         // Get donor pairs
                                         PairPrediction *ref_alt_donor_map = NULL;
                                         size_t ref_alt_donor_map_size = 0;
                                         get_prediction_pairs_for_site(DONOR_POS, pair_predictions_ref, 101, pair_predictions_alt, 101-pred_offset, &hap_in, pred_range, &ref_alt_donor_map_size, &ref_alt_donor_map);
-                                        get_splice_probabilities_from_map(r, ACCEPTOR, p, current_gene, pred_range, ref_alt_donor_map_size, ref_alt_donor_map, &pair_probabilities);
+                                        get_splice_probabilities_from_map(r, DONOR, p, current_gene, pred_range, ref_alt_donor_map_size, ref_alt_donor_map, &pair_probabilities);
 
                                         for (int pi = 0; pi < pair_probabilities.n; pi++) {
                                             SpliceProbability pair_prediction = pair_probabilities.a[pi];
@@ -2110,11 +2250,11 @@ int main(int argc, char *argv[]) {
                                                 if (pair_prediction.type == DONOR) {
                                                     if (ei == t->nexons-1 && t->strand == STRAND_FWD) continue; // Last exon, cannot form a pair with a downstream acceptor
                                                     if (ei == 0 && t->strand == STRAND_REV) continue;
-                                                    positions = (Range) { e->bounds->start + 1, t->exons[ei + direction]->bounds->start };
+                                                    positions = (Range) { e->hap_bounds->start + 1, t->exons[ei + direction]->hap_bounds->start };
                                                 } else { // ACCEPTOR
                                                     if (ei == 0 && t->strand == STRAND_FWD) continue;
                                                     if (ei == t->nexons-1 && t->strand == STRAND_REV) continue;
-                                                    positions = (Range) { t->exons[ei - direction]->bounds->end, e->bounds->end - 1 };
+                                                    positions = (Range) { t->exons[ei - direction]->hap_bounds->end, e->hap_bounds->end - 1 };
                                                 }
 
                                                 Range intersection;
@@ -2137,6 +2277,8 @@ int main(int argc, char *argv[]) {
                                         int ci = ei - direction;
                                         if (ci < 0 || ci >= t->nexons) continue;
                                         SpliceSite competitor = t->exons[ci]->splice_sites->canonical_donors[0];
+
+                                        kv_push_new_record((Records *) competitor.records_ptr, prediction.record);
 
                                         if (competitor.predicted) continue;
 
@@ -2174,11 +2316,11 @@ int main(int argc, char *argv[]) {
                                                 if (competitor_prediction.type == DONOR) {
                                                     if (ei == t->nexons-1 && t->strand == STRAND_FWD) continue; // Last exon, cannot form a pair with a downstream acceptor
                                                     if (ei == 0 && t->strand == STRAND_REV) continue;
-                                                    positions = (Range) { e->bounds->start + 1, t->exons[ei + direction]->bounds->start };
+                                                    positions = (Range) { e->hap_bounds->start + 1, t->exons[ei + direction]->hap_bounds->start };
                                                 } else { // ACCEPTOR
                                                     if (ei == 0 && t->strand == STRAND_FWD) continue;
                                                     if (ei == t->nexons-1 && t->strand == STRAND_REV) continue;
-                                                    positions = (Range) { t->exons[ei - direction]->bounds->end, e->bounds->end - 1 };
+                                                    positions = (Range) { t->exons[ei - direction]->hap_bounds->end, e->hap_bounds->end - 1 };
                                                 }
 
                                                 Range intersection;
@@ -2197,6 +2339,8 @@ int main(int argc, char *argv[]) {
                                         int ci = ei + direction;
                                         if (ci < 0 || ci >= t->nexons) continue;
                                         SpliceSite competitor = t->exons[ci]->splice_sites->canonical_acceptors[0];
+
+                                        kv_push_new_record((Records *) competitor.records_ptr, prediction.record);
 
                                         if (competitor.predicted) continue;
 
@@ -2234,11 +2378,11 @@ int main(int argc, char *argv[]) {
                                                 if (competitor_prediction.type == DONOR) {
                                                     if (ei == t->nexons-1 && t->strand == STRAND_FWD) continue; // Last exon, cannot form a pair with a downstream acceptor
                                                     if (ei == 0 && t->strand == STRAND_REV) continue;
-                                                    positions = (Range) { e->bounds->start + 1, t->exons[ei + direction]->bounds->start };
+                                                    positions = (Range) { e->hap_bounds->start + 1, t->exons[ei + direction]->hap_bounds->start };
                                                 } else { // ACCEPTOR
                                                     if (ei == 0 && t->strand == STRAND_FWD) continue;
                                                     if (ei == t->nexons-1 && t->strand == STRAND_REV) continue;
-                                                    positions = (Range) { t->exons[ei - direction]->bounds->end, e->bounds->end - 1 };
+                                                    positions = (Range) { t->exons[ei - direction]->hap_bounds->end, e->hap_bounds->end - 1 };
                                                 }
 
                                                 Range intersection;
@@ -2311,7 +2455,7 @@ int main(int argc, char *argv[]) {
                     }
 
                     // Initialize 2d array for storing noncoding regions
-                    int n_nc_regions = 0, m_nc_regions = t->nexons+5; // TODO: rework this, +5 is messy, and probably not needed in the vast majority of cases
+                    int n_nc_regions = 0, m_nc_regions = t->nexons+10; // TODO: rework this, +10 is messy, and probably not needed in the vast majority of cases
                     NonCodingRegions *nc_regions = malloc(m_nc_regions * sizeof(NonCodingRegions));
                     for (int i2 = 0; i2 < m_nc_regions; i2++) {
                         kv_init(nc_regions[i2]);
@@ -2608,7 +2752,7 @@ int main(int argc, char *argv[]) {
                                     SpliceSite *donor = donors.a + i;
                                     NonCodingRegion ncr = {
                                         { donor->position, donor->position },
-                                        { donor->canonical_position, canonical_acceptor->canonical_position },
+                                        { canonical_donor->canonical_position, canonical_acceptor->canonical_position },
                                         donor,
                                         canonical_acceptor,
                                         0
@@ -2620,7 +2764,7 @@ int main(int argc, char *argv[]) {
                                     SpliceSite *acceptor = acceptors.a + i;
                                     NonCodingRegion ncr = {
                                         { canonical_donor->position, canonical_donor->position },
-                                        { canonical_donor->canonical_position, acceptor->canonical_position },
+                                        { canonical_donor->canonical_position, canonical_acceptor->canonical_position },
                                         canonical_donor,
                                         acceptor,
                                         0
@@ -2638,7 +2782,7 @@ int main(int argc, char *argv[]) {
                                     SpliceSite *acceptor = acceptors.a + j;
                                     NonCodingRegion ncr = {
                                         { donor->position, acceptor->position },
-                                        { donor->canonical_position, acceptor->canonical_position },
+                                        { canonical_donor->canonical_position, canonical_acceptor->canonical_position },
                                         donor,
                                         acceptor,
                                         0
@@ -2867,9 +3011,10 @@ int main(int argc, char *argv[]) {
                             int64_t position = hap_r->v->pos;
 
                             int64_t isoform_position;
-                            int coding = !get_position_in_isoform(position, ncrs, &hap_in, t->strand, gene->coords, &isoform_position);
+                            int allele_lengths[2];
+                            int coding = !get_range_in_isoform(hap_r->v, ncrs, &hap_in, t->strand, gene->coords, &isoform_position, allele_lengths);
 
-                            int offset = allele_offset(hap_r->v, 0, 1, shifted_isoform);
+                            int offset = coding ? (allele_lengths[0] - allele_lengths[1]) : 0; // Ref_len - alt_len
                             if (offset < 0 && t->strand == STRAND_REV) { // Get position of the other end of the inserted sequence in the case of a reverse strand transcript
                                 isoform_position -= offset;
                             }
@@ -2910,13 +3055,13 @@ int main(int argc, char *argv[]) {
                                         kv_push(IsoformVariant, splice_shifts, variant);
                                         num_splice_sites++;
 
-                                        if (rr != r) continue;
-                                        if (!ncr.donor->gff_canonical && offset != 0) set_record_flag(rr, ti, p, CRYPTIC_DONOR);
+                                        // if (rr != r) continue;
+                                        // if (!ncr.donor->gff_canonical && offset != 0) set_record_flag(rr, ti, p, CRYPTIC_DONOR);
                                     }
                                 }
 
                                 {
-                                    int64_t position = ncr.canonical_coords.end;
+                                    int64_t position = ncr.canonical_coords.end-1;
                                     int offset = range_len(ncr.canonical_coords);
 
                                     int coding = !get_position_in_isoform(position, ncrs, &hap_in, t->strand, gene->coords, &isoform_position);
@@ -2928,8 +3073,8 @@ int main(int argc, char *argv[]) {
                                         kv_push(IsoformVariant, splice_shifts, variant);
                                         num_splice_sites++;
 
-                                        if (r != rr) continue;
-                                        if (!ncr.acceptor->gff_canonical && offset != 0) set_record_flag(rr, ti, p, CRYPTIC_ACCEPTOR);
+                                        // if (r != rr) continue;
+                                        // if (!ncr.acceptor->gff_canonical && offset != 0) set_record_flag(rr, ti, p, CRYPTIC_ACCEPTOR);
                                     }
                                 }
                                 continue;
@@ -2946,12 +3091,12 @@ int main(int argc, char *argv[]) {
                                     kv_push(IsoformVariant, splice_shifts, variant);
                                     num_splice_sites++;
 
-                                    if (rr != r) continue;
-                                    if (!ncr.donor->gff_canonical && offset != 0) set_record_flag(rr, ti, p, CRYPTIC_DONOR);
+                                    // if (rr != r) continue;
+                                    // if (!ncr.donor->gff_canonical && offset != 0) set_record_flag(rr, ti, p, CRYPTIC_DONOR);
                                 }
                                 continue;
                             } else if (ncr.acceptor != NULL && ncr.acceptor->posterior_probability == 0) {
-                                int64_t position = ncr.canonical_coords.end;
+                                int64_t position = ncr.canonical_coords.end-1;
                                 int offset = range_len(ncr.canonical_coords);
 
                                 int coding = !get_position_in_isoform(position, ncrs, &hap_in, t->strand, gene->coords, &isoform_position);
@@ -2963,8 +3108,8 @@ int main(int argc, char *argv[]) {
                                     kv_push(IsoformVariant, splice_shifts, variant);
                                     num_splice_sites++;
 
-                                    if (rr != r) continue;
-                                    if (!ncr.acceptor->gff_canonical && offset != 0) set_record_flag(rr, ti, p, CRYPTIC_ACCEPTOR);
+                                    // if (rr != r) continue;
+                                    // if (!ncr.acceptor->gff_canonical && offset != 0) set_record_flag(rr, ti, p, CRYPTIC_ACCEPTOR);
                                 }
                                 continue;
                             }
@@ -2983,15 +3128,15 @@ int main(int argc, char *argv[]) {
                                     kv_push(IsoformVariant, splice_shifts, variant);
                                     num_splice_sites++;
 
-                                    if (rr != r) continue;
-                                    if (!ncr.donor->gff_canonical && donor_offset != 0) set_record_flag(rr, ti, p, CRYPTIC_DONOR);
+                                    // if (rr != r) continue;
+                                    // if (!ncr.donor->gff_canonical && donor_offset != 0) set_record_flag(rr, ti, p, CRYPTIC_DONOR);
                                 }
                             }
 
 
                             int acceptor_offset = strand_correction * (ncr.coords.end - ncr.canonical_coords.end);
                             if (ncr.acceptor != NULL) {
-                                int64_t position = ncr.coords.end;
+                                int64_t position = ncr.coords.end-1;
                                 int64_t isoform_position;
 
                                 int coding = !get_position_in_isoform(position, ncrs, &hap_in, t->strand, gene->coords, &isoform_position);
@@ -3003,8 +3148,8 @@ int main(int argc, char *argv[]) {
                                     kv_push(IsoformVariant, splice_shifts, variant);
                                     num_splice_sites++;
 
-                                    if (rr != r) continue;
-                                    if (!ncr.acceptor->gff_canonical && acceptor_offset != 0) set_record_flag(rr, ti, p, CRYPTIC_ACCEPTOR);
+                                    // if (rr != r) continue;
+                                    // if (!ncr.acceptor->gff_canonical && acceptor_offset != 0) set_record_flag(rr, ti, p, CRYPTIC_ACCEPTOR);
                                 }
                             }
                         }
@@ -3013,46 +3158,10 @@ int main(int argc, char *argv[]) {
                         kvec_t(IsoformVariant) shifts;
                         kv_init(shifts);
 
-                        if (variant_shifts.n == 0 && splice_shifts.n == 0) {
-
-                        } else if (variant_shifts.n == 0) {
-                            kv_copy(IsoformVariant, shifts, splice_shifts);
-                            // ks_introsort_frameshift_sort(shifts.n, shifts.a);
-                        } else if (splice_shifts.n == 0) {
-                            kv_copy(IsoformVariant, shifts, variant_shifts);
-                        } else {
-                            if (t->strand == STRAND_FWD) {
-                                size_t ri = 0, si = 0;
-                                while (ri < variant_shifts.n && si < splice_shifts.n) {
-                                    IsoformVariant variant = kv_A(variant_shifts, ri);
-                                    IsoformVariant splice = kv_A(splice_shifts, si);
-                                    if (variant.seq_pos < splice.seq_pos) {
-                                        kv_push(IsoformVariant, shifts, variant);
-                                        ri++;
-                                    } else {
-                                        kv_push(IsoformVariant, shifts, splice);
-                                        si++;
-                                    }
-                                }
-                            } else if (t->strand == STRAND_REV) {
-                                size_t ri = variant_shifts.n, si = splice_shifts.n;
-                                while (ri > 0 && si > 0) {
-                                    IsoformVariant variant = kv_A(variant_shifts, ri-1);
-                                    IsoformVariant splice = kv_A(splice_shifts, si-1);
-                                    if (variant.seq_pos > splice.seq_pos) {
-                                        kv_push(IsoformVariant, shifts, variant);
-                                        ri--;
-                                    } else {
-                                        kv_push(IsoformVariant, shifts, splice);
-                                        si--;
-                                    }
-                                }
-                            }
-                        }
-
-                        if (shifts.n > 0) ks_introsort_frameshift_sort(shifts.n, shifts.a);
-
-                        if (t->strand == STRAND_REV) ks_introsort_frameshift_reverse_sort(shifts.n, shifts.a);
+                        for (int i = 0; i < variant_shifts.n; i++) kv_push(IsoformVariant, shifts, kv_A(variant_shifts, i));
+                        for (int i = 0; i < splice_shifts.n; i++) kv_push(IsoformVariant, shifts, kv_A(splice_shifts, i));
+                        if (shifts.n > 0 && t->strand == STRAND_FWD) ks_introsort_frameshift_sort(shifts.n, shifts.a);
+                        if (shifts.n > 0 && t->strand == STRAND_REV) ks_introsort_frameshift_reverse_sort(shifts.n, shifts.a);
 
                         // for (int ri = 0; ri < shifts.n; ri++) {
                         //     IsoformVariant iso_shift = kv_A(shifts, ri);
@@ -3104,7 +3213,7 @@ int main(int argc, char *argv[]) {
                             if (shift.r == NULL) continue;
 
                             int vposition = shift.r->v->pos - haplotype_offset(&hap_in, (Range) { gene->coords.start, shift.r->v->pos });
-                            if (shift.coding && vposition >= shifted_isoform.start && vposition < shifted_isoform.end) {
+                            if ((shift.shift_type == SPLICE && shift.shift != 0) || (shift.shift_type == INDEL && shift.coding && vposition >= shifted_isoform.start && vposition < shifted_isoform.end)) {
                                 kv_A(shifts, j++) = kv_A(shifts, i);
                             }
                         }
@@ -3138,7 +3247,6 @@ int main(int argc, char *argv[]) {
 
                             if (iso_shift.r != r) continue;
                             if (stop_checked) continue;
-                            if (!iso_shift.coding) continue;
 
                             touched = 1;
                             if (csq->triggers[STOP_TRIGGER]) {
@@ -3179,7 +3287,7 @@ int main(int argc, char *argv[]) {
                                     stop_checked = 1;
                                 }
 
-                                if (is_stop && (csq->triggers[STOP_TRIGGER] == STOP_GAIN_VALUE || iso_shift.shift_type == INDEL)) {
+                                if (is_stop && (csq->triggers[STOP_TRIGGER] == STOP_GAIN_VALUE)) {
                                     ptv_type = STOP_GAINED;
                                 }
                             }
@@ -3221,13 +3329,17 @@ int main(int argc, char *argv[]) {
 
                                 if (iso_shift.shift % 3 == 0 && abs(iso_shift.shift) < MAX_FRAMESHIFT_RADIUS) {
                                     rescued = 1;
-                                    rescue_type = FRAME_RESTORING_INDEL;
+                                    rescue_type = iso_shift.shift < 0 ? INTRON_RETENTION : EXON_SKIPPING;
+                                    // rescue_type = FRAME_RESTORING_INDEL;
                                     affected_bases = iso_shift.shift;
                                 } else {
                                     int32_t summed_shift = 0;
                                     int32_t shift_start = 0;
+                                    int32_t starts_with_forward_indel = 0;
                                     int included_current_shift = 0;
                                     int induced_frameshift_rescue = 0;
+                                    int inserted_bases = 0;
+                                    int deleted_bases = 0;
                                     for (int i = 0; i < shifts.n; i++) {
                                         IsoformVariant shift = kv_A(shifts, i);
                                         if (shift.shift == 0) continue; // Rescued splice, do nothing
@@ -3238,7 +3350,10 @@ int main(int argc, char *argv[]) {
                                             summed_shift = shift.shift;
                                             shift_start = shift.seq_pos;
                                             included_current_shift = 0 | (shift.r == r);
+                                            inserted_bases += shift.shift < 0 ? abs(shift.shift) : 0;
+                                            deleted_bases += shift.shift > 0 ? abs(shift.shift) : 0;
                                             induced_frameshift_rescue = shift.shift_type == SPLICE;
+                                            starts_with_forward_indel = (t->strand == STRAND_FWD && shift.shift_type == INDEL);
                                             continue;
                                         }
 
@@ -3246,6 +3361,9 @@ int main(int argc, char *argv[]) {
                                         if (!included_current_shift && shift.r == r) included_current_shift = 1;
 
                                         summed_shift += shift.shift;
+                                        inserted_bases += shift.shift < 0 ? abs(shift.shift) : 0;
+                                        deleted_bases += shift.shift > 0 ? abs(shift.shift) : 0;
+
                                         induced_frameshift_rescue = shift.shift_type == SPLICE && shift.shift % 3 != 0;
                                         if (summed_shift % 3 != 0) continue;
 
@@ -3253,7 +3371,7 @@ int main(int argc, char *argv[]) {
                                             rescued = 1;
                                             rescue_type = (rescue_type == NO_RESCUE) ? FRAME_RESTORING_INDEL : rescue_type; // Only set to rescue type
                                             int32_t shift_end = shift.seq_pos;
-                                            affected_bases = abs(shift_end - shift_start);
+                                            affected_bases = abs(shift_end - shift_start) + inserted_bases;
 
                                             if (induced_frameshift_rescue) r->flags[ti * NUM_PHASES + p] |= RESCUED_BY_SPLICE_FRAMESHIFT;
 
@@ -3262,10 +3380,10 @@ int main(int argc, char *argv[]) {
                                             should_check_induced = 1;
                                             if (t->strand == STRAND_FWD) {
                                                 possible_induced_sequence.start = (int) ((shift_start - shifted_isoform.start + 1) / 3) * 3;
-                                                possible_induced_sequence.end = (shift_start - shifted_isoform.start + 1) + affected_bases;
+                                                possible_induced_sequence.end = (shift_start - shifted_isoform.start + 1) + affected_bases - deleted_bases;
                                             } else {
                                                 possible_induced_sequence.start = (int) ((shifted_isoform.end - shift_start - 1) / 3) * 3;
-                                                possible_induced_sequence.end = (shifted_isoform.end - shift_start - 1) + affected_bases;
+                                                possible_induced_sequence.end = (shifted_isoform.end - shift_start - 1) + affected_bases - deleted_bases;
                                             }
 
                                         }
@@ -3273,6 +3391,9 @@ int main(int argc, char *argv[]) {
                                         summed_shift = 0;
                                         shift_start = 0;
                                         included_current_shift = 0;
+                                        starts_with_forward_indel = 0;
+                                        inserted_bases = 0;
+                                        deleted_bases = 0;
                                     }
                                 }
                             }
@@ -3455,6 +3576,15 @@ int main(int argc, char *argv[]) {
                 }
 
                 TscriptCsqs *csq = kv_A(*r->vep, ti);
+
+                // No Rescue triggers at all
+                if ((csq->triggers[SPLICE_TRIGGER] != CANONICAL_SPLICE_VALUE) & (!csq->triggers[FRAMESHIFT_TRIGGER]) & (csq->triggers[STOP_TRIGGER] != STOP_RESCUE_VALUE)) {
+                    kputc('.', &rescue_tag);
+                    kputc('.', &rescue_prob_tag);
+                    kputc('.', &rescue_type_tag);
+                    continue;
+                }
+
                 for (int p = 0; p < NUM_PHASES; p++) {
                     if (p > 0) {
                         kputc('&', &rescue_tag);
@@ -3569,6 +3699,7 @@ int main(int argc, char *argv[]) {
             for (int j = 0; j < r->vep->n; j++) {
                 TscriptCsqs *csq = kv_A(*r->vep, j);
                 if (csq->triggers[SPLICE_TRIGGER] || csq->triggers[FRAMESHIFT_TRIGGER] || csq->triggers[STOP_TRIGGER]) triggered = 1;
+
             }
 
             if (!triggered) continue;
