@@ -507,7 +507,7 @@ static int get_range_in_isoform(const bcf1_t *v, const NonCodingRegions *ncrs, c
     int64_t isoform_position = ref.start; //  - haplotype_offset(rs, bounds);
     int skipped_bases = 0;
     if (strand == STRAND_FWD) {
-        isoform_position -= haplotype_offset(rs, (Range) { bounds.start, ref.start-1 });
+        // isoform_position -= haplotype_offset(rs, (Range) { bounds.start, ref.start-1 });
         for (int i = 0; i < ncrs->n; i++) {
             NonCodingRegion ncr = kv_A(*ncrs, i);
 
@@ -545,7 +545,7 @@ static int get_range_in_isoform(const bcf1_t *v, const NonCodingRegions *ncrs, c
         }
         isoform_position -= skipped_bases;
     } else if (strand == STRAND_REV) {
-        isoform_position -= haplotype_offset(rs, (Range) { bounds.start, ref.start-1 });
+        // isoform_position -= haplotype_offset(rs, (Range) { bounds.start, ref.start-1 });
         for (int i = 0; i < ncrs->n; i++) {
             NonCodingRegion ncr = kv_A(*ncrs, i);
 
@@ -679,7 +679,7 @@ void calculate_rescue_probabilities(Isoforms *isoforms_struct) {
         // Get probabilities by rescue type [INFO/RESCUE_TYPE]. If the rescue type is already recorded, add the isoform and sum the probability
         int found = 0;
         for (int j = 0; j < isoforms_struct->n_rescue_types; j++) {
-            if (rescue_probs->rescue_types[j] != isoform->rescue_type) continue;
+            if ((rescue_probs->rescue_types[j] != isoform->rescue_type) || (rescue_probs->affected_bases[j] != isoform->affected_bases)) continue;
 
             rescue_probs->n_isoforms[j] += 1;
             rescue_probs->rescue_probabilities[j] += isoform->posterior_probability;
@@ -710,7 +710,6 @@ void calculate_rescue_probabilities(Isoforms *isoforms_struct) {
         rescue_probs->n_isoforms[isoforms_struct->n_rescue_types] = 1;
         rescue_probs->rescue_probabilities[isoforms_struct->n_rescue_types] = isoform->posterior_probability;
         rescue_probs->affected_bases[isoforms_struct->n_rescue_types] = isoform->affected_bases;
-        // TODO: Update rescue_probs->affected_bases[isoforms_struct->n_rescue_types] to correct value
         isoforms_struct->n_rescue_types++;
     }
 
@@ -1377,7 +1376,7 @@ void store_splice_sites(SpliceProbability prediction, int *predict_for_pair, int
                 Records *splice_records = malloc(sizeof(Records));
                 kv_init(*splice_records);
                 kv_push(Record *, *splice_records, prediction.record);
-                SpliceSite site = { splice_records, prediction.position, prediction.canonical_position, 1, 0, prediction.prior_probability, prediction.posterior_probability };
+                SpliceSite site = { splice_records, prediction.position, prediction.canonical_position, 1, 0, 0, prediction.prior_probability, prediction.posterior_probability };
                 splice_sites->cryptic_acceptors[splice_sites->n_cryptic_acceptors++] = site;
             }
         }
@@ -1880,12 +1879,12 @@ int main(int argc, char *argv[]) {
                             if (ei > 0) {
                                 Records *splice_records = malloc(sizeof(Records));
                                 kv_init(*splice_records);
-                                sites->canonical_acceptors[sites->n_canonical_acceptors++] = (SpliceSite) { splice_records, exon_hap_start, exon_hap_start, 0, kept_start, 0, 1.0, 1.0 };
+                                sites->canonical_acceptors[sites->n_canonical_acceptors++] = (SpliceSite) { splice_records, e->ref_bounds->start, e->ref_bounds->start, 0, kept_start, 0, 1.0, 1.0 };
                             }
                             if (ei < t->nexons-1) {
                                 Records *splice_records = malloc(sizeof(Records));
                                 kv_init(*splice_records);
-                                sites->canonical_donors[sites->n_canonical_donors++] = (SpliceSite) { splice_records, exon_hap_end, exon_hap_end, 0, kept_end, 0, 1.0, 1.0 };
+                                sites->canonical_donors[sites->n_canonical_donors++] = (SpliceSite) { splice_records, e->ref_bounds->end, e->ref_bounds->end, 0, kept_end, 0, 1.0, 1.0 };
                             }
 
                             *e->hap_bounds = (Range) {exon_hap_start, exon_hap_end};
@@ -1893,12 +1892,12 @@ int main(int argc, char *argv[]) {
                             if (ei < t->nexons-1) {
                                 Records *splice_records = malloc(sizeof(Records));
                                 kv_init(*splice_records);
-                                sites->canonical_acceptors[sites->n_canonical_acceptors++] = (SpliceSite) { splice_records, exon_hap_end, exon_hap_end, 0, kept_end, 0, 1.0, 1.0 };
+                                sites->canonical_acceptors[sites->n_canonical_acceptors++] = (SpliceSite) { splice_records, e->ref_bounds->end, e->ref_bounds->end, 0, kept_end, 0, 1.0, 1.0 };
                             }
                             if (ei > 0) {
                                 Records *splice_records = malloc(sizeof(Records));
                                 kv_init(*splice_records);
-                                sites->canonical_donors[sites->n_canonical_donors++] = (SpliceSite) { splice_records, exon_hap_start, exon_hap_start, 0, kept_start, 0, 1.0, 1.0 };
+                                sites->canonical_donors[sites->n_canonical_donors++] = (SpliceSite) { splice_records, e->ref_bounds->start, e->ref_bounds->start, 0, kept_start, 0, 1.0, 1.0 };
                             }
 
                             *e->hap_bounds = (Range) {exon_hap_end, exon_hap_start};
@@ -2359,14 +2358,14 @@ int main(int argc, char *argv[]) {
                                         PairPrediction *ref_alt_acceptor_map = NULL;
                                         size_t ref_alt_acceptor_map_size = 0;
                                         get_prediction_pairs_for_site(ACCEPTOR_POS, competitor_predictions_ref, 101, competitor_predictions_alt, 101-pred_offset, &hap_in, pred_range, &ref_alt_acceptor_map_size, &ref_alt_acceptor_map);
-                                        get_splice_probabilities_from_map(r, DONOR, p, current_gene, pred_range, ref_alt_acceptor_map_size, ref_alt_acceptor_map, &competitor_probabilities);
+                                        get_splice_probabilities_from_map(r, ACCEPTOR, p, current_gene, pred_range, ref_alt_acceptor_map_size, ref_alt_acceptor_map, &competitor_probabilities);
 
 
                                         // Get donor pairs
                                         PairPrediction *ref_alt_donor_map = NULL;
                                         size_t ref_alt_donor_map_size = 0;
                                         get_prediction_pairs_for_site(DONOR_POS, competitor_predictions_ref, 101, competitor_predictions_alt, 101-pred_offset, &hap_in, pred_range, &ref_alt_donor_map_size, &ref_alt_donor_map);
-                                        get_splice_probabilities_from_map(r, ACCEPTOR, p, current_gene, pred_range, ref_alt_donor_map_size, ref_alt_donor_map, &competitor_probabilities);
+                                        get_splice_probabilities_from_map(r, DONOR, p, current_gene, pred_range, ref_alt_donor_map_size, ref_alt_donor_map, &competitor_probabilities);
 
                                         for (int ci = 0; ci < competitor_probabilities.n; ci++) {
                                             SpliceProbability competitor_prediction = competitor_probabilities.a[ci];
@@ -3018,8 +3017,8 @@ int main(int argc, char *argv[]) {
                             int coding = !get_range_in_isoform(hap_r->v, ncrs, &hap_in, t->strand, gene->coords, &isoform_position, allele_lengths);
 
                             int offset = coding ? (allele_lengths[0] - allele_lengths[1]) : 0; // Ref_len - alt_len
-                            if (offset < 0 && t->strand == STRAND_REV) { // Get position of the other end of the inserted sequence in the case of a reverse strand transcript
-                                isoform_position -= offset;
+                            if (t->strand == STRAND_REV) { // Get position of the other end of the inserted sequence in the case of a reverse strand transcript
+                                isoform_position += abs(offset) + 1;
                             }
 
                             IsoformVariant isoshift = {coding, INDEL, isoform_position, offset, hap_r};
@@ -3356,7 +3355,7 @@ int main(int argc, char *argv[]) {
                                             inserted_bases += shift.shift < 0 ? abs(shift.shift) : 0;
                                             deleted_bases += shift.shift > 0 ? abs(shift.shift) : 0;
                                             induced_frameshift_rescue = shift.shift_type == SPLICE;
-                                            starts_with_forward_indel = (t->strand == STRAND_FWD && shift.shift_type == INDEL);
+                                            starts_with_forward_indel = shift.shift_type == INDEL;
                                             continue;
                                         }
 
@@ -3374,7 +3373,7 @@ int main(int argc, char *argv[]) {
                                             rescued = 1;
                                             rescue_type = (rescue_type == NO_RESCUE) ? FRAME_RESTORING_INDEL : rescue_type; // Only set to rescue type
                                             int32_t shift_end = shift.seq_pos;
-                                            affected_bases = abs(shift_end - shift_start) + inserted_bases;
+                                            affected_bases = abs(shift_end - shift_start) + inserted_bases - deleted_bases + (shift.shift > 0 ? abs(shift.shift) : 0);
 
                                             if (induced_frameshift_rescue) r->flags[ti * NUM_PHASES + p] |= RESCUED_BY_SPLICE_FRAMESHIFT;
 
@@ -3383,10 +3382,10 @@ int main(int argc, char *argv[]) {
                                             should_check_induced = 1;
                                             if (t->strand == STRAND_FWD) {
                                                 possible_induced_sequence.start = (int) ((shift_start - shifted_isoform.start + 1) / 3) * 3;
-                                                possible_induced_sequence.end = (shift_start - shifted_isoform.start + 1) + affected_bases - deleted_bases;
+                                                possible_induced_sequence.end = (shift_start - shifted_isoform.start + 1) + affected_bases ;
                                             } else {
                                                 possible_induced_sequence.start = (int) ((shifted_isoform.end - shift_start - 1) / 3) * 3;
-                                                possible_induced_sequence.end = (shifted_isoform.end - shift_start - 1) + affected_bases - deleted_bases;
+                                                possible_induced_sequence.end = (shifted_isoform.end - shift_start - 1) + affected_bases;
                                             }
 
                                         }
