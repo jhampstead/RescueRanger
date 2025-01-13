@@ -2420,6 +2420,9 @@ int main(int argc, char *argv[]) {
             for (int i = 0; i < batch->n; i++) {
                 Record *r = kv_A(*batch, i);
 
+                if (strlen(r->v->d.allele[1]) > CAI_DISTANCE || r->v->rlen > CAI_DISTANCE) continue;
+
+
                 for (int ti = 0; ti < r->tscripts->n; ti++) {
                     Transcript *t = kv_A(*r->tscripts, ti);
                     Gene *gene = kv_A(*r->transcript_genes, ti);
@@ -3061,7 +3064,7 @@ int main(int argc, char *argv[]) {
                                 }
 
                                 {
-                                    int64_t position = ncr.canonical_coords.end-1;
+                                    int64_t position = ncr.canonical_coords.end;
                                     int offset = range_len(ncr.canonical_coords);
 
                                     int coding = !get_position_in_isoform(position, ncrs, &hap_in, t->strand, gene->coords, &isoform_position);
@@ -3096,7 +3099,7 @@ int main(int argc, char *argv[]) {
                                 }
                                 continue;
                             } else if (ncr.acceptor != NULL && ncr.acceptor->posterior_probability == 0) {
-                                int64_t position = ncr.canonical_coords.end-1;
+                                int64_t position = ncr.canonical_coords.end;
                                 int offset = range_len(ncr.canonical_coords);
 
                                 int coding = !get_position_in_isoform(position, ncrs, &hap_in, t->strand, gene->coords, &isoform_position);
@@ -3136,7 +3139,7 @@ int main(int argc, char *argv[]) {
 
                             int acceptor_offset = strand_correction * (ncr.coords.end - ncr.canonical_coords.end);
                             if (ncr.acceptor != NULL) {
-                                int64_t position = ncr.coords.end-1;
+                                int64_t position = ncr.coords.end;
                                 int64_t isoform_position;
 
                                 int coding = !get_position_in_isoform(position, ncrs, &hap_in, t->strand, gene->coords, &isoform_position);
@@ -3550,12 +3553,15 @@ int main(int argc, char *argv[]) {
             Record *r = kv_A(*block.records, i);
 
             int triggered = 0;
+            int has_ptv_effect = 0;
             for (int j = 0; j < r->vep->n; j++) {
                 TscriptCsqs *csq = kv_A(*r->vep, j);
-                if (csq->triggers[SPLICE_TRIGGER] || csq->triggers[FRAMESHIFT_TRIGGER] || csq->triggers[STOP_TRIGGER] == STOP_RESCUE_VALUE) triggered = 1;
+                if (csq->triggers[SPLICE_TRIGGER] == CANONICAL_SPLICE_VALUE || csq->triggers[FRAMESHIFT_TRIGGER] || csq->triggers[STOP_TRIGGER] == STOP_RESCUE_VALUE) triggered = 1;
+                if (r->isoforms->valid && r->isoforms->ptv_probability > 0) has_ptv_effect = 1;
             }
 
-            if (!triggered) continue;
+            if (!triggered && !has_ptv_effect) continue;
+            if (strlen(r->v->d.allele[1]) > CAI_DISTANCE || r->v->rlen > CAI_DISTANCE) continue;
 
             kstring_t rescue_tag = {0};
             kstring_t rescue_prob_tag = {0};
@@ -3629,6 +3635,7 @@ int main(int argc, char *argv[]) {
             }
 
             if (!triggered) continue;
+            if (strlen(r->v->d.allele[1]) > CAI_DISTANCE || r->v->rlen > CAI_DISTANCE) continue;
 
             int has_ptv = 0;
             kstring_t ptv_tag = {0};
@@ -3683,7 +3690,7 @@ int main(int argc, char *argv[]) {
 
             }
 
-            if (!has_ptv) continue;
+            // if (!has_ptv) continue;
 
             bcf_update_info_string(hdr, r->v, PTV_TAG, ptv_tag.s);
             bcf_update_info_string(hdr, r->v, PTV_PROB_TAG, ptv_prob_tag.s);
@@ -3699,10 +3706,10 @@ int main(int argc, char *argv[]) {
             for (int j = 0; j < r->vep->n; j++) {
                 TscriptCsqs *csq = kv_A(*r->vep, j);
                 if (csq->triggers[SPLICE_TRIGGER] || csq->triggers[FRAMESHIFT_TRIGGER] || csq->triggers[STOP_TRIGGER]) triggered = 1;
-
             }
 
             if (!triggered) continue;
+            if (strlen(r->v->d.allele[1]) > CAI_DISTANCE || r->v->rlen > CAI_DISTANCE) continue;
 
             kstring_t tags = {0};
 
