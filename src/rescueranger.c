@@ -507,19 +507,21 @@ static int get_range_in_isoform(const bcf1_t *v, const NonCodingRegions *ncrs, c
     int64_t isoform_position = ref.start; //  - haplotype_offset(rs, bounds);
     int skipped_bases = 0;
     if (strand == STRAND_FWD) {
-        // isoform_position -= haplotype_offset(rs, (Range) { bounds.start, ref.start-1 });
+        isoform_position -= haplotype_offset(rs, (Range) { bounds.start, ref.start });
         for (int i = 0; i < ncrs->n; i++) {
             NonCodingRegion ncr = kv_A(*ncrs, i);
+            const int variant_start = isoform_position;
+            const int variant_end = variant_start + range_len(ref);
 
-            if (ref.end <= ncr.coords.start) break; // Range is open-ended, so end <= start is the way to go
+            if (variant_end <= ncr.coords.start) break; // Range is open-ended, so end <= start is the way to go
 
-            if (ref.start >= ncr.coords.end) {
+            if (variant_start >= ncr.coords.end) {
                 if (ncr.is_utr) continue;
                 skipped_bases += range_len(ncr.coords) - 1;
                 continue;
             }
 
-            if (ref.end > ncr.coords.end) { // If variant overlaps intron end (should only happen in case of deletions)
+            if (variant_end > ncr.coords.end) { // If variant overlaps intron end (should only happen in case of deletions)
                 Range noncoding_variant;
                 intersect_ranges(ref, ncr.coords, &noncoding_variant);
                 isoform_position -= (skipped_bases + range_len(ncr.coords) - 1); // Should also skip noncoding region!
@@ -529,7 +531,7 @@ static int get_range_in_isoform(const bcf1_t *v, const NonCodingRegions *ncrs, c
                 return 0;
             }
 
-            if ((ref.end > ncr.coords.start) & (ref.start < ncr.coords.start)) { // If variant overlaps intron start (should only happen in case of deletions)
+            if ((variant_end > ncr.coords.start) & (variant_start < ncr.coords.start)) { // If variant overlaps intron start (should only happen in case of deletions)
                 Range noncoding_variant;
                 intersect_ranges(ref, ncr.coords, &noncoding_variant);
                 isoform_position -= skipped_bases;
@@ -545,19 +547,22 @@ static int get_range_in_isoform(const bcf1_t *v, const NonCodingRegions *ncrs, c
         }
         isoform_position -= skipped_bases;
     } else if (strand == STRAND_REV) {
-        // isoform_position -= haplotype_offset(rs, (Range) { bounds.start, ref.start-1 });
+        isoform_position -= haplotype_offset(rs, (Range) { bounds.start, ref.start });
         for (int i = 0; i < ncrs->n; i++) {
             NonCodingRegion ncr = kv_A(*ncrs, i);
+            const int variant_start = isoform_position;
+            const int variant_end = variant_start + range_len(ref);
 
-            if (ref.start > ncr.coords.start) break; // Approaches from other end (3' <-- 5')
 
-            if (ref.end < ncr.coords.end) {
+            if (variant_start > ncr.coords.start) break; // Approaches from other end (3' <-- 5')
+
+            if (variant_end < ncr.coords.end) {
                 if (ncr.is_utr) continue;
                 skipped_bases += range_len(ncr.coords) - 1;
                 continue;
             }
 
-            if (ref.start <= ncr.coords.end) { // If variant overlaps intron boundary (should only happen in case of deletions)
+            if (variant_start <= ncr.coords.end) { // If variant overlaps intron boundary (should only happen in case of deletions)
                 Range noncoding_variant;
                 intersect_ranges(ref, ncr.coords, &noncoding_variant);
                 isoform_position += (skipped_bases + range_len(ncr.coords) - 1);
@@ -567,7 +572,7 @@ static int get_range_in_isoform(const bcf1_t *v, const NonCodingRegions *ncrs, c
                 return 0;
             }
 
-            if ((ref.start < ncr.coords.start) & (ref.end > ncr.coords.start)) {
+            if ((variant_start < ncr.coords.start) & (variant_end > ncr.coords.start)) {
                 Range coding_variant;
                 intersect_ranges(ref, ncr.coords, &coding_variant);
                 isoform_position += skipped_bases;
@@ -1908,10 +1913,10 @@ int main(int argc, char *argv[]) {
 
                         // Convert CDS boundaries to haplotype positions
                         if (e->cds == NULL) continue;
-                        uint32_t cds_hap_start = e->cds->start - haplotype_offset(&hap_in, (Range) { gene->coords.start, e->cds->start });
-                        uint32_t cds_hap_end = e->cds->end - haplotype_offset(&hap_in, (Range) { gene->coords.start, e->cds->end });
-                        if (t->strand == STRAND_FWD) *e->cds = (Range) {cds_hap_start, cds_hap_end};
-                        if (t->strand == STRAND_REV) *e->cds = (Range) {cds_hap_end, cds_hap_start};
+                        // uint32_t cds_hap_start = e->cds->start - haplotype_offset(&hap_in, (Range) { gene->coords.start, e->cds->start });
+                        // uint32_t cds_hap_end = e->cds->end - haplotype_offset(&hap_in, (Range) { gene->coords.start, e->cds->end });
+                        if (t->strand == STRAND_FWD) *e->cds = (Range) {e->cds->start, e->cds->end};
+                        if (t->strand == STRAND_REV) *e->cds = (Range) {e->cds->end, e->cds->start};
                     }
 
                     kv_destroy(hap_in);
@@ -2479,7 +2484,7 @@ int main(int argc, char *argv[]) {
                         break;
                     }
 
-                    int gene_end = gene->coords.end - haplotype_offset(&hap_in, gene->coords);
+                    int gene_end = gene->coords.end;// - haplotype_offset(&hap_in, gene->coords);
 
                     if (is_coding && t->strand == STRAND_FWD) {
                         for (int ei = first_cds; ei <= last_cds; ei++) {
@@ -2738,7 +2743,6 @@ int main(int argc, char *argv[]) {
                                 for (int i = 0; i < alternative_acceptor_sites.n_canonical_acceptors; i++) {
                                     SpliceSite *acceptor = alternative_acceptor_sites.canonical_acceptors + i;
                                     if (acceptor->posterior_probability == 0 || (labs((int64_t) acceptor->position - (int64_t) canonical_acceptor->position)) > 500) continue;
-
                                     kv_push(SpliceSite, acceptors, *acceptor);
                                 }
                                 for (int i = 0; i < alternative_acceptor_sites.n_cryptic_acceptors; i++) {
@@ -2874,16 +2878,32 @@ int main(int argc, char *argv[]) {
                         log_debug("Processing isoform: %i", i);
                         log_debug("Gene length is: %i", hap_seq.l);
 
+                        NonCodingRegions hap_ncrs;
+                        kv_init(hap_ncrs);
+
+                        for (int i = 0; i < ncrs->n; i++) {
+                            NonCodingRegion ncr = kv_A(*ncrs, i);
+
+                            ncr.coords.start -= haplotype_offset(&hap_in, (Range) { gene->coords.start, ncr.coords.start });
+                            ncr.coords.end -= haplotype_offset(&hap_in, (Range) { gene->coords.start, ncr.coords.end });
+
+                            ncr.canonical_coords.start -= haplotype_offset(&hap_in, (Range) { gene->coords.start, ncr.canonical_coords.start });
+                            ncr.canonical_coords.end -= haplotype_offset(&hap_in, (Range) { gene->coords.start, ncr.canonical_coords.end });
+
+                            kv_push(NonCodingRegion, hap_ncrs, ncr);
+                        }
+
                         Range *isoform_bounds = NULL;
 
                         int gene_start = gene->coords.start;
                         if (t->strand == STRAND_FWD) {
                             int length = 0;
                             seq_idx = 1;
-                            for (int j = 0; j < ncrs->n; j++) {
-                                NonCodingRegion ncr = kv_A(*ncrs, j);
+                            for (int j = 0; j < hap_ncrs.n; j++) {
+                                NonCodingRegion ncr = kv_A(hap_ncrs, j);
                                 int intron_start = ncr.coords.start - gene_start + 1;
                                 int intron_end = ncr.coords.end - gene_start;
+
                                 if (intron_start < seq_idx) {
                                     continue;
                                 }
@@ -2908,10 +2928,11 @@ int main(int argc, char *argv[]) {
                             if (hap_seq.l != seq_idx) isoform_bounds->end = hap_seq.l;
                         } else if (t->strand == STRAND_REV) {
                             int length = 0;
-                            for (int j = ncrs->n-1; j >= 0; j--) {
-                                NonCodingRegion ncr = kv_A(*ncrs, j);
+                            for (int j = hap_ncrs.n-1; j >= 0; j--) {
+                                NonCodingRegion ncr = kv_A(hap_ncrs, j);
                                 int intron_start = ncr.coords.end - gene_start;
                                 int intron_end = ncr.coords.start - gene_start;
+
                                 if (intron_start < seq_idx) {
                                     continue;
                                 }
@@ -2967,44 +2988,20 @@ int main(int argc, char *argv[]) {
                         }
 
                         if (t->strand == STRAND_FWD) {
-                            if (ncrs->a[0].is_utr) {
-                                shifted_isoform.start = ncrs->a[0].coords.end + 1;
+                            if (hap_ncrs.a[0].is_utr) {
+                                shifted_isoform.start = hap_ncrs.a[0].coords.end + 1;
                             }
-                            if (ncrs->a[ncrs->n-1].is_utr) {
-                                shifted_isoform.end = ncrs->a[ncrs->n-1].coords.start - 1;
+                            if (hap_ncrs.a[hap_ncrs.n-1].is_utr) {
+                                shifted_isoform.end = hap_ncrs.a[hap_ncrs.n-1].coords.start - 1;
                             }
                         } else if (t->strand == STRAND_REV) {
-                            if (ncrs->a[0].is_utr) {
-                                shifted_isoform.end = ncrs->a[0].coords.end + 1;
+                            if (hap_ncrs.a[0].is_utr) {
+                                shifted_isoform.end = hap_ncrs.a[0].coords.end + 1;
                             }
-                            if (ncrs->a[ncrs->n-1].is_utr) {
-                                shifted_isoform.start = ncrs->a[ncrs->n-1].coords.start - 1;
+                            if (hap_ncrs.a[hap_ncrs.n-1].is_utr) {
+                                shifted_isoform.start = hap_ncrs.a[hap_ncrs.n-1].coords.start - 1;
                             }
                         }
-
-                        // Records isoform_indels; kv_init(isoform_indels);
-                        // for (int i = 0; i < hap_in.n; i++) {
-                        //     Record *hap_r = kv_A(hap_in, i);
-                        //     if (allele_offset(hap_r->v, 0, 1, shifted_isoform) == 0) continue;
-                        //
-                        //     int is_noncoding = 0;
-                        //     Range variant = variant_to_range(hap_r->v, 0);
-                        //     int hap_offset = haplotype_offset(&hap_in, (Range) {gene->coords.start, hap_r->v->pos - 1});
-                        //     shift_range(&variant, -hap_offset);
-                        //     if (!ranges_overlap(shifted_isoform, variant)) continue;
-                        //
-                        //     for (int j = 0; j < ncrs->n; j++) {
-                        //         NonCodingRegion ncr = kv_A(*ncrs, j);
-                        //         if (!ranges_overlap(ncr.coords, (Range) {variant.start - hap_offset, variant.end - hap_offset })) continue;
-                        //
-                        //         is_noncoding = 1;
-                        //         break;
-                        //     }
-                        //
-                        //     if (is_noncoding) continue;
-                        //
-                        //     kv_push(Record *, isoform_indels, hap_r);
-                        // }
 
                         // Get isoform position for each record
                         kvec_t(IsoformVariant) variant_shifts; kv_init(variant_shifts);
@@ -3014,11 +3011,11 @@ int main(int argc, char *argv[]) {
 
                             int64_t isoform_position;
                             int allele_lengths[2];
-                            int coding = !get_range_in_isoform(hap_r->v, ncrs, &hap_in, t->strand, gene->coords, &isoform_position, allele_lengths);
+                            const int coding = !get_range_in_isoform(hap_r->v, &hap_ncrs, &hap_in, t->strand, gene->coords, &isoform_position, allele_lengths);
 
-                            int offset = coding ? (allele_lengths[0] - allele_lengths[1]) : 0; // Ref_len - alt_len
-                            if (t->strand == STRAND_REV) { // Get position of the other end of the inserted sequence in the case of a reverse strand transcript
-                                isoform_position += abs(offset) + 1;
+                            const int offset = coding ? (allele_lengths[0] - allele_lengths[1]) : 0; // Ref_len - alt_len
+                            if (t->strand == STRAND_REV && offset != 0) { // Get position of the other end of the inserted sequence in the case of a reverse strand transcript
+                                isoform_position += offset < 0 ? abs(offset) + 1 : 1;
                             }
 
                             IsoformVariant isoshift = {coding, INDEL, isoform_position, offset, hap_r};
@@ -3027,12 +3024,12 @@ int main(int argc, char *argv[]) {
 
                         // Get isoform position for splice site changes
                         kvec_t(IsoformVariant) splice_shifts; kv_init(splice_shifts);
-                        int64_t **splice_positions = malloc(2 * ncrs->n * sizeof(int64_t *));
-                        int64_t splice_offsets[2*ncrs->n];
+                        int64_t **splice_positions = malloc(2 * hap_ncrs.n * sizeof(int64_t *));
+                        int64_t splice_offsets[2*hap_ncrs.n];
                         int num_splice_sites = 0;
                         int strand_correction = t->strand == STRAND_FWD ? 1 : -1;
-                        for (int i = 0; i < ncrs->n; i++) {
-                            NonCodingRegion ncr = kv_A(*ncrs, i);
+                        for (int i = 0; i < hap_ncrs.n; i++) {
+                            NonCodingRegion ncr = kv_A(hap_ncrs, i);
                             int64_t isoform_position;
 
                             for (int j = 0; j < ncr.records.n; j++) {
@@ -3048,7 +3045,7 @@ int main(int argc, char *argv[]) {
                                     int64_t position = ncr.canonical_coords.start;
                                     int offset = range_len(ncr.canonical_coords);
 
-                                    int coding = !get_position_in_isoform(position, ncrs, &hap_in, t->strand, gene->coords, &isoform_position);
+                                    int coding = !get_position_in_isoform(position, &hap_ncrs, &hap_in, t->strand, gene->coords, &isoform_position);
                                     Records *records = (Records *) ncr.donor->records_ptr;
                                     for (int j = 0; j < records->n; j++) {
                                         Record *rr = kv_A(*records, j);
@@ -3056,9 +3053,6 @@ int main(int argc, char *argv[]) {
                                         IsoformVariant variant = {coding, SPLICE, isoform_position, offset, rr };
                                         kv_push(IsoformVariant, splice_shifts, variant);
                                         num_splice_sites++;
-
-                                        // if (rr != r) continue;
-                                        // if (!ncr.donor->gff_canonical && offset != 0) set_record_flag(rr, ti, p, CRYPTIC_DONOR);
                                     }
                                 }
 
@@ -3066,7 +3060,7 @@ int main(int argc, char *argv[]) {
                                     int64_t position = ncr.canonical_coords.end;
                                     int offset = range_len(ncr.canonical_coords);
 
-                                    int coding = !get_position_in_isoform(position, ncrs, &hap_in, t->strand, gene->coords, &isoform_position);
+                                    int coding = !get_position_in_isoform(position, &hap_ncrs, &hap_in, t->strand, gene->coords, &isoform_position);
                                     Records *records = (Records *) ncr.acceptor->records_ptr;
                                     for (int j = 0; j < records->n; j++) {
                                         Record *rr = kv_A(*records, j);
@@ -3074,9 +3068,6 @@ int main(int argc, char *argv[]) {
                                         IsoformVariant variant = {coding, SPLICE, isoform_position, offset, rr };
                                         kv_push(IsoformVariant, splice_shifts, variant);
                                         num_splice_sites++;
-
-                                        // if (r != rr) continue;
-                                        // if (!ncr.acceptor->gff_canonical && offset != 0) set_record_flag(rr, ti, p, CRYPTIC_ACCEPTOR);
                                     }
                                 }
                                 continue;
@@ -3084,7 +3075,7 @@ int main(int argc, char *argv[]) {
                                 int64_t position = ncr.canonical_coords.start;
                                 int offset = range_len(ncr.canonical_coords);
 
-                                int coding = !get_position_in_isoform(position, ncrs, &hap_in, t->strand, gene->coords, &isoform_position);
+                                int coding = !get_position_in_isoform(position, &hap_ncrs, &hap_in, t->strand, gene->coords, &isoform_position);
                                 Records *records = (Records *) ncr.donor->records_ptr;
                                 for (int j = 0; j < records->n; j++) {
                                     Record *rr = kv_A(*records, j);
@@ -3092,16 +3083,13 @@ int main(int argc, char *argv[]) {
                                     IsoformVariant variant = {coding, SPLICE, isoform_position, offset, rr };
                                     kv_push(IsoformVariant, splice_shifts, variant);
                                     num_splice_sites++;
-
-                                    // if (rr != r) continue;
-                                    // if (!ncr.donor->gff_canonical && offset != 0) set_record_flag(rr, ti, p, CRYPTIC_DONOR);
                                 }
                                 continue;
                             } else if (ncr.acceptor != NULL && ncr.acceptor->posterior_probability == 0) {
                                 int64_t position = ncr.canonical_coords.end;
                                 int offset = range_len(ncr.canonical_coords);
 
-                                int coding = !get_position_in_isoform(position, ncrs, &hap_in, t->strand, gene->coords, &isoform_position);
+                                int coding = !get_position_in_isoform(position, &hap_ncrs, &hap_in, t->strand, gene->coords, &isoform_position);
                                 Records *records = (Records *) ncr.acceptor->records_ptr;
                                 for (int j = 0; j < records->n; j++) {
                                     Record *rr = kv_A(*records, j);
@@ -3109,9 +3097,6 @@ int main(int argc, char *argv[]) {
                                     IsoformVariant variant = {coding, SPLICE, isoform_position, offset, rr };
                                     kv_push(IsoformVariant, splice_shifts, variant);
                                     num_splice_sites++;
-
-                                    // if (rr != r) continue;
-                                    // if (!ncr.acceptor->gff_canonical && offset != 0) set_record_flag(rr, ti, p, CRYPTIC_ACCEPTOR);
                                 }
                                 continue;
                             }
@@ -3121,7 +3106,7 @@ int main(int argc, char *argv[]) {
                                 int64_t position = ncr.coords.start;
                                 int64_t isoform_position;
 
-                                int coding = !get_position_in_isoform(position, ncrs, &hap_in, t->strand, gene->coords, &isoform_position);
+                                int coding = !get_position_in_isoform(position, &hap_ncrs, &hap_in, t->strand, gene->coords, &isoform_position);
                                 Records *records = (Records *) ncr.donor->records_ptr;
                                 for (int j = 0; j < records->n; j++) {
                                     Record *rr = kv_A(*records, j);
@@ -3129,9 +3114,6 @@ int main(int argc, char *argv[]) {
                                     IsoformVariant variant = {coding, SPLICE, isoform_position, donor_offset, rr };
                                     kv_push(IsoformVariant, splice_shifts, variant);
                                     num_splice_sites++;
-
-                                    // if (rr != r) continue;
-                                    // if (!ncr.donor->gff_canonical && donor_offset != 0) set_record_flag(rr, ti, p, CRYPTIC_DONOR);
                                 }
                             }
 
@@ -3141,7 +3123,7 @@ int main(int argc, char *argv[]) {
                                 int64_t position = ncr.coords.end;
                                 int64_t isoform_position;
 
-                                int coding = !get_position_in_isoform(position, ncrs, &hap_in, t->strand, gene->coords, &isoform_position);
+                                int coding = !get_position_in_isoform(position, &hap_ncrs, &hap_in, t->strand, gene->coords, &isoform_position);
                                 Records *records = (Records *) ncr.acceptor->records_ptr;
                                 for (int j = 0; j < records->n; j++) {
                                     Record *rr = kv_A(*records, j);
@@ -3149,9 +3131,6 @@ int main(int argc, char *argv[]) {
                                     IsoformVariant variant = {coding, SPLICE, isoform_position, acceptor_offset, rr };
                                     kv_push(IsoformVariant, splice_shifts, variant);
                                     num_splice_sites++;
-
-                                    // if (rr != r) continue;
-                                    // if (!ncr.acceptor->gff_canonical && acceptor_offset != 0) set_record_flag(rr, ti, p, CRYPTIC_ACCEPTOR);
                                 }
                             }
                         }
@@ -3164,22 +3143,6 @@ int main(int argc, char *argv[]) {
                         for (int i = 0; i < splice_shifts.n; i++) kv_push(IsoformVariant, shifts, kv_A(splice_shifts, i));
                         if (shifts.n > 0 && t->strand == STRAND_FWD) ks_introsort_frameshift_sort(shifts.n, shifts.a);
                         if (shifts.n > 0 && t->strand == STRAND_REV) ks_introsort_frameshift_reverse_sort(shifts.n, shifts.a);
-
-                        // for (int ri = 0; ri < shifts.n; ri++) {
-                        //     IsoformVariant iso_shift = kv_A(shifts, ri);
-                        //     if (iso_shift.r == r) break;
-                        //
-                        //     for (int ti2 = 0; ti2 < iso_shift.r->tscripts->n; ti2++) {
-                        //         Transcript *tscript = kv_A(*iso_shift.r->tscripts, ti2);
-                        //         if (tscript == NULL || tscript->id != t->id) continue;
-                        //
-                        //         if ((tscript->triggers[SPLICE_TRIGGER] == AF_SPLICE_VALUE) | (tscript->triggers[STOP_TRIGGER] == STOP_GAIN_VALUE)) continue;
-                        //
-                        //         if (iso_shift.r->isoforms[ti2].valid &
-                        //             ((iso_shift.r->isoforms[ti2].rescue == 0) | (iso_shift.r->isoforms[ti2].ptv == 1))) set_record_flag(r, ti, p, UPSTREAM_PTV);
-                        //     }
-                        //
-                        // }
 
                         for (int i = 0; i < shifts.n; i++) {
                             IsoformVariant iso_shift = kv_A(shifts, i);
@@ -3373,7 +3336,7 @@ int main(int argc, char *argv[]) {
                                             rescued = 1;
                                             rescue_type = (rescue_type == NO_RESCUE) ? FRAME_RESTORING_INDEL : rescue_type; // Only set to rescue type
                                             int32_t shift_end = shift.seq_pos;
-                                            affected_bases = abs(shift_end - shift_start) + inserted_bases - deleted_bases + (shift.shift > 0 ? abs(shift.shift) : 0);
+                                            affected_bases = abs(shift_end - shift_start) + (shift.shift < 0 ? abs(shift.shift) : 0);
 
                                             if (induced_frameshift_rescue) r->flags[ti * NUM_PHASES + p] |= RESCUED_BY_SPLICE_FRAMESHIFT;
 
@@ -3382,7 +3345,7 @@ int main(int argc, char *argv[]) {
                                             should_check_induced = 1;
                                             if (t->strand == STRAND_FWD) {
                                                 possible_induced_sequence.start = (int) ((shift_start - shifted_isoform.start + 1) / 3) * 3;
-                                                possible_induced_sequence.end = (shift_start - shifted_isoform.start + 1) + affected_bases ;
+                                                possible_induced_sequence.end = (shift_start - shifted_isoform.start + 1) + affected_bases;
                                             } else {
                                                 possible_induced_sequence.start = (int) ((shifted_isoform.end - shift_start - 1) / 3) * 3;
                                                 possible_induced_sequence.end = (shifted_isoform.end - shift_start - 1) + affected_bases;
@@ -3431,8 +3394,8 @@ int main(int argc, char *argv[]) {
                         }
 
                         float isoform_prior = 1.0;
-                        for (int i = 0; i < ncrs->n; i++) {
-                            NonCodingRegion ncr = kv_A(*ncrs, i);
+                        for (int i = 0; i < hap_ncrs.n; i++) {
+                            NonCodingRegion ncr = kv_A(hap_ncrs, i);
                             if (ncr.coords.start == ncr.coords.end) continue; // Skips should not be included
 
                             if (ncr.donor != NULL) isoform_prior *= ncr.donor->prior_probability;
