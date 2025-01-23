@@ -1010,10 +1010,15 @@ int trigger_cryptic_splice(bcf1_t *rec, bcf_hdr_t *hdr) {
 float * predict_on_sequence(Model *models, const char *seq, const int width, uint32_t position, Range prediction_boundaries, int strand, Records *rs) {
     int64_t gene_start = prediction_boundaries.start;
     int64_t gene_end = prediction_boundaries.end;
-    if (rs != NULL) gene_end -= haplotype_offset(rs, prediction_boundaries);
     int64_t vposition = position;
-    if (rs != NULL) vposition -= haplotype_offset(rs, (Range) { prediction_boundaries.start, position });
 
+    if (rs != NULL) {
+        int start_pred_offset = haplotype_offset(rs, (Range) { vposition - CAI_DISTANCE, vposition });
+        gene_start -= start_pred_offset;
+        gene_end -= (haplotype_offset(rs, prediction_boundaries) - start_pred_offset);
+        vposition -= haplotype_offset(rs, (Range) { prediction_boundaries.start, position });
+
+    }
     int32_t start_offset = VARIANT_POS + (gene_start - vposition);
     int32_t end_offset = VARIANT_POS - (gene_end - vposition);
 
@@ -2014,8 +2019,9 @@ int main(int argc, char *argv[]) {
                     int64_t gene_end = gene->coords.end - haplotype_offset(&hap_ex, gene->coords);
                     int64_t vposition = r->v->pos - haplotype_offset(&hap_ex, (Range) {gene->coords.start, r->v->pos});
 
-                    int32_t hap_ref_start = VARIANT_POS + (gene_start - vposition);
-                    int32_t hap_ref_end = VARIANT_POS - (gene_end - vposition) - pred_offset;
+                    int start_offset = haplotype_offset(&hap_ex, (Range) { r->v->pos - CAI_DISTANCE, r->v->pos});
+                    int32_t hap_ref_start = VARIANT_POS + (gene_start - vposition) - start_offset;
+                    int32_t hap_ref_end = VARIANT_POS - (gene_end - vposition) - (pred_offset - start_offset);
 
                     char *hap_ref_seq = hap_ref.s - hap_ref_start;
                     if (hap_ref_start < 0) hap_ref_start = 0;
@@ -2034,14 +2040,15 @@ int main(int argc, char *argv[]) {
                     // HAP ALT
                     pred_offset = prediction_offset(r->v, &hap_in);
                     gene_end -= allele_offset(r->v, 0, 1, gene->coords);
-                    int hap_alt_pred_offset = prediction_offset(r->v, &hap_in);
 
-                    int32_t hap_alt_start = VARIANT_POS + (gene_start - vposition);
-                    int32_t hap_alt_end = VARIANT_POS - (gene_end - vposition) - pred_offset;
+                    start_offset = haplotype_offset(&hap_in, (Range) { r->v->pos - CAI_DISTANCE, r->v->pos});
+                    int32_t hap_alt_start = VARIANT_POS + (gene_start - vposition) - start_offset;
+                    int32_t hap_alt_end = VARIANT_POS - (gene_end - vposition) - (pred_offset - start_offset);
 
                     char *hap_alt_seq = hap_alt.s - hap_alt_start;
                     if (hap_alt_start < 0) hap_alt_start = 0;
                     if (hap_alt_end < 0) hap_alt_end = 0;
+
 
                     // log_info("%s:%li (hap_alt)", bcf_hdr_id2name(hdr, r->v->rid), r->v->pos); 
                     Range hap_alt_boundary = {hap_alt_start, hap_alt_end};
