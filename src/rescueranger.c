@@ -2638,7 +2638,7 @@ int main(int argc, char *argv[]) {
                                     SpliceSite *acceptor = acceptors.a + j;
                                     NonCodingRegion ncr = {
                                         { donor->position, acceptor->position },
-                                        { donor->canonical_position, acceptor->canonical_position },
+                                        { canonical_donor->canonical_position, canonical_acceptor->canonical_position },
                                         donor,
                                         acceptor,
                                         0
@@ -3405,8 +3405,16 @@ int main(int argc, char *argv[]) {
                             NonCodingRegion ncr = kv_A(hap_ncrs, i);
                             if (ncr.coords.start == ncr.coords.end) continue; // Skips should not be included
 
-                            if (ncr.donor != NULL) isoform_prior *= ncr.donor->prior_probability;
-                            if (ncr.acceptor != NULL) isoform_prior *= ncr.acceptor->prior_probability;
+                            if (ncr.donor != NULL) {
+                                float prob = ncr.donor->prior_probability;
+                                if (ncr.donor->posterior_probability == 0) prob = 1 - prob;
+                                isoform_prior *= prob;
+                            }
+                            if (ncr.acceptor != NULL) {
+                                float prob = ncr.acceptor->prior_probability;
+                                if (ncr.acceptor->posterior_probability == 0) prob = 1 - prob;
+                                isoform_prior *= prob;
+                            }
                         }
 
                         Isoform *isoform = malloc(sizeof(Isoform));
