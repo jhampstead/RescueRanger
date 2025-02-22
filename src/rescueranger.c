@@ -2308,14 +2308,14 @@ int main(int argc, char *argv[]) {
                                         PairPrediction *ref_alt_acceptor_map = NULL;
                                         size_t ref_alt_acceptor_map_size = 0;
                                         get_prediction_pairs_for_site(ACCEPTOR_POS, competitor_predictions_ref, 101, competitor_predictions_alt, 101-pred_offset, &hap_in, pred_range, &ref_alt_acceptor_map_size, &ref_alt_acceptor_map);
-                                        get_splice_probabilities_from_map(r, DONOR, p, current_gene, pred_range, ref_alt_acceptor_map_size, ref_alt_acceptor_map, &competitor_probabilities);
+                                        get_splice_probabilities_from_map(r, ACCEPTOR, p, current_gene, pred_range, ref_alt_acceptor_map_size, ref_alt_acceptor_map, &competitor_probabilities);
 
 
                                         // Get donor pairs
                                         PairPrediction *ref_alt_donor_map = NULL;
                                         size_t ref_alt_donor_map_size = 0;
                                         get_prediction_pairs_for_site(DONOR_POS, competitor_predictions_ref, 101, competitor_predictions_alt, 101-pred_offset, &hap_in, pred_range, &ref_alt_donor_map_size, &ref_alt_donor_map);
-                                        get_splice_probabilities_from_map(r, ACCEPTOR, p, current_gene, pred_range, ref_alt_donor_map_size, ref_alt_donor_map, &competitor_probabilities);
+                                        get_splice_probabilities_from_map(r, DONOR, p, current_gene, pred_range, ref_alt_donor_map_size, ref_alt_donor_map, &competitor_probabilities);
 
                                         for (int csi = 0; csi < competitor_probabilities.n; csi++) {
                                             SpliceProbability competitor_prediction = competitor_probabilities.a[csi];
