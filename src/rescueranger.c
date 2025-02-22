@@ -1536,7 +1536,7 @@ int main(int argc, char *argv[]) {
     kvec_t(RecordBlock) batches; kv_init(batches);
 
     Records *batch = malloc(sizeof(Records));
-    kv_init(*batch);
+    // kv_init(*batch);
 
     IRegion batch_region = {-1, -1, -1};
 
@@ -1548,24 +1548,13 @@ int main(int argc, char *argv[]) {
 
         IRegion var_region = {0};
         int is_non_coding = find_gene_region_for_variant(v, hdr, gff, &var_region);
-        if (batch_region.rid == -1) batch_region = var_region;
-        int overlaps_batch = is_non_coding ? 0 : iregion_intersects(batch_region, var_region);
 
-        if (batch->n > 0 && !overlaps_batch) { // Variant is either non-coding or falls outside of batch
-            RecordBlock block = {kv_A(*batch, 0)->vep == NULL ? 0 : 1, batch};
-            kv_push(RecordBlock, batches, block);
-
-            batch_region = var_region;
-            batch = malloc(sizeof(Records));
-            kv_init(*batch);
-        }
+        batch = malloc(sizeof(Records));
+        kv_init(*batch);
 
         VepCsqs *vep_csqs = is_non_coding ? NULL : parse_vep_transcript_consequences(v, vep_fmt, hdr);
-        if (overlaps_batch && var_region.end > batch_region.end) batch_region.end = var_region.end;
         kv_push(Record *, *batch, init_record(v, vep_csqs));
-    }
 
-    if (batch->n > 0) {
         RecordBlock block = {kv_A(*batch, 0)->vep == NULL ? 0 : 1, batch};
         kv_push(RecordBlock, batches, block);
     }
