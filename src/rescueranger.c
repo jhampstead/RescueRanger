@@ -2547,19 +2547,19 @@ int main(int argc, char *argv[]) {
                             }
                             for (int i = 0; i < target_donor_sites.n_cryptic_donors; i++) {
                                 SpliceSite *donor = target_donor_sites.cryptic_donors + i;
-                                if (donor->posterior_probability == 0 || (labs((int64_t) donor->position - (int64_t) canonical_donor->position)) > 500) continue;
+                                if (donor->posterior_probability == 0) continue;
                                 kv_push(SpliceSite, donors, *donor);
                             }
                             if (lost_donor && ei-1 >= first_cds) {
                                 SpliceSites alternative_donor_sites = *t->exons[ei-1]->splice_sites;
                                 for (int i = 0; i < alternative_donor_sites.n_canonical_donors; i++) {
                                     SpliceSite *donor = alternative_donor_sites.canonical_donors + i;
-                                    if (donor->posterior_probability == 0 || (labs((int64_t) donor->position - (int64_t) canonical_donor->position)) > 500) continue;
+                                    if (donor->posterior_probability == 0) continue;
                                     kv_push(SpliceSite, donors, *donor);
                                 }
                                 for (int i = 0; i < alternative_donor_sites.n_cryptic_donors; i++) {
                                     SpliceSite *donor = alternative_donor_sites.cryptic_donors + i;
-                                    if ((labs((int64_t) donor->position - (int64_t) canonical_donor->position)) > 500) continue;
+                                    if (donor->posterior_probability == 0) continue;
                                     kv_push(SpliceSite, donors, *donor);
                                 }
                             }
@@ -2574,19 +2574,19 @@ int main(int argc, char *argv[]) {
                             }
                             for (int i = 0; i < target_acceptor_sites.n_cryptic_acceptors; i++) {
                                 SpliceSite *acceptor = target_acceptor_sites.cryptic_acceptors + i;
-                                if (acceptor->posterior_probability == 0 || (labs((int64_t) acceptor->position - (int64_t) canonical_acceptor->position)) > 500) continue;
+                                if (acceptor->posterior_probability == 0) continue;
                                 kv_push(SpliceSite, acceptors, *acceptor);
                             }
                             if (lost_acceptor && ei+2 < last_cds) {
                                 SpliceSites alternative_acceptor_sites = *t->exons[ei+2]->splice_sites;
                                 for (int i = 0; i < alternative_acceptor_sites.n_canonical_acceptors; i++) {
                                     SpliceSite *acceptor = alternative_acceptor_sites.canonical_acceptors + i;
-                                    if (acceptor->posterior_probability == 0 || (labs((int64_t) acceptor->position - (int64_t) canonical_acceptor->position)) > 500) continue;
+                                    if (acceptor->posterior_probability == 0) continue;
                                     kv_push(SpliceSite, acceptors, *acceptor);
                                 }
                                 for (int i = 0; i < alternative_acceptor_sites.n_cryptic_acceptors; i++) {
                                     SpliceSite *acceptor = alternative_acceptor_sites.cryptic_acceptors + i;
-                                    if (acceptor->posterior_probability == 0 || (labs((int64_t) acceptor->position - (int64_t) canonical_acceptor->position)) > 500) continue;
+                                    if (acceptor->posterior_probability == 0) continue;
                                     kv_push(SpliceSite, acceptors, *acceptor);
                                 }
                             }
@@ -2704,20 +2704,19 @@ int main(int argc, char *argv[]) {
                             }
                             for (int i = 0; i < target_donor_sites.n_cryptic_donors; i++) {
                                 SpliceSite *donor = target_donor_sites.cryptic_donors + i;
-                                if (donor->posterior_probability == 0 || (labs((int64_t) donor->position - (int64_t) canonical_donor->position)) > 500) continue;
+                                if (donor->posterior_probability == 0) continue;
                                 kv_push(SpliceSite, donors, *donor);
                             }
                             if (lost_donor && ei+1 < last_cds-1) {
                                 SpliceSites alternative_donor_sites = *t->exons[ei+1]->splice_sites;
                                 for (int i = 0; i < alternative_donor_sites.n_canonical_donors; i++) {
                                     SpliceSite *donor = alternative_donor_sites.canonical_donors + i;
-                                    if (donor->posterior_probability == 0 || (labs((int64_t) donor->position - (int64_t) canonical_donor->position)) > 500) continue;
-
+                                    if (donor->posterior_probability == 0) continue;
                                     kv_push(SpliceSite, donors, *donor);
                                 }
                                 for (int i = 0; i < alternative_donor_sites.n_cryptic_donors; i++) {
                                     SpliceSite *donor = alternative_donor_sites.cryptic_donors + i;
-                                    if ((labs((int64_t) donor->position - (int64_t) canonical_donor->position)) > 500) continue;
+                                    if (donor->posterior_probability == 0) continue;
                                     kv_push(SpliceSite, donors, *donor);
                                 }
                             }
@@ -2731,19 +2730,19 @@ int main(int argc, char *argv[]) {
                             }
                             for (int i = 0; i < target_acceptor_sites.n_cryptic_acceptors; i++) {
                                 SpliceSite *acceptor = target_acceptor_sites.cryptic_acceptors + i;
-                                if (acceptor->posterior_probability == 0 || (labs((int64_t) acceptor->position - (int64_t) canonical_acceptor->position)) > 500) continue;
+                                if (acceptor->posterior_probability == 0) continue;
                                 kv_push(SpliceSite, acceptors, *acceptor);
                             }
                             if (lost_acceptor && ei-2 > first_cds) {
                                 SpliceSites alternative_acceptor_sites = *t->exons[ei-2]->splice_sites;
                                 for (int i = 0; i < alternative_acceptor_sites.n_canonical_acceptors; i++) {
                                     SpliceSite *acceptor = alternative_acceptor_sites.canonical_acceptors + i;
-                                    if (acceptor->posterior_probability == 0 || (labs((int64_t) acceptor->position - (int64_t) canonical_acceptor->position)) > 500) continue;
+                                    if (acceptor->posterior_probability == 0) continue;
                                     kv_push(SpliceSite, acceptors, *acceptor);
                                 }
                                 for (int i = 0; i < alternative_acceptor_sites.n_cryptic_acceptors; i++) {
                                     SpliceSite *acceptor = alternative_acceptor_sites.cryptic_acceptors + i;
-                                    if (acceptor->posterior_probability == 0 || (labs((int64_t) acceptor->position - (int64_t) canonical_acceptor->position)) > 500) continue;
+                                    if (acceptor->posterior_probability == 0) continue;
                                     kv_push(SpliceSite, acceptors, *acceptor);
                                 }
                             }
