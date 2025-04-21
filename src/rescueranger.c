@@ -32,6 +32,9 @@
 #include "haplotype.h"
 #include "scores.h"
 
+#define AF_FIELD "AF"
+#define MNV_RANGE 3
+
 #define BUFFER_SIZE 2024
 #define ID 0
 #define TYPE 2
@@ -75,7 +78,7 @@
 #define STOP_GAIN_VALUE 2
 
 #define PROXIMITY_THRESHOLD 15
-#define AF_THRESHOLD 0.001
+#define AF_THRESHOLD 0.1
 
 #define START_CODON "ATG"
 #define COMPLEMENTARY_START_CODON "CAT"
@@ -1397,8 +1400,8 @@ int has_af_trigger(bcf1_t *record, bcf_hdr_t *hdr) {
     float *af_value = NULL;
     int ndst = 0;
 
-    // Set based on INFO/MAX_AF
-    if (bcf_get_info_float(hdr, record, "MAX_AF", &af_value, &ndst) <= 0) return 0;
+    // Set based on INFO/AF
+    if (bcf_get_info_float(hdr, record, AF_FIELD, &af_value, &ndst) <= 0) return 0;
 
     return *af_value <= AF_THRESHOLD;
 }
@@ -1407,7 +1410,7 @@ int has_mnv_trigger(bcf1_t *record, bcf_hdr_t *hdr) {
     int32_t *mnv = NULL;
     int ndst = 0;
 
-    // Set based on FORMAT/MNV
+    // Get based on FORMAT/MNV
     if (bcf_get_format_int32(hdr, record, "MNV", &mnv, &ndst) <= 0) return 0;
 
     return *mnv;
@@ -1706,7 +1709,7 @@ int main(int argc, char *argv[]) {
             Record *r = kv_A(*block.records, i);
             // int is_cryptic = trigger_cryptic_splice(r->v, hdr);
             int is_af_triggered = has_af_trigger(r->v, hdr);
-            int is_mnv_triggered = has_mnv_trigger(r->v, hdr);
+            // int is_mnv_triggered = has_mnv_trigger(r->v, hdr);
 
             int canonical_splice_trigger = 0;
 
@@ -1736,10 +1739,33 @@ int main(int argc, char *argv[]) {
                 }
 
                 if (is_af_triggered && !transcript_consequence->triggers[SPLICE_TRIGGER]) transcript_consequence->triggers[SPLICE_TRIGGER] = AF_SPLICE_VALUE;
-                if (is_mnv_triggered && !transcript_consequence->triggers[STOP_TRIGGER]) transcript_consequence->triggers[STOP_TRIGGER] = STOP_GAIN_VALUE;
+                // if (is_mnv_triggered && !transcript_consequence->triggers[STOP_TRIGGER]) transcript_consequence->triggers[STOP_TRIGGER] = STOP_GAIN_VALUE;
             }
 
             splice_trigger_count += (canonical_splice_trigger | is_af_triggered);
+        }
+
+        for (int i = 0; i < block.records->n; i++) {
+            Record *r = kv_A(*block.records, i);
+            int is_mnv = 0;
+
+            if (i > 0) {
+                Record *prev_r = kv_A(*block.records, i-1);
+                if (r->v->pos - prev_r->v->pos >= MNV_RANGE) continue;
+                is_mnv = 1;
+            }
+
+            if (i < block.records->n-1) {
+                Record *next_r = kv_A(*block.records, i+1);
+                if (next_r->v->pos - r->v->pos >= MNV_RANGE) continue;
+                is_mnv = 1;
+            }
+
+            for (int j = 0; j < r->vep->n; j++) {
+                TscriptCsqs *transcript_consequence = kv_A(*r->vep, j);
+                if (!is_mnv | transcript_consequence->triggers[STOP_TRIGGER]) continue;
+                transcript_consequence->triggers[STOP_TRIGGER] = STOP_GAIN_VALUE;
+            }
         }
     }
 
