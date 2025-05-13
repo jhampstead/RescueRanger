@@ -54,8 +54,9 @@ typedef struct
     uint32_t end;
     uint32_t trid;
     uint32_t strand:2;  // STRAND_{REV,FWD,UNK}
+    uint32_t constitutive:1;
     uint32_t phase:2;   // 0, 1, 2, or 3 for unknown
-    uint32_t iseq:28;
+    uint32_t iseq:27;
 }
 ftr_t;
 
@@ -586,6 +587,11 @@ static int gff_parse_line(gff_t *gff, char *line, ftr_t *ftr)
 
     // 9th column: id, parent, name, biotype
     aux->name = NULL, aux->id = NULL, aux->parent = NULL, aux->biotype = NULL;
+
+    // Constitutive is also needed, set to 0 by default
+    // TODO: The code for adding constitutive doesn't jive well with existing code, integrate it properly, e.g. as a cds aux field
+
+    ftr->constitutive = 0;
     while ( *ss )
     {
         char *es = ss;
@@ -609,6 +615,7 @@ static int gff_parse_line(gff_t *gff, char *line, ftr_t *ftr)
         }
         else if ( !strncmp(ss,"biotype=",8) ) { aux->biotype = ss + 8; aux->biotype_end = es - 1; }
         else if ( !strncmp(ss,"gene_biotype=",13) ) { aux->biotype = ss + 13; aux->biotype_end = es - 1; }
+        else if ( !strncmp(ss,"constitutive=",13) ) { ftr->constitutive = ss[13] == '1' ? 1 : 0; }
         if ( !*es ) break;
         ss = es + 1;
     }
@@ -664,6 +671,7 @@ static void register_cds(gff_t *gff, ftr_t *ftr)
     cds->len   = ftr->end - ftr->beg + 1;
     cds->icds  = 0;     // to keep valgrind on mac happy
     cds->phase = ftr->phase;
+    cds->constitutive = ftr->constitutive;
 
     hts_expand(gf_cds_t*,tr->ncds+1,tr->mcds,tr->cds);
     tr->cds[tr->ncds++] = cds;

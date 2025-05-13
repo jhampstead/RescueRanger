@@ -244,7 +244,8 @@ typedef struct
     uint32_t pos;       // 0-based index of the first exon base within the transcript (only to
                         //  update hap_node_t.sbeg in hap_init, could be calculated on the fly)
     uint32_t len;       // exon length
-    uint32_t icds:30,   // exon index within the transcript
+    uint32_t icds:29,   // exon index within the transcript
+             constitutive:1, // exon is constitutive
              phase:2;   // offset of the CDS: 0,1,2 or 3 for unknown
 }
 gf_cds_t;

@@ -1,6 +1,7 @@
 #ifndef RECORD_HEADER
 #define RECORD_HEADER
 
+#include <stdbool.h>
 #include <htslib/khash.h>
 #include <htslib/vcf.h>
 #include <htslib/khash_str2int.h>
@@ -56,7 +57,9 @@ enum PredictionFlags {
     UTR5_VARIANT = 1 << 17,
     UTR3_VARIANT = 1 << 18,
     LAST_EXON = 1 << 19,
-    SINGLE_EXON = 1 << 20
+    SINGLE_EXON = 1 << 20,
+    NON_CONSTITUTIVE = 1 << 21,
+    INFRAME = 1 << 22
 };
 
 typedef struct Isoform {
@@ -120,6 +123,8 @@ typedef struct Exon {
     Range *ref_bounds;
     Range *hap_bounds;
     SpliceSites *splice_sites;
+    bool constitutive;
+    bool in_frame;
 } Exon;
 
 typedef struct Transcript {
@@ -188,8 +193,9 @@ typedef struct Record {
     ConsequencePredictions *c;
     Isoforms *isoforms;
 
-    SpliceChange **cs;
-    Score **complete_scores;
+    Score **native_scores;
+    Score **diff_scores;
+    Score **haplotype_scores;
     Transcripts *tscripts;
     Genes *transcript_genes;
     Genes *genes;

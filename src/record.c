@@ -232,7 +232,9 @@ Record *init_record(bcf1_t *v, VepCsqs *csqs) {
     r->transcript_genes = NULL;
     r->vep = NULL;
     r->isoforms = NULL;
-    r->complete_scores = NULL;
+    r->native_scores = NULL;
+    r->diff_scores = NULL;
+    r->haplotype_scores = NULL;
 
     r->skipped = 0;
     r->unphased = 0;
