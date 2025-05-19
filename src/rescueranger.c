@@ -1877,7 +1877,7 @@ void set_triggers(Record *r) {
 }
 
 int main(int argc, char *argv[]) {
-    log_set_level(0);
+    log_set_level(3);
     setenv("TF_CPP_MIN_LOG_LEVEL", "1", 1);
 
     // log_debug("Loading SpliceAI models...");
