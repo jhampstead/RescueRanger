@@ -114,8 +114,8 @@
 #define PREDICTION_FLAGS_DESC "##INFO=<ID=PREDICTION_FLAGS,Number=.,Type=String,Description=\"Additional flags for the context in which the prediction happened.\">"
 
 
-#define INFO_TAGS { SPLICEAI_HAP_TAG, CS_TAG, RESCUE_TAG, RESCUE_PROB_TAG, RESCUE_TYPE_TAG, PTV_TAG, PTV_PROB_TAG, PTV_TYPE_TAG, PREDICTION_FLAGS_TAG }
-#define INFO_TAG_DESCS { SPLICEAI_HAP_DESC, CS_DESC, RESCUE_DESC, RESCUE_PROB_DESC, RESCUE_TYPE_DESC, PTV_DESC, PTV_PROB_DESC, PTV_TYPE_DESC, PREDICTION_FLAGS_DESC }
+#define INFO_TAGS { SPLICEAI_TAG, SPLICEAI_HAP_TAG, CS_TAG, RESCUE_TAG, RESCUE_PROB_TAG, RESCUE_TYPE_TAG, PTV_TAG, PTV_PROB_TAG, PTV_TYPE_TAG, PREDICTION_FLAGS_TAG }
+#define INFO_TAG_DESCS { SPLICEAI_DESC, SPLICEAI_HAP_DESC, CS_DESC, RESCUE_DESC, RESCUE_PROB_DESC, RESCUE_TYPE_DESC, PTV_DESC, PTV_PROB_DESC, PTV_TYPE_DESC, PREDICTION_FLAGS_DESC }
 
 
 
@@ -830,7 +830,7 @@ void free_isoforms(Isoforms *isoforms_struct) {
     free(isoforms_struct->rescue_type_probabilities);
 }
 
-#define TAG_SIZE 9
+#define TAG_SIZE 10
 static int add_rescueranger_tags(bcf_hdr_t *hdr) {
     const char *tags[TAG_SIZE] = INFO_TAGS;
     const char *descriptions[TAG_SIZE] = INFO_TAG_DESCS;
