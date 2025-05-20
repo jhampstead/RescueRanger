@@ -1744,11 +1744,21 @@ int has_matching_phase(const bcf1_t *v, const bcf_hdr_t *hdr, const int phase, c
     int *gt = NULL; int ngts = 0;
     bcf_get_genotypes(hdr, (bcf1_t *) v, &gt, &ngts);
 
-    int is_present = bcf_gt_allele(gt[phase]);
-    int is_phased = bcf_gt_is_phased(gt[phase]);
+    // Homozygous
+    if (bcf_gt_allele(gt[0]) == bcf_gt_allele(gt[1])) {
+        free(gt);
+        return 1;
+    }
 
+    // Unphased
+    if (!bcf_gt_is_phased(gt[0]) & !bcf_gt_is_phased(gt[1])) {
+        free(gt);
+        return include_unphased;
+    }
+
+    int is_present = bcf_gt_allele(gt[phase]);
     free(gt);
-    return is_present & (include_unphased | is_phased);
+    return is_present;
 }
 
 void set_vep_triggers(Records records, int transcript_id) {
@@ -2124,7 +2134,7 @@ int main(int argc, char *argv[]) {
 
             filter_overlapping_variants(&records, hdr);
 
-            // TODO: Refactor everything below this point into something with actual structures
+            // TODO: Refactor everything below this point into something with actual structure
             for (int i = 0; i < records.n; i++) {
                 Record *r = kv_A(records, i);
                 // log_info("%d:%d Initialize splice sites", r->v->rid, r->v->pos);
