@@ -47,9 +47,9 @@ void get_best_insertion_score(const float *insert_start, const int length, float
     }
 }
 
-float *match_predictions_to_reference(const float *predictions, const bcf1_t *v, const Records *rs, const size_t num_reference_predictions) {
+float *match_predictions_to_reference(const float *predictions, const Range pred_range, const Records *rs, const size_t num_reference_predictions) {
     float *corrected_predictions = malloc(num_reference_predictions * sizeof(float));
-    Range pred_range = {v->pos - (50), v->pos + 51}; // +1 for open ended coordinates
+    // Range pred_range = {v->pos - (50), v->pos + 51}; // +1 for open ended coordinates
 
     int idx = 0;
     for (int l = 0; l < rs->n; l++) {

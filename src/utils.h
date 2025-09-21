@@ -15,5 +15,5 @@ int haplotype_offset(const Records *rs, const Range bounds);
 
 int prediction_offset(const bcf1_t *v, const Records *rs);
 
-float *match_predictions_to_reference(const float *predictions, const bcf1_t *v, const Records *rs, const size_t num_reference_predictions);
+float *match_predictions_to_reference(const float *predictions, const Range pred_range, const Records *rs, const size_t num_reference_predictions);
 

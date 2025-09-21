@@ -2367,7 +2367,7 @@ int main(int argc, char *argv[]) {
 
                     predict_for_seq(models, alt_padded, alt_len, gene->strand, &alt_predictions, &num_alt_predictions);
 
-                    float *corrected_alt_predictions = match_predictions_to_reference(alt_predictions, r->v, &just_alt, num_ref_predictions);
+                    float *corrected_alt_predictions = match_predictions_to_reference(alt_predictions, (Range) { r->v->pos - 50, r->v->pos + 51 }, &just_alt, num_ref_predictions);
                     free(alt_padded);
 
                     // HAP REF
@@ -2416,7 +2416,7 @@ int main(int argc, char *argv[]) {
                     float *hap_alt_predictions = NULL; int num_hap_alt_predictions = 0;
                     int hap_alt_len = strlen(hap_alt_padded);
                     predict_for_seq(models, hap_alt_padded, hap_alt_len, gene->strand, &hap_alt_predictions, &num_hap_alt_predictions);
-                    float *corrected_hap_alt_predictions = match_predictions_to_reference(hap_alt_predictions, r->v, &hap_in, num_ref_predictions);
+                    float *corrected_hap_alt_predictions = match_predictions_to_reference(hap_alt_predictions, (Range) { r->v->pos - 50, r->v->pos + 51 }, &hap_in, num_ref_predictions);
                     free(hap_alt_padded);
 
 
@@ -2627,11 +2627,11 @@ int main(int argc, char *argv[]) {
 
                                         int pred_offset = haplotype_offset(&just_alt, pred_range);
                                         float *pair_predictions_alt = predict_on_sequence(models, alt.s, WIDTH-pred_offset, pair.position, tgene->coords, tgene->strand, &just_alt);
-                                        float *corrected_pair_predictions_alt = match_predictions_to_reference(pair_predictions_alt, r->v, &just_alt, 303);
+                                        float *corrected_pair_predictions_alt = match_predictions_to_reference(pair_predictions_alt, pred_range, &just_alt, 303);
 
                                         int hap_pred_offset = haplotype_offset(&hap_in, pred_range);
                                         float *pair_predictions_hap_alt = predict_on_sequence(models, hap_alt.s, WIDTH-hap_pred_offset, pair.position, tgene->coords, tgene->strand, &hap_in);
-                                        float *corrected_pair_predictions_hap_alt = match_predictions_to_reference(pair_predictions_hap_alt, r->v, &hap_in, 303);
+                                        float *corrected_pair_predictions_hap_alt = match_predictions_to_reference(pair_predictions_hap_alt, pred_range, &hap_in, 303);
 
                                         const char *prediction_names[3] = { "ref", "alt", "hap_alt" };
                                         const float *predictions[3] = { ref_predictions, corrected_pair_predictions_alt, corrected_pair_predictions_hap_alt};
@@ -2703,18 +2703,18 @@ int main(int argc, char *argv[]) {
 
                                         int pred_offset = haplotype_offset(&just_alt, pred_range);
                                         float *pair_predictions_alt = predict_on_sequence(models, alt.s, WIDTH-pred_offset, pair.position, tgene->coords, tgene->strand, &just_alt);
-                                        float *corrected_pair_predictions_alt = match_predictions_to_reference(pair_predictions_alt, r->v, &just_alt, 303);
+                                        float *corrected_pair_predictions_alt = match_predictions_to_reference(pair_predictions_alt, pred_range, &just_alt, 303);
 
                                         int hap_pred_offset = haplotype_offset(&hap_in, pred_range);
                                         float *pair_predictions_hap_alt = predict_on_sequence(models, hap_alt.s, WIDTH-hap_pred_offset, pair.position, tgene->coords, tgene->strand, &hap_in);
-                                        float *corrected_pair_predictions_hap_alt = match_predictions_to_reference(pair_predictions_hap_alt, r->v, &hap_in, 303);
+                                        float *corrected_pair_predictions_hap_alt = match_predictions_to_reference(pair_predictions_hap_alt, pred_range, &hap_in, 303);
 
                                         const char *prediction_names[3] = { "ref", "alt", "hap_alt" };
                                         const float *predictions[3] = { ref_predictions, corrected_pair_predictions_alt, corrected_pair_predictions_hap_alt};
                                         write_predictions(scores_tsv, chr, pair.position, r->v->d.allele[0], r->v->d.allele[1], gene->name, gff_id2string(gff, 0, t->id), phase+1, "pair", prediction_names, 3, predictions);
 
                                         filter_to_most_likely_prediction(PRED_WIDTH * NUM_SCORES, pair_predictions_ref);
-                                        filter_to_most_likely_prediction((PRED_WIDTH - pred_offset) * NUM_SCORES, pair_predictions_alt);
+                                        filter_to_most_likely_prediction((PRED_WIDTH - hap_pred_offset) * NUM_SCORES, pair_predictions_hap_alt);
 
 
                                         SpliceProbabilities pair_probabilities;
@@ -2723,14 +2723,14 @@ int main(int argc, char *argv[]) {
                                         // Get acceptor pairs
                                         PairPrediction *ref_alt_acceptor_map = NULL;
                                         size_t ref_alt_acceptor_map_size = 0;
-                                        get_prediction_pairs_for_site(ACCEPTOR_POS, pair_predictions_ref, 101, pair_predictions_alt, 101-pred_offset, &hap_in, pred_range, &ref_alt_acceptor_map_size, &ref_alt_acceptor_map);
+                                        get_prediction_pairs_for_site(ACCEPTOR_POS, pair_predictions_ref, 101, pair_predictions_hap_alt, 101-hap_pred_offset, &hap_in, pred_range, &ref_alt_acceptor_map_size, &ref_alt_acceptor_map);
                                         get_splice_probabilities_from_map(r, ACCEPTOR, phase, current_gene, pred_range, ref_alt_acceptor_map_size, ref_alt_acceptor_map, &pair_probabilities);
 
 
                                         // Get donor pairs
                                         PairPrediction *ref_alt_donor_map = NULL;
                                         size_t ref_alt_donor_map_size = 0;
-                                        get_prediction_pairs_for_site(DONOR_POS, pair_predictions_ref, 101, pair_predictions_alt, 101-pred_offset, &hap_in, pred_range, &ref_alt_donor_map_size, &ref_alt_donor_map);
+                                        get_prediction_pairs_for_site(DONOR_POS, pair_predictions_ref, 101, pair_predictions_hap_alt, 101-hap_pred_offset, &hap_in, pred_range, &ref_alt_donor_map_size, &ref_alt_donor_map);
                                         get_splice_probabilities_from_map(r, DONOR, phase, current_gene, pred_range, ref_alt_donor_map_size, ref_alt_donor_map, &pair_probabilities);
 
                                         for (int pi = 0; pi < pair_probabilities.n; pi++) {
@@ -2782,18 +2782,18 @@ int main(int argc, char *argv[]) {
 
                                         int pred_offset = haplotype_offset(&just_alt, pred_range);
                                         float *competitor_predictions_alt = predict_on_sequence(models, alt.s, WIDTH-pred_offset, competitor.position, tgene->coords, tgene->strand, &just_alt);
-                                        float *corrected_competitor_predictions_alt = match_predictions_to_reference(competitor_predictions_alt, r->v, &just_alt, 303);
+                                        float *corrected_competitor_predictions_alt = match_predictions_to_reference(competitor_predictions_alt, pred_range, &just_alt, 303);
 
                                         int hap_pred_offset = haplotype_offset(&hap_in, pred_range);
                                         float *competitor_predictions_hap_alt = predict_on_sequence(models, hap_alt.s, WIDTH-hap_pred_offset, competitor.position, tgene->coords, tgene->strand, &hap_in);
-                                        float *corrected_competitor_predictions_hap_alt = match_predictions_to_reference(competitor_predictions_hap_alt, r->v, &hap_in, 303);
+                                        float *corrected_competitor_predictions_hap_alt = match_predictions_to_reference(competitor_predictions_hap_alt, pred_range, &hap_in, 303);
 
                                         const char *prediction_names[3] = { "ref", "alt", "hap_alt" };
                                         const float *predictions[3] = { ref_predictions, corrected_competitor_predictions_alt, corrected_competitor_predictions_hap_alt};
                                         write_predictions(scores_tsv, chr, competitor.position, r->v->d.allele[0], r->v->d.allele[1], gene->name, gff_id2string(gff, 0, t->id), phase+1, "competitor", prediction_names, 3, predictions);
 
                                         filter_to_most_likely_prediction(PRED_WIDTH * NUM_SCORES, competitor_predictions_ref);
-                                        filter_to_most_likely_prediction((PRED_WIDTH - pred_offset) * NUM_SCORES, competitor_predictions_alt);
+                                        filter_to_most_likely_prediction((PRED_WIDTH - hap_pred_offset) * NUM_SCORES, competitor_predictions_hap_alt);
 
 
                                         SpliceProbabilities competitor_probabilities;
@@ -2802,14 +2802,14 @@ int main(int argc, char *argv[]) {
                                         // Get acceptor pairs
                                         PairPrediction *ref_alt_acceptor_map = NULL;
                                         size_t ref_alt_acceptor_map_size = 0;
-                                        get_prediction_pairs_for_site(ACCEPTOR_POS, competitor_predictions_ref, 101, competitor_predictions_alt, 101-pred_offset, &hap_in, pred_range, &ref_alt_acceptor_map_size, &ref_alt_acceptor_map);
+                                        get_prediction_pairs_for_site(ACCEPTOR_POS, competitor_predictions_ref, 101, competitor_predictions_hap_alt, 101-hap_pred_offset, &hap_in, pred_range, &ref_alt_acceptor_map_size, &ref_alt_acceptor_map);
                                         get_splice_probabilities_from_map(r, ACCEPTOR, phase, current_gene, pred_range, ref_alt_acceptor_map_size, ref_alt_acceptor_map, &competitor_probabilities);
 
 
                                         // Get donor pairs
                                         PairPrediction *ref_alt_donor_map = NULL;
                                         size_t ref_alt_donor_map_size = 0;
-                                        get_prediction_pairs_for_site(DONOR_POS, competitor_predictions_ref, 101, competitor_predictions_alt, 101-pred_offset, &hap_in, pred_range, &ref_alt_donor_map_size, &ref_alt_donor_map);
+                                        get_prediction_pairs_for_site(DONOR_POS, competitor_predictions_ref, 101, competitor_predictions_hap_alt, 101-hap_pred_offset, &hap_in, pred_range, &ref_alt_donor_map_size, &ref_alt_donor_map);
                                         get_splice_probabilities_from_map(r, DONOR, phase, current_gene, pred_range, ref_alt_donor_map_size, ref_alt_donor_map, &competitor_probabilities);
 
                                         for (int csi = 0; csi < competitor_probabilities.n; csi++) {
@@ -2856,18 +2856,18 @@ int main(int argc, char *argv[]) {
                                         // float *competitor_predictions_alt = predict_on_sequence(models, hap_alt.s, WIDTH - pred_offset, competitor.position, tgene->coords, tgene->strand, &hap_in);
                                         int pred_offset = haplotype_offset(&just_alt, pred_range);
                                         float *competitor_predictions_alt = predict_on_sequence(models, alt.s, WIDTH-pred_offset, competitor.position, tgene->coords, tgene->strand, &just_alt);
-                                        float *corrected_competitor_predictions_alt = match_predictions_to_reference(competitor_predictions_alt, r->v, &just_alt, 303);
+                                        float *corrected_competitor_predictions_alt = match_predictions_to_reference(competitor_predictions_alt, pred_range, &just_alt, 303);
 
                                         int hap_pred_offset = haplotype_offset(&hap_in, pred_range);
                                         float *competitor_predictions_hap_alt = predict_on_sequence(models, hap_alt.s, WIDTH-hap_pred_offset, competitor.position, tgene->coords, tgene->strand, &hap_in);
-                                        float *corrected_competitor_predictions_hap_alt = match_predictions_to_reference(competitor_predictions_hap_alt, r->v, &hap_in, 303);
+                                        float *corrected_competitor_predictions_hap_alt = match_predictions_to_reference(competitor_predictions_hap_alt, pred_range, &hap_in, 303);
 
                                         const char *prediction_names[3] = { "ref", "alt", "hap_alt" };
                                         const float *predictions[3] = { ref_predictions, corrected_competitor_predictions_alt, corrected_competitor_predictions_hap_alt};
                                         write_predictions(scores_tsv, chr, competitor.position, r->v->d.allele[0], r->v->d.allele[1], gene->name, gff_id2string(gff, 0, t->id), phase+1, "competitor", prediction_names, 3, predictions);
 
                                         filter_to_most_likely_prediction(PRED_WIDTH * NUM_SCORES, competitor_predictions_ref);
-                                        filter_to_most_likely_prediction((PRED_WIDTH - pred_offset) * NUM_SCORES, competitor_predictions_alt);
+                                        filter_to_most_likely_prediction((PRED_WIDTH - hap_pred_offset) * NUM_SCORES, competitor_predictions_hap_alt);
 
 
                                         SpliceProbabilities competitor_probabilities;
@@ -2876,14 +2876,14 @@ int main(int argc, char *argv[]) {
                                         // Get acceptor pairs
                                         PairPrediction *ref_alt_acceptor_map = NULL;
                                         size_t ref_alt_acceptor_map_size = 0;
-                                        get_prediction_pairs_for_site(ACCEPTOR_POS, competitor_predictions_ref, 101, competitor_predictions_alt, 101-pred_offset, &hap_in, pred_range, &ref_alt_acceptor_map_size, &ref_alt_acceptor_map);
+                                        get_prediction_pairs_for_site(ACCEPTOR_POS, competitor_predictions_ref, 101, competitor_predictions_hap_alt, 101-hap_pred_offset, &hap_in, pred_range, &ref_alt_acceptor_map_size, &ref_alt_acceptor_map);
                                         get_splice_probabilities_from_map(r, ACCEPTOR, phase, current_gene, pred_range, ref_alt_acceptor_map_size, ref_alt_acceptor_map, &competitor_probabilities);
 
 
                                         // Get donor pairs
                                         PairPrediction *ref_alt_donor_map = NULL;
                                         size_t ref_alt_donor_map_size = 0;
-                                        get_prediction_pairs_for_site(DONOR_POS, competitor_predictions_ref, 101, competitor_predictions_alt, 101-pred_offset, &hap_in, pred_range, &ref_alt_donor_map_size, &ref_alt_donor_map);
+                                        get_prediction_pairs_for_site(DONOR_POS, competitor_predictions_ref, 101, competitor_predictions_hap_alt, 101-hap_pred_offset, &hap_in, pred_range, &ref_alt_donor_map_size, &ref_alt_donor_map);
                                         get_splice_probabilities_from_map(r, DONOR, phase, current_gene, pred_range, ref_alt_donor_map_size, ref_alt_donor_map, &competitor_probabilities);
 
                                         for (int ci = 0; ci < competitor_probabilities.n; ci++) {
