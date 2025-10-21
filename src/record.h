@@ -75,6 +75,7 @@ typedef struct Isoform {
 
 typedef struct RescueProbabilities {
     uint32_t *n_isoforms; // counts of isoforms supporting each rescue type
+    uint8_t *rescues;
     enum RescueType *rescue_types; // rescue types
     float *rescue_probabilities; // cumulative probability for each rescue type
     uint32_t *affected_bases; // counts of affected bases
@@ -103,6 +104,7 @@ typedef struct SpliceSite {
     uint32_t predicted; // whether haplotype prediction has been run for the splice site
     uint32_t gff_canonical; // whether the splice site is canonical in the GFF
     uint32_t lost;
+    float ref_prior_probability;
     float prior_probability; // raw SpliceAI probability
     float posterior_probability; // scaled probability across window
 } SpliceSite;
@@ -210,6 +212,7 @@ typedef struct NonCodingRegion {
     Range canonical_coords;
     SpliceSite *donor, *acceptor;
     enum UTRType is_utr;
+    int uses_competitor;
     Records records;
 } NonCodingRegion;
 
