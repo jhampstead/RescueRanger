@@ -33,7 +33,8 @@ enum RescueType {
 enum PTVType {
     NO_PTV = 0,
     STOP_GAINED,
-    FRAMESHIFT
+    FRAMESHIFT,
+    LONG_INFRAME_INDEL
 };
 
 enum PredictionFlags {

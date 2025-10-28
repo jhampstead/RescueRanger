@@ -763,6 +763,7 @@ void calculate_ptv_probabilities(Isoforms *isoforms_struct) {
     float ptv_probability = 0.0;
     float stop_gained_probability = 0.0;
     float frameshift_variant_probability = 0.0;
+    float long_inframe_indel_probability = 0.0;
 
     for (int i = 0; i < isoforms_struct->n_isoforms; i++) {
         Isoform *isoform = isoforms_struct->isoforms[i];
@@ -774,6 +775,8 @@ void calculate_ptv_probabilities(Isoforms *isoforms_struct) {
             stop_gained_probability += isoform->posterior_probability;
         } else if (isoform->ptv_type == FRAMESHIFT) {
             frameshift_variant_probability += isoform->posterior_probability;
+        } else if (isoform->ptv_type == LONG_INFRAME_INDEL) {
+            long_inframe_indel_probability += isoform->posterior_probability;
         }
     }
 
@@ -784,6 +787,8 @@ void calculate_ptv_probabilities(Isoforms *isoforms_struct) {
         isoforms_struct->ptv_type = STOP_GAINED;
     } else if (frameshift_variant_probability > stop_gained_probability) {
         isoforms_struct->ptv_type = FRAMESHIFT;
+    } else if (long_inframe_indel_probability > stop_gained_probability && long_inframe_indel_probability > stop_gained_probability) {
+        isoforms_struct->ptv_type = LONG_INFRAME_INDEL;
     } else {
         isoforms_struct->ptv_type = NO_PTV; // tie or no PTV
     }
@@ -3728,32 +3733,32 @@ int main(int argc, char *argv[]) {
                         if (shifts.n > 0 && t->strand == STRAND_FWD) ks_introsort_frameshift_sort(shifts.n, shifts.a);
                         if (shifts.n > 0 && t->strand == STRAND_REV) ks_introsort_frameshift_reverse_sort(shifts.n, shifts.a);
 
-                        for (int i = 0; i < shifts.n; i++) {
-                            IsoformVariant iso_shift = kv_A(shifts, i);
-                            if (iso_shift.r != r) continue;
-
-                            for (int j = 0; j < i; j++) {
-                                IsoformVariant upstream_shift = kv_A(shifts, j);
-                                if (upstream_shift.r == iso_shift.r) continue;
-
-                                for (int ti2 = 0; ti2 < upstream_shift.r->tscripts->n; ti2++) {
-                                    Transcript *tscript = kv_A(*upstream_shift.r->tscripts, ti2);
-                                    if (tscript == NULL || tscript->id != t->id) continue;
-
-                                    TscriptCsqs *csq = kv_A(*upstream_shift.r->vep, ti2);
-                                    if (!upstream_shift.r->isoforms->valid | 
-                                        (!(
-                                         (upstream_shift.r->isoforms->rescue == 0) & 
-                                         ((csq->triggers[SPLICE_TRIGGER] == CANONICAL_SPLICE_VALUE) |
-                                         (csq->triggers[FRAMESHIFT_TRIGGER]) |
-                                         (csq->triggers[STOP_TRIGGER] == STOP_RESCUE_VALUE))
-                                         ) & 
-                                        !upstream_shift.r->isoforms->ptv)) continue;
-
-                                    set_record_flag(r, ti, phase, UPSTREAM_PTV);
-                                }
-                            }
-                        }
+                        // for (int i = 0; i < shifts.n; i++) {
+                        //     IsoformVariant iso_shift = kv_A(shifts, i);
+                        //     if (iso_shift.r != r) continue;
+                        //
+                        //     for (int j = 0; j < i; j++) {
+                        //         IsoformVariant upstream_shift = kv_A(shifts, j);
+                        //         if (upstream_shift.r == iso_shift.r) continue;
+                        //
+                        //         for (int ti2 = 0; ti2 < upstream_shift.r->tscripts->n; ti2++) {
+                        //             Transcript *tscript = kv_A(*upstream_shift.r->tscripts, ti2);
+                        //             if (tscript == NULL || tscript->id != t->id) continue;
+                        //
+                        //             TscriptCsqs *csq = kv_A(*upstream_shift.r->vep, ti2);
+                        //             if (!upstream_shift.r->isoforms->valid | 
+                        //                 (!(
+                        //                  (upstream_shift.r->isoforms->rescue == 0) & 
+                        //                  ((csq->triggers[SPLICE_TRIGGER] == CANONICAL_SPLICE_VALUE) |
+                        //                  (csq->triggers[FRAMESHIFT_TRIGGER]) |
+                        //                  (csq->triggers[STOP_TRIGGER] == STOP_RESCUE_VALUE))
+                        //                  ) & 
+                        //                 !upstream_shift.r->isoforms->ptv)) continue;
+                        //
+                        //             set_record_flag(r, ti, phase, UPSTREAM_PTV);
+                        //         }
+                        //     }
+                        // }
 
                         // Filter to shifts that overlap the isoform
                         size_t j = 0; // Index for the next valid position
@@ -3871,7 +3876,7 @@ int main(int argc, char *argv[]) {
 
                                 if (iso_shift.shift % 3 == 0 && abs(iso_shift.shift) < MAX_SPLICE_RADIUS) {
                                     rescued = 1;
-                                    int splice_insertion_length = iso_shift.shift > 0 ? iso_shift.shift : 0;
+                                    int splice_insertion_length = iso_shift.modified_bases < 0 ? abs(iso_shift.modified_bases): 0;
                                     should_check_induced = 1;
 
                                     if (t->strand == STRAND_FWD) {
@@ -3884,6 +3889,19 @@ int main(int argc, char *argv[]) {
                                 } else if (csq->triggers[SPLICE_TRIGGER] && iso_shift.shift % 3 != 0) {
                                     rescued = 0;
                                     ptv_type = FRAMESHIFT;
+                                } else if (csq->triggers[SPLICE_TRIGGER] && abs(iso_shift.shift) > MAX_SPLICE_RADIUS) {
+                                    ptv_type = LONG_INFRAME_INDEL;
+
+                                    int splice_insertion_length = iso_shift.modified_bases < 0 ? abs(iso_shift.modified_bases) : 0;
+                                    should_check_induced = 1;
+
+                                    if (t->strand == STRAND_FWD) {
+                                        possible_induced_sequence.start = (int) ((iso_shift.seq_pos - shifted_isoform.start + 1) / 3) * 3;
+                                        possible_induced_sequence.end = (iso_shift.seq_pos - shifted_isoform.start + 1) + splice_insertion_length + 1;
+                                    } else {
+                                        possible_induced_sequence.start = (int) ((shifted_isoform.end - iso_shift.seq_pos - 1) / 3) * 3;
+                                        possible_induced_sequence.end = (shifted_isoform.end - iso_shift.seq_pos - 1) + splice_insertion_length + 1;
+                                    }
                                 }
                             }
 
@@ -3907,8 +3925,8 @@ int main(int argc, char *argv[]) {
                                     int32_t starts_with_forward_indel = 0;
                                     int included_current_shift = 0;
                                     int induced_frameshift_rescue = 0;
-                                    int inserted_bases = 0;
-                                    int deleted_bases = 0;
+                                    // int inserted_bases = 0;
+                                    // int deleted_bases = 0;
                                     for (int i = 0; i < shifts.n; i++) {
                                         IsoformVariant shift = kv_A(shifts, i);
                                         if (shift.shift == 0) continue; // Rescued splice, do nothing
@@ -3919,8 +3937,8 @@ int main(int argc, char *argv[]) {
                                             summed_shift = shift.shift;
                                             shift_start = shift.seq_pos;
                                             included_current_shift = 0 | (shift.r == r);
-                                            inserted_bases += shift.shift < 0 ? abs(shift.shift) : 0;
-                                            deleted_bases += shift.shift > 0 ? abs(shift.shift) : 0;
+                                            // inserted_bases += shift.shift < 0 ? abs(shift.shift) : 0;
+                                            // deleted_bases += shift.shift > 0 ? abs(shift.shift) : 0;
                                             induced_frameshift_rescue = shift.shift_type == SPLICE;
                                             starts_with_forward_indel = shift.shift_type == INDEL;
                                             continue;
@@ -3930,8 +3948,8 @@ int main(int argc, char *argv[]) {
                                         if (!included_current_shift && shift.r == r) included_current_shift = 1;
 
                                         summed_shift += shift.shift;
-                                        inserted_bases += shift.shift < 0 ? abs(shift.shift) : 0;
-                                        deleted_bases += shift.shift > 0 ? abs(shift.shift) : 0;
+                                        // inserted_bases += shift.shift < 0 ? abs(shift.shift) : 0;
+                                        // deleted_bases += shift.shift > 0 ? abs(shift.shift) : 0;
 
                                         induced_frameshift_rescue = shift.shift_type == SPLICE && shift.shift % 3 != 0;
                                         if (summed_shift % 3 != 0) continue;
@@ -3940,7 +3958,7 @@ int main(int argc, char *argv[]) {
                                             rescued = 1;
                                             rescue_type = (rescue_type == NO_RESCUE) ? FRAME_RESTORING_INDEL : rescue_type; // Only set to rescue type
                                             int32_t shift_end = shift.seq_pos;
-                                            affected_bases = abs(shift_end - shift_start) + (shift.shift < 0 ? abs(shift.shift) : 0);
+                                            affected_bases = abs(shift_end - shift_start) + (shift.modified_bases < 0 ? abs(shift.modified_bases) : 0);
 
                                             if (induced_frameshift_rescue) r->flags[ti * NUM_PHASES + phase] |= RESCUED_BY_SPLICE_FRAMESHIFT;
 
@@ -3961,8 +3979,8 @@ int main(int argc, char *argv[]) {
                                         shift_start = 0;
                                         included_current_shift = 0;
                                         starts_with_forward_indel = 0;
-                                        inserted_bases = 0;
-                                        deleted_bases = 0;
+                                        // inserted_bases = 0;
+                                        // deleted_bases = 0;
                                     }
                                 }
                             }
@@ -3997,6 +4015,33 @@ int main(int argc, char *argv[]) {
                             rescue_type = COMPLETE_RESCUE;
                         }
 
+                        for (int i = 0; i < shifts.n; i++) {
+                            IsoformVariant iso_shift = kv_A(shifts, i);
+                            if (iso_shift.r != r) continue;
+
+                            if (
+                                (csq->triggers[SPLICE_TRIGGER] == AF_SPLICE_VALUE || csq->triggers[STOP_TRIGGER] == STOP_GAIN_VALUE) &&
+                                (csq->triggers[SPLICE_TRIGGER] != CANONICAL_SPLICE_VALUE && !csq->triggers[FRAMESHIFT_TRIGGER] && csq->triggers[STOP_TRIGGER] != STOP_RESCUE_VALUE) &&
+                                (ptv_type == NO_PTV || ptv_type == LONG_INFRAME_INDEL)
+                            ) continue;
+                            if (rescued && !(ptv_type == STOP_GAINED || ptv_type == FRAMESHIFT)) continue;
+
+                            for (int j = i; j < shifts.n; j++) {
+                                IsoformVariant upstream_shift = kv_A(shifts, j);
+                                if (upstream_shift.r == iso_shift.r) continue;
+
+                                for (int ti2 = 0; ti2 < upstream_shift.r->tscripts->n; ti2++) {
+                                    Transcript *tscript = kv_A(*upstream_shift.r->tscripts, ti2);
+                                    if (tscript == NULL || tscript->id != t->id) continue;
+
+                                    TscriptCsqs *csq = kv_A(*upstream_shift.r->vep, ti2);
+                                    if (!(upstream_shift.r->isoforms->valid && (csq->triggers[SPLICE_TRIGGER] || csq->triggers[FRAMESHIFT_TRIGGER] || csq->triggers[STOP_TRIGGER]))) continue;
+
+                                    set_record_flag(upstream_shift.r, ti2, phase, UPSTREAM_PTV);
+                                }
+                            }
+                        }
+
                         float isoform_prior = 1.0;
                         for (int i = 0; i < hap_ncrs.n; i++) {
                             NonCodingRegion ncr = kv_A(hap_ncrs, i);
@@ -4021,7 +4066,7 @@ int main(int argc, char *argv[]) {
                         isoform->rescue_type = rescue_type;
                         isoform->affected_bases = affected_bases;
 
-                        isoform->ptv = (ptv_type == STOP_GAINED || ptv_type == FRAMESHIFT);
+                        isoform->ptv = (ptv_type == STOP_GAINED || ptv_type == FRAMESHIFT || ptv_type == LONG_INFRAME_INDEL);
                         isoform->ptv_type = ptv_type;
 
                         isoforms.isoforms[isoforms.n_isoforms++] = isoform;
@@ -4356,6 +4401,10 @@ int main(int argc, char *argv[]) {
                             break;
                         case FRAMESHIFT:
                             kputs("frameshift", &ptv_type_tag);
+                            has_ptv = 1;
+                            break;
+                        case LONG_INFRAME_INDEL:
+                            kputs("long_inframe_indel", &ptv_type_tag);
                             has_ptv = 1;
                             break;
                         case NO_PTV:
