@@ -530,97 +530,130 @@ int find_gene_region_for_variant(bcf1_t *v, bcf_hdr_t *hdr, gff_t *gff, IRegion 
 //     return corrected_predictions;
 // }
 
-static int get_range_in_isoform(const bcf1_t *v, const NonCodingRegions *ncrs, const Records *rs, const int strand, const Range bounds, int64_t *out_position, int allele_lengths[2]) {
+static int get_range_in_isoform(const bcf1_t *v, const NonCodingRegions *ncrs, const NonCodingRegions *hap_ncrs, const Records *rs, const int strand, const Range bounds, int64_t *out_position, int allele_lengths[2]) {
     const Range ref = variant_to_range(v, 0);
     const Range alt = variant_to_range(v, 1);
     const int is_insertion = range_len(alt) - range_len(ref) > 0;
+    const int is_deletion = range_len(ref) - range_len(alt) > 0;
+    const int has_proceeding_reference = range_len(alt) != range_len(ref);
 
-    int64_t isoform_position = ref.start; //  - haplotype_offset(rs, bounds);
+    const int64_t variant_start = ref.start;
+    const int64_t variant_hap_start = variant_start - haplotype_offset(rs, (Range) { bounds.start, ref.start });
+    const int64_t variant_end = variant_start + range_len(ref);
     int skipped_bases = 0;
     if (strand == STRAND_FWD) {
-        isoform_position -= haplotype_offset(rs, (Range) { bounds.start, ref.start });
-        for (int i = 0; i < ncrs->n; i++) {
+        for (int i = 0; i < hap_ncrs->n; i++) {
             NonCodingRegion ncr = kv_A(*ncrs, i);
-            const int variant_start = isoform_position;
-            const int variant_end = variant_start + range_len(alt);
+            NonCodingRegion hap_ncr = kv_A(*hap_ncrs, i);
 
-            // Range is open-ended, so end <= start is the way to go
-            if (variant_end <= ncr.coords.start + is_insertion) break; // Range is open-ended, so end <= start is the way to go
+            // When a noncoding region is ablated (only happens in case of intron retention due to splice site loss)
+            if (!ncr.is_used) continue;
 
-            if (variant_start >= ncr.coords.end) {
+            // Convert to actual start of intron, instead of closed end of exon (not applicable if it's a UTR)
+            if (!ncr.is_utr) {
+                ncr.coords.start++;
+                hap_ncr.coords.start++;
+            }
+
+            // Range is open-ended
+            // If ther variant is an insertion, this is generally included as it is before the splice site.
+            // But in case of a UTRs it's not bounded by a splice site so this should not happen.
+
+            if (variant_start + (is_insertion * !ncr.is_utr) >= ncr.coords.end) {
                 if (ncr.is_utr) continue;
-                skipped_bases += range_len(ncr.coords) - 1;
+                skipped_bases += range_len(hap_ncr.coords);
                 continue;
             }
 
-            if (variant_end > ncr.coords.end) { // If variant overlaps intron end (should only happen in case of deletions)
-                Range noncoding_variant;
-                intersect_ranges(ref, ncr.coords, &noncoding_variant);
-                isoform_position -= (skipped_bases + range_len(ncr.coords) - 1); // Should also skip noncoding region!
-                *out_position = isoform_position;
-                allele_lengths[0] = range_len(ref) - range_len(noncoding_variant);
-                allele_lengths[1] = 0; // Start of allele is in intron, so is skipped
-                return 0;
-            }
+            if (variant_end + (is_insertion * !!ncr.is_utr) <= ncr.coords.start) break;
 
-            if ((variant_end > ncr.coords.start) & (variant_start < ncr.coords.start)) { // If variant overlaps intron start (should only happen in case of deletions)
+            if (is_deletion && variant_start + 1 < ncr.coords.start) {
                 Range noncoding_variant;
-                intersect_ranges(ref, ncr.coords, &noncoding_variant);
-                isoform_position -= skipped_bases;
-                *out_position = isoform_position;
+
+                // If this if hits, it's a UTR bounding variant
+                if (intersect_ranges(ref, ncr.coords, &noncoding_variant) == 0) {
+                    log_error("Attempted an overlap of a variant to an intron boundary without actually overlapping. Big bad.");
+                    exit(1);
+                }
+
+                *out_position = variant_hap_start - skipped_bases;
+
                 allele_lengths[0] = range_len(ref) - range_len(noncoding_variant);
                 allele_lengths[1] = 1;
                 return 0;
+
             }
 
-            isoform_position -= skipped_bases;
-            *out_position = isoform_position;
-            return 1; // Variant falls within a non-coding region
-        }
-        isoform_position -= skipped_bases;
-    } else if (strand == STRAND_REV) {
-        isoform_position -= haplotype_offset(rs, (Range) { bounds.start, ref.start });
-        for (int i = 0; i < ncrs->n; i++) {
-            NonCodingRegion ncr = kv_A(*ncrs, i);
-            const int variant_start = isoform_position;
-            const int variant_end = variant_start + range_len(alt); // Since it's haplotype coordinates, use alt instead of ref
-
-            if (variant_start > ncr.coords.start - is_insertion) break; // Approaches from other end (3' <-- 5')
-
-            if (variant_end < ncr.coords.end) {
-                if (ncr.is_utr) continue;
-                skipped_bases += range_len(ncr.coords) - 1;
-                continue;
-            }
-
-            if (variant_start <= ncr.coords.end) { // If variant overlaps intron boundary (should only happen in case of deletions)
+            if (is_deletion && variant_end > ncr.coords.end) {
                 Range noncoding_variant;
-                intersect_ranges(ref, ncr.coords, &noncoding_variant);
-                isoform_position += (skipped_bases + range_len(ncr.coords) - 1);
-                *out_position = isoform_position;
+
+                // If this if hits, it's a UTR bounding variant
+                if (intersect_ranges(ref, ncr.coords, &noncoding_variant) == 0) {
+                    log_error("Attempted an overlap of a variant to an intron boundary without actually overlapping. Big bad.");
+                    exit(1);
+                }
+
+                *out_position = variant_hap_start - (skipped_bases + range_len(hap_ncr.coords));
+
                 allele_lengths[0] = range_len(ref) - range_len(noncoding_variant);
                 allele_lengths[1] = 0;
                 return 0;
             }
 
-            if ((variant_start < ncr.coords.start) & (variant_end > ncr.coords.start)) {
-                Range coding_variant;
-                intersect_ranges(ref, ncr.coords, &coding_variant);
-                isoform_position += skipped_bases;
-                *out_position = isoform_position;
-                allele_lengths[0] = range_len(ref) - range_len(coding_variant);
-                allele_lengths[1] = 1;
-                return 0;
-            }
-
-            isoform_position += skipped_bases;
-            *out_position = isoform_position;
+            *out_position = variant_hap_start - skipped_bases;
             return 1; // Variant falls within a non-coding region
         }
-        isoform_position += skipped_bases;
+    } else if (strand == STRAND_REV) {
+        for (int i = 0; i < ncrs->n; i++) {
+            NonCodingRegion ncr = kv_A(*ncrs, i);
+            NonCodingRegion hap_ncr = kv_A(*hap_ncrs, i);
+
+            if (!ncr.is_used) continue;
+
+            // Convert to actual start of intron, instead of closed end of exon
+            if (!ncr.is_utr) { 
+                ncr.coords.start--;
+                hap_ncr.coords.start--;
+            }
+
+            if (variant_end + (is_insertion * !!ncr.is_utr) <= ncr.coords.end + 1) {
+                if (ncr.is_utr) continue;
+                skipped_bases += range_len(hap_ncr.coords);
+                continue;
+            }
+
+            if (variant_start + has_proceeding_reference > ncr.coords.start) break;
+
+            if (is_deletion && variant_end > ncr.coords.start + 1) {
+                Range noncoding_variant;
+                if (intersect_ranges(ref, ncr.coords, &noncoding_variant) == 0) {
+                    log_error("Attempted an overlap of a variant to an intron boundary without actually overlapping. Big bad.");
+                    exit(1);
+                }
+
+                *out_position = variant_hap_start + skipped_bases;
+                allele_lengths[0] = range_len(ref) - range_len(noncoding_variant);
+                allele_lengths[1] = 0;
+            }
+
+            if (is_deletion && variant_start < ncr.coords.end) {
+                Range noncoding_variant;
+                if (intersect_ranges(ref, ncr.coords, &noncoding_variant) == 0) {
+                    log_error("Attempted an overlap of a variant to an intron boundary without actually overlapping. Big bad.");
+                    exit(1);
+                }
+
+                *out_position = variant_hap_start + skipped_bases + range_len(hap_ncr.coords);
+                allele_lengths[0] = range_len(ref) - range_len(noncoding_variant);
+                allele_lengths[1] = 1;
+            }
+
+            *out_position = variant_start;
+            return 1; // Variant falls within a non-coding region
+        }
     }
 
-    *out_position = isoform_position;
+    *out_position = strand == STRAND_FWD ? variant_hap_start - skipped_bases : variant_hap_start + skipped_bases;
     allele_lengths[0] = range_len(ref);
     allele_lengths[1] = range_len(alt);
 
@@ -2464,10 +2497,10 @@ int main(int argc, char *argv[]) {
                     diff.ag = corrected_hap_alt_predictions[(diff.ag_idx + 50) * NUM_SCORES + ACCEPTOR] - corrected_alt_predictions[(diff.ag_idx + 50) * NUM_SCORES + ACCEPTOR];
 
                     diff.al_idx = hap_score.al_idx;
-                    diff.ag = corrected_hap_alt_predictions[(diff.al_idx + 50) * NUM_SCORES + ACCEPTOR] - corrected_alt_predictions[(diff.al_idx + 50) * NUM_SCORES + ACCEPTOR];
+                    diff.al = corrected_hap_alt_predictions[(diff.al_idx + 50) * NUM_SCORES + ACCEPTOR] - corrected_alt_predictions[(diff.al_idx + 50) * NUM_SCORES + ACCEPTOR];
 
                     diff.dg_idx = hap_score.dg_idx;
-                    diff.ag = corrected_hap_alt_predictions[(diff.dg_idx + 50) * NUM_SCORES + DONOR] - corrected_alt_predictions[(diff.dg_idx + 50) * NUM_SCORES + DONOR];
+                    diff.dg = corrected_hap_alt_predictions[(diff.dg_idx + 50) * NUM_SCORES + DONOR] - corrected_alt_predictions[(diff.dg_idx + 50) * NUM_SCORES + DONOR];
 
                     diff.dl_idx = hap_score.dl_idx;
                     diff.dl = corrected_hap_alt_predictions[(diff.dl_idx + 50) * NUM_SCORES + DONOR] - corrected_alt_predictions[(diff.dl_idx + 50) * NUM_SCORES + DONOR];
@@ -3040,6 +3073,7 @@ int main(int argc, char *argv[]) {
 
                             if (ei == first_cds) { // 5' UTR
                                 NonCodingRegion ncr = {
+                                    1,
                                     { gene->coords.start, e->cds->start }, 
                                     { gene->coords.start, e->cds->start },
                                     NULL,
@@ -3055,6 +3089,7 @@ int main(int argc, char *argv[]) {
 
                             if (ei == last_cds) { // 3' UTR
                                 NonCodingRegion ncr = {
+                                    1,
                                     { e->cds->end, gene_end },
                                     { e->cds->end, gene_end },
                                     NULL,
@@ -3081,6 +3116,7 @@ int main(int argc, char *argv[]) {
 
                             if (lost_donor && lost_acceptor) {
                                 NonCodingRegion ncr = {
+                                    0,
                                     { canonical_donor->position, canonical_donor->position },
                                     { canonical_donor->canonical_position, canonical_acceptor->canonical_position },
                                     canonical_donor,
@@ -3152,6 +3188,7 @@ int main(int argc, char *argv[]) {
                                 for (int i = 0; i < donors.n; i++) {
                                     SpliceSite *donor = donors.a + i;
                                     NonCodingRegion ncr = {
+                                        0,
                                         { donor->position, donor->position },
                                         { donor->canonical_position, canonical_acceptor->canonical_position },
                                         donor,
@@ -3165,6 +3202,7 @@ int main(int argc, char *argv[]) {
                                 for (int i = 0; i < acceptors.n; i++) {
                                     SpliceSite *acceptor = acceptors.a + i;
                                     NonCodingRegion ncr = {
+                                        0,
                                         { canonical_donor->position, canonical_donor->position },
                                         { canonical_donor->canonical_position, acceptor->canonical_position },
                                         canonical_donor,
@@ -3184,6 +3222,7 @@ int main(int argc, char *argv[]) {
                                 for (int j = 0; j < acceptors.n; j++) {
                                     SpliceSite *acceptor = acceptors.a + j;
                                     NonCodingRegion ncr = {
+                                        1,
                                         { donor->position, acceptor->position },
                                         { canonical_donor->canonical_position, canonical_acceptor->canonical_position },
                                         donor,
@@ -3205,6 +3244,7 @@ int main(int argc, char *argv[]) {
                             // Add UTRs
                             if (ei == last_cds) { // 5' UTR
                                 NonCodingRegion ncr = {
+                                    1,
                                     { gene_end, e->cds->start },
                                     { gene_end, e->cds->start },
                                     NULL,
@@ -3219,6 +3259,7 @@ int main(int argc, char *argv[]) {
                             }
                             if (ei == first_cds) { // 3' UTR
                                 NonCodingRegion ncr = {
+                                    1,
                                     { e->cds->end,  gene->coords.start },
                                     { e->cds->end, gene->coords.start },
                                     NULL,
@@ -3248,6 +3289,7 @@ int main(int argc, char *argv[]) {
                             // If there are no valid splicing pairs, in a +- 15 bp window around the canonicals
                             if (lost_donor && lost_acceptor) {
                                 NonCodingRegion ncr = {
+                                    0,
                                     { canonical_donor->position, canonical_donor->position },
                                     { canonical_donor->canonical_position, canonical_acceptor->canonical_position },
                                     canonical_donor,
@@ -3319,6 +3361,7 @@ int main(int argc, char *argv[]) {
                                 for (int i = 0; i < donors.n; i++) {
                                     SpliceSite *donor = donors.a + i;
                                     NonCodingRegion ncr = {
+                                        0,
                                         { donor->position, donor->position },
                                         { canonical_donor->canonical_position, canonical_acceptor->canonical_position },
                                         donor,
@@ -3332,6 +3375,7 @@ int main(int argc, char *argv[]) {
                                 for (int i = 0; i < acceptors.n; i++) {
                                     SpliceSite *acceptor = acceptors.a + i;
                                     NonCodingRegion ncr = {
+                                        0,
                                         { canonical_donor->position, canonical_donor->position },
                                         { canonical_donor->canonical_position, canonical_acceptor->canonical_position },
                                         canonical_donor,
@@ -3351,6 +3395,7 @@ int main(int argc, char *argv[]) {
                                 for (int j = 0; j < acceptors.n; j++) {
                                     SpliceSite *acceptor = acceptors.a + j;
                                     NonCodingRegion ncr = {
+                                        1,
                                         { donor->position, acceptor->position },
                                         { canonical_donor->canonical_position, canonical_acceptor->canonical_position },
                                         donor,
@@ -3448,16 +3493,30 @@ int main(int argc, char *argv[]) {
                         NonCodingRegions hap_ncrs;
                         kv_init(hap_ncrs);
 
-                        for (int i = 0; i < ncrs->n; i++) {
-                            NonCodingRegion ncr = kv_A(*ncrs, i);
+                        if (t->strand == STRAND_FWD) {
+                            for (int i = 0; i < ncrs->n; i++) {
+                                NonCodingRegion ncr = kv_A(*ncrs, i);
 
-                            ncr.coords.start -= haplotype_offset(&hap_in, (Range) { gene->coords.start, ncr.coords.start + 1 });
-                            ncr.coords.end -= haplotype_offset(&hap_in, (Range) { gene->coords.start, ncr.coords.end });
+                                ncr.coords.start -= haplotype_offset(&hap_in, (Range) { gene->coords.start, ncr.coords.start + 1 });
+                                ncr.coords.end -= haplotype_offset(&hap_in, (Range) { gene->coords.start, ncr.coords.end });
 
-                            ncr.canonical_coords.start -= haplotype_offset(&hap_in, (Range) { gene->coords.start, ncr.canonical_coords.start + 1});
-                            ncr.canonical_coords.end -= haplotype_offset(&hap_in, (Range) { gene->coords.start, ncr.canonical_coords.end });
+                                ncr.canonical_coords.start -= haplotype_offset(&hap_in, (Range) { gene->coords.start, ncr.canonical_coords.start + 1});
+                                ncr.canonical_coords.end -= haplotype_offset(&hap_in, (Range) { gene->coords.start, ncr.canonical_coords.end });
 
-                            kv_push(NonCodingRegion, hap_ncrs, ncr);
+                                kv_push(NonCodingRegion, hap_ncrs, ncr);
+                            }
+                        } else {
+                            for (int i = 0; i < ncrs->n; i++) {
+                                NonCodingRegion ncr = kv_A(*ncrs, i);
+
+                                ncr.coords.start -= haplotype_offset(&hap_in, (Range) { gene->coords.start, ncr.coords.start - 1 });
+                                ncr.coords.end -= haplotype_offset(&hap_in, (Range) { gene->coords.start, ncr.coords.end });
+
+                                ncr.canonical_coords.start -= haplotype_offset(&hap_in, (Range) { gene->coords.start, ncr.canonical_coords.start - 1});
+                                ncr.canonical_coords.end -= haplotype_offset(&hap_in, (Range) { gene->coords.start, ncr.canonical_coords.end });
+
+                                kv_push(NonCodingRegion, hap_ncrs, ncr);
+                            }
                         }
 
                         Range *isoform_bounds = NULL;
@@ -3578,7 +3637,7 @@ int main(int argc, char *argv[]) {
 
                             int64_t isoform_position;
                             int allele_lengths[2];
-                            const int coding = !get_range_in_isoform(hap_r->v, &hap_ncrs, &hap_in, t->strand, gene->coords, &isoform_position, allele_lengths);
+                            const int coding = !get_range_in_isoform(hap_r->v, ncrs, &hap_ncrs, &hap_in, t->strand, gene->coords, &isoform_position, allele_lengths);
                             // isoform_position -= haplotype_offset(&hap_in, (Range) { gene->coords.start, variant_to_range(hap_r->v, 0).start });
 
 

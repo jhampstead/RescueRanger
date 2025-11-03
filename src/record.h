@@ -209,6 +209,7 @@ typedef struct Record {
 typedef kvec_t(Record *) Records;
 
 typedef struct NonCodingRegion {
+    int is_used;
     Range coords;
     Range canonical_coords;
     SpliceSite *donor, *acceptor;
