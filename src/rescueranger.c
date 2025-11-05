@@ -1009,13 +1009,12 @@ static int set_transcript_exons(Transcript *transcript, const char *chr, const g
         transcript->exons[transcript->nexons] = malloc(sizeof(Exon));
         // Does this exon have a CDS?
         Range cds_intersection = {0};
-        if (cds != NULL) intersect_ranges(*exon, *cds, &cds_intersection);
-        if (range_len(cds_intersection) == 0) {
+        if (cds == NULL || !intersect_ranges(*exon, (Range) { cds->start, cds->end + 1}, &cds_intersection)) {
             *transcript->exons[transcript->nexons++] = (Exon) { NULL, exon, NULL, NULL, false, false};
             continue;
         }
 
-        *transcript->exons[transcript->nexons++] = (Exon) { cds, exon, NULL, NULL, constitutive[ci], range_len(*cds) % 3 == 0};
+        *transcript->exons[transcript->nexons++] = (Exon) { cds, exon, NULL, NULL, constitutive[ci], (range_len(*cds) + 1) % 3 == 0};
         ci++;
     }
 
