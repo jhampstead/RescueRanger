@@ -672,7 +672,8 @@ static int get_position_in_isoform(const int64_t position, const NonCodingRegion
 
             if (position >= ncr.coords.end) {
                 if (ncr.is_utr) continue;
-                skipped_bases += range_len(ncr.coords) - 1;
+                const int64_t length = range_len(ncr.coords) - 1;
+                skipped_bases += length > 0 ? length : 0;
                 continue;
             }
 
@@ -690,7 +691,8 @@ static int get_position_in_isoform(const int64_t position, const NonCodingRegion
 
             if (position <= ncr.coords.end) {
                 if (ncr.is_utr) continue;
-                skipped_bases += range_len(ncr.coords) - 1;
+                const int64_t length = range_len(ncr.coords) - 1;
+                skipped_bases += length > 0 ? length : 0;
                 continue;
             }
 
@@ -3668,38 +3670,28 @@ int main(int argc, char *argv[]) {
                             }
 
                             if (ncr.donor != NULL && ncr.acceptor != NULL && ncr.donor->posterior_probability == 0 && ncr.acceptor->posterior_probability == 0) {
-                                {
-                                    int64_t position = ncr.canonical_coords.start;
-                                    int offset = -(range_len(ncr.canonical_coords) - 1); // INTRON_RETENTION
+                                int64_t position = ncr.canonical_coords.start;
+                                int offset = -(range_len(ncr.canonical_coords) - 1); // INTRON_RETENTION
 
-                                    int coding = !get_position_in_isoform(position, ncrs, &hap_in, t->strand, gene->coords, &isoform_position);
-                                    isoform_position -= haplotype_offset(&hap_in, (Range) { gene->coords.start, position - 1 });
+                                int coding = !get_position_in_isoform(position, ncrs, &hap_in, t->strand, gene->coords, &isoform_position);
+                                isoform_position -= haplotype_offset(&hap_in, (Range) { gene->coords.start, position - 1 });
 
-                                    Records *records = (Records *) ncr.donor->records_ptr;
-                                    for (int j = 0; j < records->n; j++) {
-                                        Record *rr = kv_A(*records, j);
+                                Records *donor_records = (Records *) ncr.donor->records_ptr;
+                                for (int j = 0; j < donor_records->n; j++) {
+                                    Record *rr = kv_A(*donor_records, j);
 
-                                        IsoformVariant variant = {coding, 0, SPLICE, isoform_position, offset, offset, rr };
-                                        kv_push(IsoformVariant, splice_shifts, variant);
-                                        num_splice_sites++;
-                                    }
+                                    IsoformVariant variant = {coding, 0, SPLICE, isoform_position, offset, offset, rr };
+                                    kv_push(IsoformVariant, splice_shifts, variant);
+                                    num_splice_sites++;
                                 }
 
-                                {
-                                    int64_t position = ncr.canonical_coords.end;
-                                    int offset = -(range_len(ncr.canonical_coords) - 1); // INTRON_RETENTION
+                                Records *acceptor_records = (Records *) ncr.acceptor->records_ptr;
+                                for (int j = 0; j < acceptor_records->n; j++) {
+                                    Record *rr = kv_A(*acceptor_records, j);
 
-                                    int coding = !get_position_in_isoform(position, ncrs, &hap_in, t->strand, gene->coords, &isoform_position);
-                                    isoform_position -= haplotype_offset(&hap_in, (Range) { gene->coords.start, position - 1 });
-
-                                    Records *records = (Records *) ncr.acceptor->records_ptr;
-                                    for (int j = 0; j < records->n; j++) {
-                                        Record *rr = kv_A(*records, j);
-
-                                        IsoformVariant variant = {coding, 0, SPLICE, isoform_position, offset, offset, rr };
-                                        kv_push(IsoformVariant, splice_shifts, variant);
-                                        num_splice_sites++;
-                                    }
+                                    IsoformVariant variant = {coding, 0, SPLICE, isoform_position, offset, offset, rr };
+                                    kv_push(IsoformVariant, splice_shifts, variant);
+                                    num_splice_sites++;
                                 }
                                 continue;
                             } else if (ncr.donor != NULL && ncr.donor->posterior_probability == 0) {
@@ -3719,7 +3711,7 @@ int main(int argc, char *argv[]) {
                                 }
                                 continue;
                             } else if (ncr.acceptor != NULL && ncr.acceptor->posterior_probability == 0) {
-                                int64_t position = ncr.canonical_coords.end;
+                                int64_t position = ncr.canonical_coords.start;
                                 int offset = -(range_len(ncr.canonical_coords) - 1); // INTRON_RETENTION
 
                                 int coding = !get_position_in_isoform(position, ncrs, &hap_in, t->strand, gene->coords, &isoform_position);
@@ -3742,7 +3734,7 @@ int main(int argc, char *argv[]) {
                             }
                             int donor_shift = strand_correction * (ncr.coords.start - ncr.canonical_coords.start);
                             if (ncr.donor != NULL) {
-                                int64_t position = ncr.coords.start;
+                                int64_t position = donor_modified_bases < 0 ? ncr.canonical_coords.start : ncr.coords.start;
                                 int64_t isoform_position;
 
                                 int coding = !get_position_in_isoform(position, ncrs, &hap_in, t->strand, gene->coords, &isoform_position);
@@ -3985,7 +3977,27 @@ int main(int argc, char *argv[]) {
                                     int induced_frameshift_rescue = 0;
                                     // int inserted_bases = 0;
                                     // int deleted_bases = 0;
+
+                                    kvec_t(IsoformVariant) unique_shifts;
+                                    kv_init(unique_shifts);
+
                                     for (int i = 0; i < shifts.n; i++) {
+                                        IsoformVariant shift = kv_A(shifts, i);
+
+                                        int already_present = 0;
+                                        for (int j = 0; j < unique_shifts.n; j++) {
+                                            IsoformVariant unique_shift = kv_A(unique_shifts, j);
+                                            if (shift.shift_type == unique_shift.shift_type && shift.seq_pos == unique_shift.seq_pos && shift.modified_bases == unique_shift.modified_bases) {
+                                                already_present = 1;
+                                            }
+                                        }
+
+                                        if (already_present) {
+                                            kv_push(IsoformVariant, unique_shifts, shift);
+                                        }
+                                    }
+
+                                    for (int i = 0; i < unique_shifts.n; i++) {
                                         IsoformVariant shift = kv_A(shifts, i);
                                         if (shift.shift == 0) continue; // Rescued splice, do nothing
                                         if (abs(shift.shift) > MAX_FRAMESHIFT_RADIUS) continue;
@@ -4040,6 +4052,8 @@ int main(int argc, char *argv[]) {
                                         // inserted_bases = 0;
                                         // deleted_bases = 0;
                                     }
+
+                                    kv_destroy(unique_shifts);
                                 }
                             }
 
