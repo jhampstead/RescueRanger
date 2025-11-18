@@ -3992,7 +3992,7 @@ int main(int argc, char *argv[]) {
                                             }
                                         }
 
-                                        if (already_present) {
+                                        if (!already_present) {
                                             kv_push(IsoformVariant, unique_shifts, shift);
                                         }
                                     }
@@ -4042,6 +4042,8 @@ int main(int argc, char *argv[]) {
                                                 possible_induced_sequence.start = (int) ((shifted_isoform.end - shift_start - 1) / 3) * 3;
                                                 possible_induced_sequence.end = (shifted_isoform.end - shift_start - 1) + affected_bases;
                                             }
+
+                                            affected_bases = range_len(possible_induced_sequence);
 
                                         }
 
