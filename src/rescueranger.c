@@ -4109,7 +4109,7 @@ int main(int argc, char *argv[]) {
                                     if (tscript == NULL || tscript->id != t->id) continue;
 
                                     TscriptCsqs *csq = kv_A(*upstream_shift.r->vep, ti2);
-                                    if (!(upstream_shift.r->isoforms->valid && (csq->triggers[SPLICE_TRIGGER] || csq->triggers[FRAMESHIFT_TRIGGER] || csq->triggers[STOP_TRIGGER]))) continue;
+                                    if (!(csq->triggers[SPLICE_TRIGGER] || csq->triggers[FRAMESHIFT_TRIGGER] || csq->triggers[STOP_TRIGGER])) continue;
 
                                     set_record_flag(upstream_shift.r, ti2, phase, UPSTREAM_PTV);
                                 }
