@@ -550,7 +550,7 @@ static int get_range_in_isoform(const bcf1_t *v, const NonCodingRegions *ncrs, c
             if (!ncr.is_used) continue;
 
             // Convert to actual start of intron, instead of closed end of exon (not applicable if it's a UTR)
-            if (!ncr.is_utr) {
+            if (ncr.is_utr != UTR5) {
                 ncr.coords.start++;
                 hap_ncr.coords.start++;
             }
@@ -611,7 +611,7 @@ static int get_range_in_isoform(const bcf1_t *v, const NonCodingRegions *ncrs, c
             if (!ncr.is_used) continue;
 
             // Convert to actual start of intron, instead of closed end of exon
-            if (!ncr.is_utr) { 
+            if (ncr.is_utr != UTR5) { 
                 ncr.coords.start--;
                 hap_ncr.coords.start--;
             }
@@ -1341,6 +1341,8 @@ void store_splice_sites(SpliceProbability prediction, int *predict_for_pair, int
             splice_sites->canonical_donors[0].ref_prior_probability = prediction.ref_prior_probability;
             splice_sites->canonical_donors[0].prior_probability = prediction.prior_probability;
             splice_sites->canonical_donors[0].posterior_probability = prediction.posterior_probability;
+            *predict_for_pair = 1;
+            *predict_for_competitor = 1;
         } else if (splice_sites->canonical_donors[0].gff_canonical && check_proximity(prediction.position, splice_sites->canonical_donors[0].position)) { // If canonical exists and site is compensatory for canonical
             // Check if prediction position already exists as a canonical donor site
             int canonical_donor_exists = 0;
@@ -1362,7 +1364,7 @@ void store_splice_sites(SpliceProbability prediction, int *predict_for_pair, int
                 for (int i = 0; i < splice_sites->n_canonical_donors; i++) {
                     if (splice_sites->canonical_donors[i].position == prediction.position) {
                         kv_push_new_record((Records *) splice_sites->canonical_donors[0].records_ptr, prediction.record);
-                        splice_sites->canonical_donors[i].canonical_position = prediction.canonical_position;
+                        // splice_sites->canonical_donors[i].canonical_position = prediction.canonical_position;
                         splice_sites->canonical_donors[i].predicted = 1;
                         splice_sites->canonical_donors[i].ref_prior_probability = prediction.ref_prior_probability;
                         splice_sites->canonical_donors[i].prior_probability = prediction.prior_probability;
@@ -1413,6 +1415,8 @@ void store_splice_sites(SpliceProbability prediction, int *predict_for_pair, int
             splice_sites->canonical_acceptors[0].ref_prior_probability = prediction.ref_prior_probability;
             splice_sites->canonical_acceptors[0].prior_probability = prediction.prior_probability;
             splice_sites->canonical_acceptors[0].posterior_probability = prediction.posterior_probability;
+            *predict_for_pair = 1;
+            *predict_for_competitor = 1;
         } else if (splice_sites->canonical_acceptors[0].gff_canonical & check_proximity(prediction.position, splice_sites->canonical_acceptors[0].position)) { // If canonical exists and site is compensatory for canonical
             // Check if prediction position already exists as a canonical acceptor site
             int canonical_acceptor_exists = 0;
@@ -2085,7 +2089,7 @@ int main(int argc, char *argv[]) {
         return status;
     }
 
-    // log_debug("Loading SpliceAI models...");
+    log_debug("Loading SpliceAI models...");
     Model *models = load_models(args.models);
 
     // Parse gff file
@@ -2123,6 +2127,7 @@ int main(int argc, char *argv[]) {
     RecordBlock2 block = { 0 };
 
     while(get_next_record_block(fp_in, hdr, vep_fmt, gff, &buffer, &block) == 0) {
+        // If there are no coding variants in the entire block, there's nothing to do
         if (!block.is_coding) {
             for (int i = 0; i < block.records.n; i++) {
                 bcf_write(fp_out, hdr, kv_A(block.records, i)->v);
@@ -2131,11 +2136,14 @@ int main(int argc, char *argv[]) {
             continue;
         }
 
+        // TODO: Functionality: If a record is coding, indels should be stripped of their proceeding reference bases to make overlaps less fucked up
+        // This has mayor implications for downstream code, so should go into V2.
+
         // Split on phase
         // This is done before setting transcripts and genes so that each has their own copy for isoforms and flags
         for (int phase = 0; phase < NUM_PHASES; phase++) {
 
-            // Find matching gff transcripts/genes for records in batch
+            // Find matching gff transcripts/genes for records in batch. TODO: Refactor into separate function
             khash_t(GeneHash) *genes = kh_init_GeneHash();
             khash_t(TranscriptHash) *transcripts = kh_init_TranscriptHash();
             for (int i = 0; i < block.records.n; i++) {
@@ -2144,7 +2152,7 @@ int main(int argc, char *argv[]) {
             }
 
 
-            // Triggers need to checked per transcript
+            // Triggers need to checked per transcript. TODO: Refactor into separate function
             for (khiter_t k = kh_begin(transcripts); k != kh_end(transcripts); ++k) {
                 if (!kh_exist(transcripts, k)) continue;
 
@@ -2167,15 +2175,13 @@ int main(int argc, char *argv[]) {
                     }
                 }
 
+                // TODO: Separate rescue and induced ptv triggers to get multi purpose functions for better readability
                 set_vep_triggers(records, transcript->id);
                 set_af_triggers(records, hdr, args.use_af, args.af_threshold);
                 set_mnv_triggers(records, transcript);
 
                 kv_destroy(records);
             }
-
-            kh_destroy_GeneHash(genes);
-            kh_destroy_TranscriptHash(transcripts);
 
             // Get records for phase
             Records records;
@@ -2381,8 +2387,8 @@ int main(int argc, char *argv[]) {
                     get_haplotype_sequence(gene->seq, &just_alt, gene->coords, &alt);
 
                     // Haplotype ref/alt sequences
-                    kstring_t hap_ref;
-                    get_haplotype_sequence(gene->seq, &hap_ex, gene->coords, &hap_ref);
+                    // kstring_t hap_ref;
+                    // get_haplotype_sequence(gene->seq, &hap_ex, gene->coords, &hap_ref);
 
                     kstring_t hap_alt;
                     get_haplotype_sequence(gene->seq, &hap_in, gene->coords, &hap_alt);
@@ -2991,7 +2997,7 @@ int main(int argc, char *argv[]) {
                     free(hap_alt_predictions);
                     free(corrected_hap_alt_predictions);
 
-                    free(hap_ref.s);
+                    free(alt.s);
                     free(hap_alt.s);
 
                     kv_destroy(hap_in);
@@ -3816,8 +3822,8 @@ int main(int argc, char *argv[]) {
                             IsoformVariant shift = kv_A(shifts, i);
                             if (shift.r == NULL) continue;
 
-                            int vposition = shift.r->v->pos - haplotype_offset(&hap_in, (Range) { gene->coords.start, shift.r->v->pos });
-                            if ((shift.shift_type == SPLICE && shift.shift != 0) || (shift.shift_type == INDEL && shift.coding && vposition >= shifted_isoform.start && vposition < shifted_isoform.end)) {
+                            // int vposition = shift.r->v->pos - haplotype_offset(&hap_in, (Range) { gene->coords.start, shift.r->v->pos });
+                            if ((shift.shift_type == SPLICE && shift.shift != 0) || (shift.shift_type == INDEL && shift.coding)) {
                                 kv_A(shifts, j++) = kv_A(shifts, i);
                             }
                         }
@@ -3841,8 +3847,8 @@ int main(int argc, char *argv[]) {
 
                         int affected_bases = 0;
                         int rescued = 0;
-                        int stop_checked = 0, frameshift_checked = 0;
-                        int stop_rescued = 0;
+                        int unrescued_stop = 0, frameshift_checked = 0;
+                        int rescued_stop = 0;
                         enum RescueType rescue_type = NO_RESCUE;
                         enum PTVType ptv_type = NO_PTV;
                         int touched = 0;
@@ -3850,7 +3856,7 @@ int main(int argc, char *argv[]) {
                             IsoformVariant iso_shift = kv_A(shifts, ri);
 
                             if (iso_shift.r != r) continue;
-                            if (stop_checked) continue;
+                            if (unrescued_stop) continue;
 
                             // Check if constutive and in frame
                             for (int ei = 0; ei < t->nexons; ei++) {
@@ -3896,10 +3902,10 @@ int main(int argc, char *argv[]) {
                                     if (rescue_type == NO_RESCUE) {
                                         rescue_type = COMPLETE_RESCUE;
                                         rescued = 1;
-                                        stop_rescued = 1;
+                                        rescued_stop = 1;
                                     }
                                 } else if (csq->triggers[STOP_TRIGGER] == STOP_RESCUE_VALUE) {
-                                    stop_checked = 1;
+                                    unrescued_stop = 1;
                                 }
 
                                 if (is_stop && (csq->triggers[STOP_TRIGGER] == STOP_GAIN_VALUE)) {
@@ -3910,7 +3916,7 @@ int main(int argc, char *argv[]) {
                             int should_check_induced = 0;
                             Range possible_induced_sequence = {0};
 
-                            if (csq->triggers[SPLICE_TRIGGER] && !stop_checked && iso_shift.shift_type == SPLICE) {
+                            if (csq->triggers[SPLICE_TRIGGER] && !unrescued_stop && iso_shift.shift_type == SPLICE) {
                                 if (iso_shift.shift == 0) {
                                     rescue_type = COMPLETE_RESCUE;
                                     rescued = 1;
@@ -3955,7 +3961,7 @@ int main(int argc, char *argv[]) {
                                 }
                             }
 
-                            if ((csq->triggers[FRAMESHIFT_TRIGGER] || csq->triggers[SPLICE_TRIGGER]) && (ptv_type == FRAMESHIFT || ptv_type == NO_RESCUE || rescued == 1) && !stop_checked) {
+                            if ((csq->triggers[FRAMESHIFT_TRIGGER] || csq->triggers[SPLICE_TRIGGER]) && (ptv_type == FRAMESHIFT || ptv_type == NO_RESCUE || rescued == 1) && !unrescued_stop) {
                                 if (iso_shift.shift == 0) continue;
                                 frameshift_checked = 1;
 
@@ -4084,7 +4090,7 @@ int main(int argc, char *argv[]) {
 
                         }
 
-                        if (!touched && !stop_checked && !frameshift_checked && rescue_type == NO_RESCUE) {
+                        if (!touched && !unrescued_stop && !frameshift_checked && rescue_type == NO_RESCUE) {
                             rescued = 1;
                             rescue_type = COMPLETE_RESCUE;
                         }
@@ -4144,6 +4150,10 @@ int main(int argc, char *argv[]) {
                         isoform->ptv_type = ptv_type;
 
                         isoforms.isoforms[isoforms.n_isoforms++] = isoform;
+
+                        kv_destroy(hap_ncrs);
+
+                        free(spliced_seq.s);
                     }
 
                     // Calculate isoforms posterior
@@ -4168,9 +4178,42 @@ int main(int argc, char *argv[]) {
             }
 
 
-
             // Clean up records
             kv_destroy(records);
+
+
+            // Clean up genes and transcripts
+            for (khiter_t k = kh_begin(genes); k != kh_end(genes); ++k) {
+                if (!kh_exist(genes, k)) continue;
+
+                Gene *gene = kh_val(genes, k);
+
+                // TODO: Needs a fix, at this stage gene name is still borrowed by record. Preventing proper release and resulting in a later leak.
+                // free(gene->name);
+                free(gene->seq.s);
+            }
+            kh_destroy_GeneHash(genes);
+
+            for (khiter_t k = kh_begin(transcripts); k != kh_end(transcripts); ++k) {
+                if (!kh_exist(transcripts, k)) continue;
+
+                Transcript *transcript = kh_val(transcripts, k);
+
+                for (int j = 0; j < transcript->nexons; j++) {
+                    Exon *e = transcript->exons[j];
+
+                    // Exon CDS is a pointer, not owner
+
+                    if (e->hap_bounds != NULL) {
+                        free(e->hap_bounds);
+                    }
+
+                    // TODO: Free splice sites
+                }
+                free(transcript->cds);
+                free(transcript);
+            }
+            kh_destroy_TranscriptHash(transcripts);
         }
 
 

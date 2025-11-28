@@ -1,4 +1,5 @@
 #include "record.h"
+#include "klib/kvec.h"
 #include <stdlib.h>
 
 const int n_csq_fields = 29;
@@ -251,6 +252,7 @@ Record *init_record(bcf1_t *v, VepCsqs *csqs) {
 
 void destroy_record(Record *r) {
     bcf_destroy(r->v);
+
     if (r->vep != NULL) {
         destroy_consequence_predictions(r->c);
         destroy_vep_csqs(r->vep);
@@ -261,9 +263,26 @@ void destroy_record(Record *r) {
         free(r->tscripts);
     }
 
+    if (r->transcript_genes != NULL) {
+        kv_destroy(*r->transcript_genes);
+        free(r->transcript_genes);
+    }
+
     if (r->genes != NULL) {
         kv_destroy(*r->genes);
         free(r->genes);
+    }
+
+    if (r->isoforms != NULL) {
+        // TODO: Free individual isoforms
+        free(r->isoforms);
+    }
+
+    // If native scores are set, all three are set
+    if (r->native_scores != NULL) {
+        free(r->native_scores);
+        free(r->diff_scores);
+        free(r->haplotype_scores);
     }
 
     free(r);
