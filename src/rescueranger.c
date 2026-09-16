@@ -18,12 +18,12 @@
 #include <htslib/hts.h>
 #include <htslib/khash.h>
 #include <htslib/khash_str2int.h>
+#include <htslib/regidx.h>
 #include <htslib/vcf.h>
 #include <htslib/faidx.h>
 #include <cpliceai/predict.h>
 
 #include "bcftools/gff.h"
-#include "bcftools/regidx.h"
 
 #include "logging/log.h"
 #include "region.h"
@@ -117,6 +117,26 @@
 #define INFO_TAGS { SPLICEAI_TAG, SPLICEAI_HAP_TAG, CS_TAG, RESCUE_TAG, RESCUE_PROB_TAG, RESCUE_TYPE_TAG, PTV_TAG, PTV_PROB_TAG, PTV_TYPE_TAG, PREDICTION_FLAGS_TAG }
 #define INFO_TAG_DESCS { SPLICEAI_DESC, SPLICEAI_HAP_DESC, CS_DESC, RESCUE_DESC, RESCUE_PROB_DESC, RESCUE_TYPE_DESC, PTV_DESC, PTV_PROB_DESC, PTV_TYPE_DESC, PREDICTION_FLAGS_DESC }
 
+#define REQUIRED_ARGS \
+    REQUIRED_STRING_ARG(variants, "variants", "VCF file containing variants to predict for using SpliceAI") \
+    REQUIRED_STRING_ARG(model_dir, "model_dir", "Directory containing SpliceAI models") \
+    REQUIRED_STRING_ARG(reference_bin, "reference_scores", "Binary file containing reference scores") \
+    REQUIRED_STRING_ARG(gff, "gff_file", "GFF file matching the provided VCF file") \
+    REQUIRED_STRING_ARG(fasta, "fasta_file", "Reference fasta file matching the provided VCF file") \
+    REQUIRED_STRING_ARG(variants_output, "output", "Annotated VCF") \
+    REQUIRED_STRING_ARG(scores_output, "output", "TSV with raw SpliceAI scores")
+
+#define OPTIONAL_ARGS \
+    OPTIONAL_STRING_ARG(af_tag, "INFO/AF", "--af-tag", "tag", "Allele frquency tag") \
+    OPTIONAL_STRING_ARG(gt_tag, "FORMAT/GT", "--gt-tag", "tag", "Phased genotype tag") \
+    OPTIONAL_DOUBLE_ARG(af_threshold, 0.01, "--af-threshold", "threshold", "Allele frequency threshold", 3) \
+    OPTIONAL_INT_ARG(include_unphased, -1, "--max-unphased", "limit", "Maximum unphased variants on haplotype (-1 for unlimited)")
+
+#define BOOLEAN_ARGS \
+    BOOLEAN_ARG(help, "-h", "Show help")
+
+#include "easyargs.h"
+
 typedef struct {
     char *models;
     char *gff;
@@ -159,16 +179,10 @@ typedef struct SpliceProbability {
 } SpliceProbability;
 
 typedef kvec_t(SpliceProbability) SpliceProbabilities;
-
-typedef struct RecordBlock {
-    int is_coding;
-    Records *records;
-} RecordBlock;
-
 typedef struct RecordBlock2 {
     int is_coding;
     Records records;
-} RecordBlock2;
+} RecordBlock;
 
 typedef kvec_t(Records *) PhasedRecords;
 
@@ -1616,8 +1630,8 @@ int buffer_record(htsFile *fp, bcf_hdr_t *hdr, RecordBuffer *buffer) {
     return 0;
 }
 
-int get_next_record_block(htsFile *fp, bcf_hdr_t *hdr, HdrFormat *vep_fmt, gff_t *gff, RecordBuffer *buffer, RecordBlock2 *block_out) {
-    RecordBlock2 block = {0};
+int RecordBlock_next(htsFile *fp, bcf_hdr_t *hdr, HdrFormat *vep_fmt, gff_t *gff, RecordBuffer *buffer, RecordBlock *block_out) {
+    RecordBlock block = {0};
     kv_init(block.records);
 
     IRegion batch_region = {0};
@@ -1628,7 +1642,7 @@ int get_next_record_block(htsFile *fp, bcf_hdr_t *hdr, HdrFormat *vep_fmt, gff_t
         int is_non_coding = find_gene_region_for_variant(buffer->v, hdr, gff, &record_region);
         if (is_non_coding) {
             if (block.records.n == 0) {
-                kv_push(Record *, block.records, init_record(buffer->v, NULL));
+                kv_push(Record *, block.records, Record_init(buffer->v, NULL));
                 buffer->unused = false;
             }
 
@@ -1654,7 +1668,7 @@ int get_next_record_block(htsFile *fp, bcf_hdr_t *hdr, HdrFormat *vep_fmt, gff_t
         }
 
         VepCsqs *vep_csqs = parse_vep_transcript_consequences(buffer->v, vep_fmt, hdr);
-        kv_push(Record *, block.records, init_record(buffer->v, vep_csqs));
+        kv_push(Record *, block.records, Record_init(buffer->v, vep_csqs));
         buffer->unused = false;
     }
 
@@ -1666,9 +1680,9 @@ int get_next_record_block(htsFile *fp, bcf_hdr_t *hdr, HdrFormat *vep_fmt, gff_t
     return 1;
 }
 
-void destroy_record_block(RecordBlock2 batch) {
+void RecordBlock_destroy(RecordBlock batch) {
     for (int i = 0; i < batch.records.n; i++) {
-        destroy_record(kv_A(batch.records, i));
+        Record_destroy(kv_A(batch.records, i));
     }
     kv_destroy(batch.records);
 }
@@ -2007,90 +2021,19 @@ void print_usage(const char *prog_name) {
     printf("  -h, --help          Show this help message\n");
 }
 
-int parse_args(int argc, char *argv[], Arguments *args) {
-
-    // Set default values
-    args->use_af = AF_FIELD;
-    args->use_gt = "GT";
-    args->af_threshold = AF_THRESHOLD;
-    // args->max_unphased = 2;
-    args->include_unphased = 0;
-
-    struct option long_options[] = {
-        {"models", required_argument, 0, 'm'},
-        {"gff", required_argument, 0, 'g'},
-        {"reference", required_argument, 0, 'r'},
-        {"in", required_argument, 0, 'i'},
-        {"out", required_argument, 0, 'o'},
-        {"scores", required_argument, 0, 's'},
-        {"use-af", required_argument, 0, 0},
-        {"use-gt", required_argument, 0, 0},
-        {"af-threshold", required_argument, 0, 0},
-        {"include-unphased", no_argument, &args->include_unphased, 1},
-        // {"max-unphased", required_argument, 0, 0},
-        {"help", no_argument, 0, 'h'},
-        {0, 0, 0, 0}
-    };
-
-    if (argc == 1) {
-        print_usage(argv[0]);
-        return EXIT_FAILURE;
-    }
-
-    int option_index = 0;
-    int c;
-
-    while ((c = getopt_long(argc, argv, "m:g:r:i:o:s:h", long_options, &option_index)) != -1) {
-        switch (c) {
-            case 'm': args->models = optarg; break;
-            case 'g': args->gff = optarg; break;
-            case 'r': args->reference = optarg; break;
-            case 'i': args->in = optarg; break;
-            case 'o': args->out = optarg; break;
-            case 's': args->scores = optarg; break;
-            case 'h':
-                print_usage(argv[0]);
-                exit(EXIT_SUCCESS);
-            case 0:
-                if (strcmp("use-af", long_options[option_index].name) == 0)
-                    args->use_af = optarg;
-                else if (strcmp("use-gt", long_options[option_index].name) == 0)
-                    args->use_gt = optarg;
-                else if (strcmp("af-threshold", long_options[option_index].name) == 0)
-                    args->af_threshold = strtof(optarg, NULL);
-                // else if (strcmp("max-unphased", long_options[option_index].name) == 0)
-                //     args->max_unphased = atoi(optarg);
-                break;
-            default:
-                print_usage(argv[0]);
-                return EXIT_FAILURE;
-        }
-    }
-
-    // Check required arguments
-    if (!args->models || !args->gff || !args->reference || !args->in || !args->out || !args->scores) {
-        fprintf(stderr, "Error: Missing required arguments\n");
-        print_usage(argv[0]);
-        return EXIT_FAILURE;
-    }
-
-    return EXIT_SUCCESS;
-}
-
 int main(int argc, char *argv[]) {
     log_set_level(3);
     setenv("TF_CPP_MIN_LOG_LEVEL", "1", 1);
 
     // Parse arguments
-    Arguments args = {0};
-    int status = parse_args(argc, argv, &args);
-
-    if (status != EXIT_SUCCESS) {
-        return status;
+    args_t args = make_default_args();
+    if (!parse_args(argc, argv, &args) || args.help) {
+        print_help(argv[0]);
+        return EXIT_FAILURE;
     }
 
     log_debug("Loading SpliceAI models...");
-    Model *models = load_models(args.models);
+    Model *models = load_models(args.model_dir);
 
     // Parse gff file
     const char *gff_path = args.gff;
@@ -2099,41 +2042,67 @@ int main(int argc, char *argv[]) {
     gff_parse(gff);
 
     // Open fasta file
-    const char *fasta_path = args.reference;
+    const char *fasta_path = args.fasta;
     log_debug("Loading FASTA from: %s", fasta_path);
     faidx_t *fai = fai_load(fasta_path);
 
     // Open input VCF
-    const char *input_vcf_path = args.in;
+    const char *input_vcf_path = args.variants;
     log_debug("Loading VCF from: %s", input_vcf_path);
     htsFile *fp_in = hts_open(input_vcf_path, "r");
     bcf_hdr_t *hdr = bcf_hdr_read(fp_in);
     HdrFormat *vep_fmt = parse_csq_hdr_fmt(hdr);
 
     // Open output VCF
-    const char *output_vcf_path = args.out;
+    const char *output_vcf_path = args.variants_output;
     log_debug("Saving output to: %s", output_vcf_path);
     htsFile *fp_out = hts_open(output_vcf_path, "w");
     add_rescueranger_tags(hdr);
     bcf_hdr_write(fp_out, hdr);
 
     // Open raw scores file
-    const char *output_tsv_path = args.scores;
+    const char *output_tsv_path = args.scores_output;
     log_debug("Saving raw scores to: %s", output_tsv_path);
     FILE *scores_tsv = fopen(output_tsv_path, "w");
     fprintf(scores_tsv, "CHR\tPOS\tREF\tALT\tGENE\tTRANSCRIPT\tPHASE\tOFFSET\tSOURCE\tTYPE\tDONOR\tACCEPTOR\tNEITHER\n");
 
     RecordBuffer buffer = { bcf_init(), false };
-    RecordBlock2 block = { 0 };
+    RecordBlock block = { 0 };
 
-    while(get_next_record_block(fp_in, hdr, vep_fmt, gff, &buffer, &block) == 0) {
+    while(RecordBlock_next(fp_in, hdr, vep_fmt, gff, &buffer, &block) == 0) {
         // If there are no coding variants in the entire block, there's nothing to do
         if (!block.is_coding) {
             for (int i = 0; i < block.records.n; i++) {
                 bcf_write(fp_out, hdr, kv_A(block.records, i)->v);
             }
-            destroy_record_block(block);
+            RecordBlock_destroy(block);
             continue;
+        }
+
+        // Remove leading reference bases for indels
+        for (int i = 0; i < block.records.n; i++) {
+            Record *record = kv_A(block.records, i);
+
+            bcf_unpack(record->v, BCF_UN_STR);
+            // BCFTools ensures null termination
+            int alen = strlen(record->v->d.allele[1]);
+            if (record->v->rlen == 1 && alen == 1) continue;
+
+            // Store leading reference base for when the record needs to be written.
+            char leading_reference = record->v->d.allele[0][0];
+            record->leading_reference = leading_reference;
+
+            // Shift to remove leading reference base.
+            record->v->d.allele[0] += 1;
+            record->v->d.allele[1] += 1;
+            record->v->pos += 1;
+        }
+
+        for (int i = 0; i < block.records.n; i++) {
+            Record *record = kv_A(block.records, i);
+            bcf_unpack(record->v, BCF_UN_STR);
+
+            log_info("test");
         }
 
         // TODO: Functionality: If a record is coding, indels should be stripped of their proceeding reference bases to make overlaps less fucked up
@@ -2177,7 +2146,7 @@ int main(int argc, char *argv[]) {
 
                 // TODO: Separate rescue and induced ptv triggers to get multi purpose functions for better readability
                 set_vep_triggers(records, transcript->id);
-                set_af_triggers(records, hdr, args.use_af, args.af_threshold);
+                set_af_triggers(records, hdr, args.af_tag, args.af_threshold);
                 set_mnv_triggers(records, transcript);
 
                 kv_destroy(records);
@@ -2698,7 +2667,7 @@ int main(int argc, char *argv[]) {
                                         float *corrected_pair_predictions_hap_alt = match_predictions_to_reference(pair_predictions_hap_alt, pred_range, &hap_in, 303);
 
                                         const char *prediction_names[3] = { "ref", "alt", "hap_alt" };
-                                        const float *predictions[3] = { ref_predictions, corrected_pair_predictions_alt, corrected_pair_predictions_hap_alt};
+                                        const float *predictions[3] = { pair_predictions_ref, corrected_pair_predictions_alt, corrected_pair_predictions_hap_alt};
                                         write_predictions(scores_tsv, chr, pair.position, r->v->d.allele[0], r->v->d.allele[1], gene->name, gff_id2string(gff, 0, t->id), phase+1, "pair", prediction_names, 3, predictions);
 
 
@@ -2775,7 +2744,7 @@ int main(int argc, char *argv[]) {
                                         float *corrected_pair_predictions_hap_alt = match_predictions_to_reference(pair_predictions_hap_alt, pred_range, &hap_in, 303);
 
                                         const char *prediction_names[3] = { "ref", "alt", "hap_alt" };
-                                        const float *predictions[3] = { ref_predictions, corrected_pair_predictions_alt, corrected_pair_predictions_hap_alt};
+                                        const float *predictions[3] = { pair_predictions_ref, corrected_pair_predictions_alt, corrected_pair_predictions_hap_alt};
                                         write_predictions(scores_tsv, chr, pair.position, r->v->d.allele[0], r->v->d.allele[1], gene->name, gff_id2string(gff, 0, t->id), phase+1, "pair", prediction_names, 3, predictions);
 
                                         filter_to_most_likely_prediction(PRED_WIDTH * NUM_SCORES, pair_predictions_ref);
@@ -2855,7 +2824,7 @@ int main(int argc, char *argv[]) {
                                         float *corrected_competitor_predictions_hap_alt = match_predictions_to_reference(competitor_predictions_hap_alt, pred_range, &hap_in, 303);
 
                                         const char *prediction_names[3] = { "ref", "alt", "hap_alt" };
-                                        const float *predictions[3] = { ref_predictions, corrected_competitor_predictions_alt, corrected_competitor_predictions_hap_alt};
+                                        const float *predictions[3] = { competitor_predictions_ref, corrected_competitor_predictions_alt, corrected_competitor_predictions_hap_alt};
                                         write_predictions(scores_tsv, chr, competitor.position, r->v->d.allele[0], r->v->d.allele[1], gene->name, gff_id2string(gff, 0, t->id), phase+1, "competitor", prediction_names, 3, predictions);
 
                                         filter_to_most_likely_prediction(PRED_WIDTH * NUM_SCORES, competitor_predictions_ref);
@@ -2930,7 +2899,7 @@ int main(int argc, char *argv[]) {
                                         float *corrected_competitor_predictions_hap_alt = match_predictions_to_reference(competitor_predictions_hap_alt, pred_range, &hap_in, 303);
 
                                         const char *prediction_names[3] = { "ref", "alt", "hap_alt" };
-                                        const float *predictions[3] = { ref_predictions, corrected_competitor_predictions_alt, corrected_competitor_predictions_hap_alt};
+                                        const float *predictions[3] = { competitor_predictions_ref, corrected_competitor_predictions_alt, corrected_competitor_predictions_hap_alt};
                                         write_predictions(scores_tsv, chr, competitor.position, r->v->d.allele[0], r->v->d.allele[1], gene->name, gff_id2string(gff, 0, t->id), phase+1, "competitor", prediction_names, 3, predictions);
 
                                         filter_to_most_likely_prediction(PRED_WIDTH * NUM_SCORES, competitor_predictions_ref);
@@ -4582,7 +4551,7 @@ int main(int argc, char *argv[]) {
             bcf_write(fp_out, hdr, r->v);
         }
 
-        destroy_record_block(block);
+        RecordBlock_destroy(block);
     }
 
     // Clean up remaining structures
