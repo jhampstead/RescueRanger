@@ -241,8 +241,8 @@ VepCsqs *parse_vep_transcript_consequences(bcf1_t *v, const HdrFormat *vep_fmt, 
 
 void destroy_vep_csqs(VepCsqs *vep_csqs);
 
-Record *init_record(bcf1_t *v, VepCsqs *csqs);
+Record *Record_init(bcf1_t *v, VepCsqs *csqs);
 
-void destroy_record(Record *r);
+void Record_destroy(Record *r);
 
 #endif

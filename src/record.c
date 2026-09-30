@@ -220,7 +220,7 @@ void destroy_vep_csqs(VepCsqs *vep_csqs) {
     free(vep_csqs);
 }
 
-Record *init_record(bcf1_t *v, VepCsqs *csqs) {
+Record *Record_init(bcf1_t *v, VepCsqs *csqs) {
     Record *r = malloc(sizeof(Record));
 
     bcf1_t *v_dup = bcf_dup(v);
@@ -250,7 +250,7 @@ Record *init_record(bcf1_t *v, VepCsqs *csqs) {
     return r;
 }
 
-void destroy_record(Record *r) {
+void Record_destroy(Record *r) {
     bcf_destroy(r->v);
 
     if (r->vep != NULL) {

@@ -7,6 +7,10 @@ Range variant_to_range(const bcf1_t *v, const int allele) {
     return (Range) { v->pos, v->pos + strlen(v->d.allele[allele]) };
 }
 
+bool variant_fits_window(const bcf1_t *v, const int prediction_radius) {
+    return strlen(v->d.allele[1]) <= prediction_radius && v->rlen <= prediction_radius;
+}
+
 int allele_offset(const bcf1_t *v, const int ref_index, const int alt_index, const Range bounds) {
     Range ref = variant_to_range(v, ref_index);
     Range ref_range;
@@ -35,8 +39,8 @@ int haplotype_offset(const Records *rs, const Range bounds) {
     return offset;
 }
 
-int prediction_offset(const bcf1_t *v, const Records *rs) {
-    return haplotype_offset(rs, (Range) { v->pos - 50, v->pos + 51 }); // TODO: Change to a const/defined variable
+int prediction_offset(const bcf1_t *v, const Records *rs, const int prediction_radius) {
+    return haplotype_offset(rs, range_around(v->pos, prediction_radius));
 }
 
 void get_best_insertion_score(const float *insert_start, const int length, float *best) {

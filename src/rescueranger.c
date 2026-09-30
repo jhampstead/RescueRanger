@@ -55,10 +55,6 @@
 #define MAX_FRAMESHIFT_RADIUS 80
 #define MAX_SPLICE_RADIUS 80
 
-#define CAI_DISTANCE 50
-#define PRED_WIDTH 101
-#define WIDTH 10101
-#define VARIANT_POS 5050
 #define SPLICEAI_THRESHOLD 0.8
 #define SPLICEAI_RESCUE_THRESHOLD 0.2
 #define SPLICEAI_CRYPTIC_SPLICE_THRESHOLD 0.5
@@ -127,10 +123,11 @@
     REQUIRED_STRING_ARG(scores_output, "output", "TSV with raw SpliceAI scores")
 
 #define OPTIONAL_ARGS \
-    OPTIONAL_STRING_ARG(af_tag, "INFO/AF", "--af-tag", "tag", "Allele frquency tag") \
+    OPTIONAL_STRING_ARG(af_tag, "INFO/AF", "--af-tag", "tag", "Allele frequency tag") \
     OPTIONAL_STRING_ARG(gt_tag, "FORMAT/GT", "--gt-tag", "tag", "Phased genotype tag") \
     OPTIONAL_DOUBLE_ARG(af_threshold, 0.01, "--af-threshold", "threshold", "Allele frequency threshold", 3) \
-    OPTIONAL_INT_ARG(include_unphased, -1, "--max-unphased", "limit", "Maximum unphased variants on haplotype (-1 for unlimited)")
+    OPTIONAL_INT_ARG(include_unphased, -1, "--max-unphased", "limit", "Maximum unphased variants on haplotype (-1 for unlimited)") \
+    OPTIONAL_UINT_ARG(prediction_radius, 50, "--prediction-radius", "radius", "Prediction window radius in bases (non-default values give scores not comparable to SpliceAI)")
 
 #define BOOLEAN_ARGS \
     BOOLEAN_ARG(help, "-h", "Show help")
@@ -162,6 +159,19 @@ typedef struct {
 //     INTRON_RETENTION,
 //     NONE
 // };
+
+typedef struct {
+    Model     *models;
+    gff_t     *gff;
+    faidx_t   *fai;
+    htsFile   *fp_in;
+    htsFile   *fp_out;
+    /* Read from fp_in, extended with our INFO tags, then written to fp_out. */
+    bcf_hdr_t *hdr;
+    HdrFormat *vep_fmt;
+    FILE      *scores_tsv;
+    int        prediction_radius;
+} Session;
 
 enum SpliceType {
     ACCEPTOR = 1,
@@ -1098,20 +1108,20 @@ int trigger_cryptic_splice(bcf1_t *rec, bcf_hdr_t *hdr) {
     return 0;
 }
 
-float * predict_on_sequence(Model *models, const char *seq, const int width, uint32_t position, Range prediction_boundaries, int strand, Records *rs) {
+float * predict_on_sequence(Model *models, const char *seq, const int width, uint32_t position, Range prediction_boundaries, int strand, Records *rs, const int prediction_radius) {
     int64_t gene_start = prediction_boundaries.start;
     int64_t gene_end = prediction_boundaries.end;
     int64_t vposition = position;
 
     if (rs != NULL) {
-        int start_pred_offset = haplotype_offset(rs, (Range) { vposition - CAI_DISTANCE, vposition });
+        int start_pred_offset = haplotype_offset(rs, range_before(vposition, prediction_radius));
         gene_start -= start_pred_offset;
         gene_end -= (haplotype_offset(rs, prediction_boundaries) - start_pred_offset);
         vposition -= haplotype_offset(rs, (Range) { prediction_boundaries.start, position });
 
     }
-    int32_t start_offset = VARIANT_POS + (gene_start - vposition);
-    int32_t end_offset = VARIANT_POS - (gene_end - vposition);
+    int32_t start_offset = variant_position_in_sequence(prediction_radius) + (gene_start - vposition);
+    int32_t end_offset = variant_position_in_sequence(prediction_radius) - (gene_end - vposition);
 
     const char *shifted_seq = seq - start_offset;
     if (start_offset < 0) start_offset = 0;
@@ -1131,21 +1141,26 @@ void set_record_flag(Record *r, int transcript_index, int phase_index, uint32_t 
 }
 
 void get_prediction_pairs_for_site(int site, float *ref_predictions, size_t ref_len, float *hap_alt_predictions, size_t hap_alt_len, Records *rs, Range pred_range, size_t *map_size, PairPrediction **map) {
-    float ref_site_predictions[ref_len];
+    float *ref_site_predictions = calloc(ref_len, sizeof(float));
     for (int i = 0; i < ref_len; i++) ref_site_predictions[i] = ref_predictions[NUM_SCORES * i + site];
 
-    float ref_site_prediction_posteriors[ref_len];
+    float *ref_site_prediction_posteriors = calloc(ref_len, sizeof(float));
     int n_ref_sites = transform_to_posterior_probabilities(ref_len, ref_site_predictions, ref_site_prediction_posteriors);
 
-    float halt_site_predictions[hap_alt_len];
+    float *halt_site_predictions = calloc(hap_alt_len, sizeof(float));
     for (int i = 0; i < hap_alt_len; i++) halt_site_predictions[i] = hap_alt_predictions[NUM_SCORES * i + site];
 
-    float halt_site_prediction_posteriors[hap_alt_len];
+    float *halt_site_prediction_posteriors = calloc(hap_alt_len, sizeof(float));
     int n_alt_sites = transform_to_posterior_probabilities(hap_alt_len, halt_site_predictions, halt_site_prediction_posteriors);
 
     PairPrediction *ref_alt_map = NULL;
     size_t ref_alt_map_size = 0;
     parse_prediction_pairs(ref_site_predictions, ref_site_prediction_posteriors, halt_site_predictions, halt_site_prediction_posteriors, rs, pred_range, &ref_alt_map, &ref_alt_map_size);
+
+    free(ref_site_predictions);
+    free(ref_site_prediction_posteriors);
+    free(halt_site_predictions);
+    free(halt_site_prediction_posteriors);
 
     *map = ref_alt_map;
     *map_size = ref_alt_map_size;
@@ -1164,8 +1179,7 @@ void get_splice_probabilities_from_map(Record *r, enum SpliceType type, int reco
         Gene *transcript_gene = kv_A(*r->transcript_genes, t);
         Transcript *transcript = kv_A(*r->tscripts, t);
 
-        int canonical_sites[map_size];
-        memset(canonical_sites, 0, sizeof(canonical_sites));
+        int *canonical_sites = calloc(map_size, sizeof(int));
 
         for (int e = 0; e < transcript->nexons; e++) {
             Exon *exon = transcript->exons[e];
@@ -1230,6 +1244,8 @@ void get_splice_probabilities_from_map(Record *r, enum SpliceType type, int reco
             SpliceProbability p = { r, type, pair.ref.prior, pair.alt.prior, pair.alt.posterior, pair.alt.missing ? pair.ref.position : pair.alt.position, 0 };
             kv_push_new_probability(probabilities, p);
         }
+
+        free(canonical_sites);
     }
 }
 
@@ -1630,16 +1646,16 @@ int buffer_record(htsFile *fp, bcf_hdr_t *hdr, RecordBuffer *buffer) {
     return 0;
 }
 
-int RecordBlock_next(htsFile *fp, bcf_hdr_t *hdr, HdrFormat *vep_fmt, gff_t *gff, RecordBuffer *buffer, RecordBlock *block_out) {
+int RecordBlock_next(const Session *s, RecordBuffer *buffer, RecordBlock *block_out) {
     RecordBlock block = {0};
     kv_init(block.records);
 
     IRegion batch_region = {0};
-    while(buffer_record(fp, hdr, buffer) == 0) {
+    while(buffer_record(s->fp_in, s->hdr, buffer) == 0) {
 
         // Check if record is coding
         IRegion record_region = {0};
-        int is_non_coding = find_gene_region_for_variant(buffer->v, hdr, gff, &record_region);
+        int is_non_coding = find_gene_region_for_variant(buffer->v, s->hdr, s->gff, &record_region);
         if (is_non_coding) {
             if (block.records.n == 0) {
                 kv_push(Record *, block.records, Record_init(buffer->v, NULL));
@@ -1667,7 +1683,7 @@ int RecordBlock_next(htsFile *fp, bcf_hdr_t *hdr, HdrFormat *vep_fmt, gff_t *gff
             if (overlaps_batch & (record_region.end > batch_region.end)) batch_region.end = record_region.end; 
         }
 
-        VepCsqs *vep_csqs = parse_vep_transcript_consequences(buffer->v, vep_fmt, hdr);
+        VepCsqs *vep_csqs = parse_vep_transcript_consequences(buffer->v, s->vep_fmt, s->hdr);
         kv_push(Record *, block.records, Record_init(buffer->v, vep_csqs));
         buffer->unused = false;
     }
@@ -1975,14 +1991,14 @@ void set_triggers(Record *r) {
     return;
 }
 
-void write_predictions(FILE *scores_tsv, const char *chr, const int64_t pos, const char *ref, const char *alt, const char *gene_name, const char *transcript_name, const int phase, const char *type, const char *pred_tags[], const int n_predictions, const float *predictions[]) {
-    for (int i = 0; i < 101; i++) {
-        const int offset = i - 50;
+void write_predictions(FILE *scores_tsv, const char *chr, const int64_t pos, const char *ref, const char *alt, const char *gene_name, const char *transcript_name, const int phase, const char *type, const char *pred_tags[], const int n_predictions, const float *predictions[], const int prediction_radius) {
+    for (int i = 0; i < pred_width(prediction_radius); i++) {
+        const int offset = i - prediction_radius;
 
         bool should_print = false;
         for (int j = 0; j < n_predictions; j++) {
-            const float acceptor = predictions[j][i * 3 + ACCEPTOR];
-            const float donor = predictions[j][i * 3 + DONOR];
+            const float acceptor = predictions[j][i * NUM_SCORES + ACCEPTOR];
+            const float donor = predictions[j][i * NUM_SCORES + DONOR];
 
             if ((acceptor > SPLICEAI_RESCUE_THRESHOLD) | (donor > SPLICEAI_RESCUE_THRESHOLD)) {
                 should_print = true;
@@ -1992,9 +2008,9 @@ void write_predictions(FILE *scores_tsv, const char *chr, const int64_t pos, con
         for (int j = 0; j < n_predictions; j++) {
             if (!should_print) continue;
 
-            const float neither = predictions[j][i * 3];
-            const float acceptor = predictions[j][i * 3 + ACCEPTOR];
-            const float donor = predictions[j][i * 3 + DONOR];
+            const float neither = predictions[j][i * NUM_SCORES];
+            const float acceptor = predictions[j][i * NUM_SCORES + ACCEPTOR];
+            const float donor = predictions[j][i * NUM_SCORES + DONOR];
 
             fprintf(scores_tsv, "%s\t%li\t%s\t%s\t%s\t%s\t%d\t%d\t%s\t%s\t%.6f\t%.6f\t%.6f\n",
                     chr, pos + 1, ref, alt, gene_name, transcript_name, phase+1, offset, pred_tags[j], type, donor, acceptor, neither);
@@ -2002,28 +2018,101 @@ void write_predictions(FILE *scores_tsv, const char *chr, const int64_t pos, con
     }
 }
 
-void print_usage(const char *prog_name) {
-    printf("Usage: %s -m <models> -g <gff> -r <reference> -i <in_vcf> -o <out_vcf> [options]\n", prog_name);
-    printf("\nRequired arguments:\n");
-    printf("  -m, --models        Path to SpliceAI models\n");
-    printf("  -g, --gff           Path to GFF file\n");
-    printf("  -r, --reference     Path to reference FASTA file\n");
-    printf("  -i, --in            Path to input VCF file\n");
-    printf("  -o, --out           Path to output VCF file\n");
-    printf("  -s, --scores        Path to splice scores file\n");
+static void init_logging(void) {
+    log_set_level(LOG_INFO);
+    /* TensorFlow logs independently of log.c; 1 drops its INFO output. */
+    setenv("TF_CPP_MIN_LOG_LEVEL", "1", 1);
+}
 
-    printf("\nOptional arguments:\n");
-    printf("      --use-af        Use non-default field for allele frequency thresholding (default: INFO/AF)\n");
-    printf("      --use-gt        Use non-default field for phased genotypes (default: FORMAT/GT)\n");
-    printf("      --af-threshold  Allele frequency threshold for splice score annotation (default: 0.01)\n");
-    printf("      --include-unphased  Include unphased variants (flag)\n");
-    printf("      --max-unphased  Maximum number of unphased variants allowed (requires --include-unphased) (default: 2)\n");
-    printf("  -h, --help          Show this help message\n");
+/*
+ * Releases whatever the session holds. Every field is guarded, so this also
+ * unwinds a partially-completed Session_open.
+ */
+static void Session_close(Session *s) {
+    if (s->scores_tsv) fclose(s->scores_tsv);
+    if (s->fp_out)     hts_close(s->fp_out);
+    if (s->fp_in)      hts_close(s->fp_in);
+    if (s->vep_fmt)    destroy_hdr_fmt(s->vep_fmt);
+    if (s->hdr)        bcf_hdr_destroy(s->hdr);
+    if (s->fai)        fai_destroy(s->fai);
+    if (s->gff)        gff_destroy(s->gff);
+    if (s->models)     destroy_models(s->models);
+    *s = (Session){0};
+}
+
+static int Session_open(const args_t *args, Session *s) {
+    *s = (Session){0};
+
+    if (args->prediction_radius < 1 || args->prediction_radius > MAX_PREDICTION_RADIUS) {
+        log_error("--prediction-radius must be between 1 and %d, got %u", MAX_PREDICTION_RADIUS, args->prediction_radius);
+        goto fail;
+    }
+    s->prediction_radius = (int) args->prediction_radius;
+
+    log_info("Loading SpliceAI models from: %s", args->model_dir);
+    if (!(s->models = load_models(args->model_dir))) {
+        log_error("Could not load SpliceAI models from: %s", args->model_dir);
+        goto fail;
+    }
+
+    /* gff_init and gff_parse report their own failures through bcftools' error(), which exits. */
+    log_info("Loading GFF from: %s", args->gff);
+    s->gff = gff_init(args->gff);
+    gff_parse(s->gff);
+
+    log_info("Loading FASTA from: %s", args->fasta);
+    if (!(s->fai = fai_load(args->fasta))) {
+        log_error("Could not load FASTA index for: %s", args->fasta);
+        goto fail;
+    }
+
+    log_info("Loading variants from: %s", args->variants);
+    if (!(s->fp_in = hts_open(args->variants, "r"))) {
+        log_error("Could not open variants file: %s", args->variants);
+        goto fail;
+    }
+    if (!(s->hdr = bcf_hdr_read(s->fp_in))) {
+        log_error("Could not read VCF header from: %s", args->variants);
+        goto fail;
+    }
+    if (!(s->vep_fmt = parse_csq_hdr_fmt(s->hdr))) {
+        log_error("No VEP CSQ INFO field in the header of %s; annotate with VEP first.",
+                  args->variants);
+        goto fail;
+    }
+
+    log_info("Initialising annotated VCF as %s", args->variants_output);
+    if (!(s->fp_out = hts_open(args->variants_output, "w"))) {
+        log_error("Could not open annotated VCF for writing: %s", args->variants_output);
+        goto fail;
+    }
+    if (add_rescueranger_tags(s->hdr) != 0) goto fail;
+    if (bcf_hdr_write(s->fp_out, s->hdr) != 0) {
+        log_error("Could not write VCF header to: %s", args->variants_output);
+        goto fail;
+    }
+
+    log_info("Initialising raw scores TSV as %s", args->scores_output);
+    if (!(s->scores_tsv = fopen(args->scores_output, "w"))) {
+        log_error("Could not open raw scores TSV for writing: %s", args->scores_output);
+        goto fail;
+    }
+    if (fprintf(s->scores_tsv,
+                "CHR\tPOS\tREF\tALT\tGENE\tTRANSCRIPT\t"
+                "PHASE\tOFFSET\tSOURCE\tTYPE\tDONOR\tACCEPTOR\tNEITHER\n") < 0) {
+        log_error("Could not write header to raw scores TSV: %s", args->scores_output);
+        goto fail;
+    }
+
+    return EXIT_SUCCESS;
+
+fail:
+    Session_close(s);
+    return EXIT_FAILURE;
 }
 
 int main(int argc, char *argv[]) {
-    log_set_level(3);
-    setenv("TF_CPP_MIN_LOG_LEVEL", "1", 1);
+    init_logging();
 
     // Parse arguments
     args_t args = make_default_args();
@@ -2032,78 +2121,43 @@ int main(int argc, char *argv[]) {
         return EXIT_FAILURE;
     }
 
-    log_debug("Loading SpliceAI models...");
-    Model *models = load_models(args.model_dir);
-
-    // Parse gff file
-    const char *gff_path = args.gff;
-    log_debug("Loading GFF from: %s", gff_path);
-    gff_t *gff = gff_init(gff_path);
-    gff_parse(gff);
-
-    // Open fasta file
-    const char *fasta_path = args.fasta;
-    log_debug("Loading FASTA from: %s", fasta_path);
-    faidx_t *fai = fai_load(fasta_path);
-
-    // Open input VCF
-    const char *input_vcf_path = args.variants;
-    log_debug("Loading VCF from: %s", input_vcf_path);
-    htsFile *fp_in = hts_open(input_vcf_path, "r");
-    bcf_hdr_t *hdr = bcf_hdr_read(fp_in);
-    HdrFormat *vep_fmt = parse_csq_hdr_fmt(hdr);
-
-    // Open output VCF
-    const char *output_vcf_path = args.variants_output;
-    log_debug("Saving output to: %s", output_vcf_path);
-    htsFile *fp_out = hts_open(output_vcf_path, "w");
-    add_rescueranger_tags(hdr);
-    bcf_hdr_write(fp_out, hdr);
-
-    // Open raw scores file
-    const char *output_tsv_path = args.scores_output;
-    log_debug("Saving raw scores to: %s", output_tsv_path);
-    FILE *scores_tsv = fopen(output_tsv_path, "w");
-    fprintf(scores_tsv, "CHR\tPOS\tREF\tALT\tGENE\tTRANSCRIPT\tPHASE\tOFFSET\tSOURCE\tTYPE\tDONOR\tACCEPTOR\tNEITHER\n");
+    Session session;
+    if (Session_open(&args, &session) != EXIT_SUCCESS) return EXIT_FAILURE;
 
     RecordBuffer buffer = { bcf_init(), false };
     RecordBlock block = { 0 };
 
-    while(RecordBlock_next(fp_in, hdr, vep_fmt, gff, &buffer, &block) == 0) {
+    while(RecordBlock_next(&session, &buffer, &block) == 0) {
         // If there are no coding variants in the entire block, there's nothing to do
         if (!block.is_coding) {
             for (int i = 0; i < block.records.n; i++) {
-                bcf_write(fp_out, hdr, kv_A(block.records, i)->v);
+                bcf_write(session.fp_out, session.hdr, kv_A(block.records, i)->v);
             }
             RecordBlock_destroy(block);
             continue;
         }
 
-        // Remove leading reference bases for indels
-        for (int i = 0; i < block.records.n; i++) {
-            Record *record = kv_A(block.records, i);
-
-            bcf_unpack(record->v, BCF_UN_STR);
-            // BCFTools ensures null termination
-            int alen = strlen(record->v->d.allele[1]);
-            if (record->v->rlen == 1 && alen == 1) continue;
-
-            // Store leading reference base for when the record needs to be written.
-            char leading_reference = record->v->d.allele[0][0];
-            record->leading_reference = leading_reference;
-
-            // Shift to remove leading reference base.
-            record->v->d.allele[0] += 1;
-            record->v->d.allele[1] += 1;
-            record->v->pos += 1;
-        }
-
-        for (int i = 0; i < block.records.n; i++) {
-            Record *record = kv_A(block.records, i);
-            bcf_unpack(record->v, BCF_UN_STR);
-
-            log_info("test");
-        }
+        // Incomplete. Needs Record.leading_reference to exist, v->rlen adjusted alongside pos and
+        // the alleles, and pos/d.allele restored before the record is written -- without that last
+        // step every indel is emitted with POS shifted +1 against an untrimmed REF.
+        // // Remove leading reference bases for indels
+        // for (int i = 0; i < block.records.n; i++) {
+        //     Record *record = kv_A(block.records, i);
+        //
+        //     bcf_unpack(record->v, BCF_UN_STR);
+        //     // BCFTools ensures null termination
+        //     int alen = strlen(record->v->d.allele[1]);
+        //     if (record->v->rlen == 1 && alen == 1) continue;
+        //
+        //     // Store leading reference base for when the record needs to be written.
+        //     char leading_reference = record->v->d.allele[0][0];
+        //     record->leading_reference = leading_reference;
+        //
+        //     // Shift to remove leading reference base.
+        //     record->v->d.allele[0] += 1;
+        //     record->v->d.allele[1] += 1;
+        //     record->v->pos += 1;
+        // }
 
         // TODO: Functionality: If a record is coding, indels should be stripped of their proceeding reference bases to make overlaps less fucked up
         // This has mayor implications for downstream code, so should go into V2.
@@ -2117,7 +2171,7 @@ int main(int argc, char *argv[]) {
             khash_t(TranscriptHash) *transcripts = kh_init_TranscriptHash();
             for (int i = 0; i < block.records.n; i++) {
                 Record *r = kv_A(block.records, i);
-                set_coding_transcripts_genes(r, hdr, gff, fai, transcripts, genes);
+                set_coding_transcripts_genes(r, session.hdr, session.gff, session.fai, transcripts, genes);
             }
 
 
@@ -2134,7 +2188,7 @@ int main(int argc, char *argv[]) {
                     Record *r = kv_A(block.records, ri);
 
                     if (r->tscripts == NULL) continue;
-                    if (!has_matching_phase(r->v, hdr, phase, args.include_unphased)) continue;
+                    if (!has_matching_phase(r->v, session.hdr, phase, args.include_unphased)) continue;
 
                     for (int ti = 0; ti < r->tscripts->n; ti++) {
                         Transcript *record_transcript = kv_A(*r->tscripts, ti);
@@ -2146,7 +2200,7 @@ int main(int argc, char *argv[]) {
 
                 // TODO: Separate rescue and induced ptv triggers to get multi purpose functions for better readability
                 set_vep_triggers(records, transcript->id);
-                set_af_triggers(records, hdr, args.af_tag, args.af_threshold);
+                set_af_triggers(records, session.hdr, args.af_tag, args.af_threshold);
                 set_mnv_triggers(records, transcript);
 
                 kv_destroy(records);
@@ -2160,12 +2214,12 @@ int main(int argc, char *argv[]) {
                 Record *r = kv_A(block.records, ri);
 
                 if (r->tscripts == NULL) continue;
-                if (!has_matching_phase(r->v, hdr, phase, args.include_unphased)) continue;
+                if (!has_matching_phase(r->v, session.hdr, phase, args.include_unphased)) continue;
 
                 kv_push(Record *, records, r);
             }
 
-            filter_overlapping_variants(&records, hdr);
+            filter_overlapping_variants(&records, session.hdr);
 
             // TODO: Refactor everything below this point into something with actual structure
             for (int i = 0; i < records.n; i++) {
@@ -2287,16 +2341,11 @@ int main(int argc, char *argv[]) {
                 }
                 if (!splice_triggered) continue;
 
-                log_info("%s:%li (splice)", bcf_hdr_id2name(hdr, r->v->rid), r->v->pos + 1); 
+                log_info("%s:%li (splice)", bcf_hdr_id2name(session.hdr, r->v->rid), r->v->pos + 1);
 
-                if (strlen(r->v->d.allele[1]) > CAI_DISTANCE) {
+                if (!variant_fits_window(r->v, session.prediction_radius)) {
                     r->skipped = 1;
-                    log_warn("Skipping on %s:%li, insertion is too long", bcf_hdr_id2name(hdr, r->v->rid), r->v->pos + 1);
-                    continue;
-                }
-                if (r->v->rlen > CAI_DISTANCE) {
-                    r->skipped = 1;
-                    log_warn("Skipping prediction on %s:%li, deletion is too long", bcf_hdr_id2name(hdr, r->v->rid), r->v->pos + 1);
+                    log_warn("Skipping on %s:%li, variant is too long (%zu alt bases, %li ref bases, --prediction-radius is %d)", bcf_hdr_id2name(session.hdr, r->v->rid), r->v->pos + 1, strlen(r->v->d.allele[1]), r->v->rlen, session.prediction_radius);
                     continue;
                 }
 
@@ -2307,7 +2356,7 @@ int main(int argc, char *argv[]) {
                     int n_unphased = 0;
                     for (int j = 0; j < records.n; j++) {
                         Record *r = kv_A(records, j);
-                        if (has_matching_phase(r->v, hdr, phase, false)) {
+                        if (has_matching_phase(r->v, session.hdr, phase, false)) {
                             continue;
                         }
 
@@ -2364,8 +2413,8 @@ int main(int argc, char *argv[]) {
 
 
                     // REF
-                    int32_t start = VARIANT_POS - (r->v->pos - gene->coords.start);
-                    int32_t end = VARIANT_POS - (gene->coords.end - (r->v->pos+1)); // Open ended, so + 1
+                    int32_t start = variant_position_in_sequence(session.prediction_radius) - (r->v->pos - gene->coords.start);
+                    int32_t end = variant_position_in_sequence(session.prediction_radius) - (gene->coords.end - (r->v->pos+1)); // Open ended, so + 1
 
                     char *ref_seq = gene->seq.s - start; // Pointer to existing memory, no free necessary
                     if (start < 0) start = 0;
@@ -2375,32 +2424,32 @@ int main(int argc, char *argv[]) {
 
                     // log_info("%s:%li (ref)", bcf_hdr_id2name(hdr, r->v->rid), r->v->pos); 
                     Range ref_boundary = { start, end };
-                    char *ref_padded = pad_sequence(ref_seq, ref_boundary, WIDTH);
+                    char *ref_padded = pad_sequence(ref_seq, ref_boundary, model_width(session.prediction_radius));
                     float *ref_predictions = NULL; int num_ref_predictions = 0;
                     int ref_len = strlen(ref_padded);
                     // log_info("ref_len: %i", ref_len);
-                    predict_for_seq(models, ref_padded, ref_len, gene->strand, &ref_predictions, &num_ref_predictions);
+                    predict_for_seq(session.models, ref_padded, ref_len, gene->strand, &ref_predictions, &num_ref_predictions);
                     // log_info("num_ref_predictions: %i", num_ref_predictions);
                     free(ref_padded);
 
                     // ALT
-                    int alt_pred_offset = allele_offset(r->v, 0, 1, (Range) { r->v->pos - 50, r->v->pos + 51});
+                    int alt_pred_offset = allele_offset(r->v, 0, 1, range_around(r->v->pos, session.prediction_radius));
 
-                    int32_t alt_start = VARIANT_POS - (r->v->pos - gene->coords.start);
-                    int32_t alt_end = VARIANT_POS - ((gene->coords.end - alt_pred_offset) - r->v->pos);
+                    int32_t alt_start = variant_position_in_sequence(session.prediction_radius) - (r->v->pos - gene->coords.start);
+                    int32_t alt_end = variant_position_in_sequence(session.prediction_radius) - ((gene->coords.end - alt_pred_offset) - r->v->pos);
 
                     char *alt_seq = alt.s - alt_start;
                     if (start < 0) start = 0;
                     if (end < 0) end = 0;
 
                     Range alt_boundary = { start, end };
-                    char *alt_padded = pad_sequence(alt_seq, alt_boundary, WIDTH - alt_pred_offset);
+                    char *alt_padded = pad_sequence(alt_seq, alt_boundary, model_width(session.prediction_radius) - alt_pred_offset);
                     float *alt_predictions = NULL; int num_alt_predictions = 0;
                     int alt_len = strlen(alt_padded);
 
-                    predict_for_seq(models, alt_padded, alt_len, gene->strand, &alt_predictions, &num_alt_predictions);
+                    predict_for_seq(session.models, alt_padded, alt_len, gene->strand, &alt_predictions, &num_alt_predictions);
 
-                    float *corrected_alt_predictions = match_predictions_to_reference(alt_predictions, (Range) { r->v->pos - 50, r->v->pos + 51 }, &just_alt, num_ref_predictions);
+                    float *corrected_alt_predictions = match_predictions_to_reference(alt_predictions, range_around(r->v->pos, session.prediction_radius), &just_alt, num_ref_predictions);
                     free(alt_padded);
 
                     // HAP REF
@@ -2429,15 +2478,15 @@ int main(int argc, char *argv[]) {
                     // free(hap_ref_padded);
 
                     // HAP ALT
-                    int pred_offset = prediction_offset(r->v, &hap_in);
+                    int pred_offset = prediction_offset(r->v, &hap_in, session.prediction_radius);
 
                     int64_t gene_start = gene->coords.start;
                     int64_t gene_end = gene->coords.end - haplotype_offset(&hap_in, gene->coords);
                     int64_t vposition = r->v->pos - haplotype_offset(&hap_ex, (Range) {gene->coords.start, r->v->pos});
 
-                    int64_t start_offset = haplotype_offset(&hap_in, (Range) { r->v->pos - CAI_DISTANCE, r->v->pos});
-                    int32_t hap_alt_start = VARIANT_POS + (gene_start - vposition) - start_offset;
-                    int32_t hap_alt_end = VARIANT_POS - (gene_end - vposition) - (pred_offset - start_offset);
+                    int64_t start_offset = haplotype_offset(&hap_in, range_before(r->v->pos, session.prediction_radius));
+                    int32_t hap_alt_start = variant_position_in_sequence(session.prediction_radius) + (gene_start - vposition) - start_offset;
+                    int32_t hap_alt_end = variant_position_in_sequence(session.prediction_radius) - (gene_end - vposition) - (pred_offset - start_offset);
 
                     char *hap_alt_seq = hap_alt.s - hap_alt_start;
                     if (hap_alt_start < 0) hap_alt_start = 0;
@@ -2445,22 +2494,22 @@ int main(int argc, char *argv[]) {
 
                     // log_info("%s:%li (hap_alt)", bcf_hdr_id2name(hdr, r->v->rid), r->v->pos); 
                     Range hap_alt_boundary = {hap_alt_start, hap_alt_end};
-                    char *hap_alt_padded = pad_sequence(hap_alt_seq, hap_alt_boundary, WIDTH - pred_offset);
+                    char *hap_alt_padded = pad_sequence(hap_alt_seq, hap_alt_boundary, model_width(session.prediction_radius) - pred_offset);
                     float *hap_alt_predictions = NULL; int num_hap_alt_predictions = 0;
                     int hap_alt_len = strlen(hap_alt_padded);
-                    predict_for_seq(models, hap_alt_padded, hap_alt_len, gene->strand, &hap_alt_predictions, &num_hap_alt_predictions);
-                    float *corrected_hap_alt_predictions = match_predictions_to_reference(hap_alt_predictions, (Range) { r->v->pos - 50, r->v->pos + 51 }, &hap_in, num_ref_predictions);
+                    predict_for_seq(session.models, hap_alt_padded, hap_alt_len, gene->strand, &hap_alt_predictions, &num_hap_alt_predictions);
+                    float *corrected_hap_alt_predictions = match_predictions_to_reference(hap_alt_predictions, range_around(r->v->pos, session.prediction_radius), &hap_in, num_ref_predictions);
                     free(hap_alt_padded);
 
 
                     // Calculate scores between ref and alt
-                    Score score = calculate_delta_scores(r->v->d.allele[1], gene->name, ref_predictions, corrected_alt_predictions, num_ref_predictions, CAI_DISTANCE);
+                    Score score = calculate_delta_scores(r->v->d.allele[1], gene->name, ref_predictions, corrected_alt_predictions, num_ref_predictions, session.prediction_radius);
                     r->native_scores[g * NUM_PHASES + phase] = malloc(sizeof(Score));
                     *r->native_scores[g * NUM_PHASES + phase] = score;
 
 
                     // Calculate scores between ref and hap_alt
-                    Score hap_score = calculate_delta_scores(r->v->d.allele[1], gene->name, ref_predictions, corrected_hap_alt_predictions, num_ref_predictions, CAI_DISTANCE);
+                    Score hap_score = calculate_delta_scores(r->v->d.allele[1], gene->name, ref_predictions, corrected_hap_alt_predictions, num_ref_predictions, session.prediction_radius);
                     r->haplotype_scores[g * NUM_PHASES + phase] = malloc(sizeof(Score));
                     *r->haplotype_scores[g * NUM_PHASES + phase] = hap_score;
 
@@ -2470,16 +2519,16 @@ int main(int argc, char *argv[]) {
                     diff.alt = r->v->d.allele[1];
                     diff.gene = gene->name;
                     diff.ag_idx = hap_score.ag_idx;
-                    diff.ag = corrected_hap_alt_predictions[(diff.ag_idx + 50) * NUM_SCORES + ACCEPTOR] - corrected_alt_predictions[(diff.ag_idx + 50) * NUM_SCORES + ACCEPTOR];
+                    diff.ag = corrected_hap_alt_predictions[(diff.ag_idx + session.prediction_radius) * NUM_SCORES + ACCEPTOR] - corrected_alt_predictions[(diff.ag_idx + session.prediction_radius) * NUM_SCORES + ACCEPTOR];
 
                     diff.al_idx = hap_score.al_idx;
-                    diff.al = corrected_hap_alt_predictions[(diff.al_idx + 50) * NUM_SCORES + ACCEPTOR] - corrected_alt_predictions[(diff.al_idx + 50) * NUM_SCORES + ACCEPTOR];
+                    diff.al = corrected_hap_alt_predictions[(diff.al_idx + session.prediction_radius) * NUM_SCORES + ACCEPTOR] - corrected_alt_predictions[(diff.al_idx + session.prediction_radius) * NUM_SCORES + ACCEPTOR];
 
                     diff.dg_idx = hap_score.dg_idx;
-                    diff.dg = corrected_hap_alt_predictions[(diff.dg_idx + 50) * NUM_SCORES + DONOR] - corrected_alt_predictions[(diff.dg_idx + 50) * NUM_SCORES + DONOR];
+                    diff.dg = corrected_hap_alt_predictions[(diff.dg_idx + session.prediction_radius) * NUM_SCORES + DONOR] - corrected_alt_predictions[(diff.dg_idx + session.prediction_radius) * NUM_SCORES + DONOR];
 
                     diff.dl_idx = hap_score.dl_idx;
-                    diff.dl = corrected_hap_alt_predictions[(diff.dl_idx + 50) * NUM_SCORES + DONOR] - corrected_alt_predictions[(diff.dl_idx + 50) * NUM_SCORES + DONOR];
+                    diff.dl = corrected_hap_alt_predictions[(diff.dl_idx + session.prediction_radius) * NUM_SCORES + DONOR] - corrected_alt_predictions[(diff.dl_idx + session.prediction_radius) * NUM_SCORES + DONOR];
 
 
                     *r->diff_scores[g * NUM_PHASES + phase] = diff;
@@ -2516,11 +2565,11 @@ int main(int argc, char *argv[]) {
                         }
                     }
 
-                    const char *chr = bcf_seqname(hdr, r->v);
+                    const char *chr = bcf_seqname(session.hdr, r->v);
 
                     const char *prediction_names[3] = { "ref", "alt", "hap_alt" };
                     const float *predictions[3] = { ref_predictions, corrected_alt_predictions, corrected_hap_alt_predictions };
-                    write_predictions(scores_tsv, chr, r->v->pos, r->v->d.allele[0], r->v->d.allele[1], gene->name, ".", phase+1, "canonical", prediction_names, 3, predictions);
+                    write_predictions(session.scores_tsv, chr, r->v->pos, r->v->d.allele[0], r->v->d.allele[1], gene->name, ".", phase+1, "canonical", prediction_names, 3, predictions, session.prediction_radius);
 
 
                 // void write_predictions(const char *chr, const int64_t pos, const char *ref, const char *alt, const char *gene_name, const char *transcript_name, const int phase) {
@@ -2583,21 +2632,21 @@ int main(int argc, char *argv[]) {
                         current_gene[i] = (t != NULL && tgene->gff_id == gene->gff_id);
                     }
 
-                    Range pred_range = { r->v->pos - 50, r->v->pos + 51 };
+                    Range pred_range = range_around(r->v->pos, session.prediction_radius);
                     SpliceProbabilities splice_probabilities;
                     kv_init(splice_probabilities);
 
                     // Get acceptor pairs
                     PairPrediction *ref_alt_acceptor_map = NULL;
                     size_t ref_alt_acceptor_map_size = 0;
-                    get_prediction_pairs_for_site(ACCEPTOR_POS, ref_predictions, 101, hap_alt_predictions, 101-pred_offset, &hap_in, pred_range, &ref_alt_acceptor_map_size, &ref_alt_acceptor_map);
+                    get_prediction_pairs_for_site(ACCEPTOR_POS, ref_predictions, pred_width(session.prediction_radius), hap_alt_predictions, pred_width(session.prediction_radius)-pred_offset, &hap_in, pred_range, &ref_alt_acceptor_map_size, &ref_alt_acceptor_map);
                     get_splice_probabilities_from_map(r, ACCEPTOR, phase, current_gene, pred_range, ref_alt_acceptor_map_size, ref_alt_acceptor_map, &splice_probabilities);
 
 
                     // Get donor pairs
                     PairPrediction *ref_alt_donor_map = NULL;
                     size_t ref_alt_donor_map_size = 0;
-                    get_prediction_pairs_for_site(DONOR_POS, ref_predictions, 101, hap_alt_predictions, 101-pred_offset, &hap_in, pred_range, &ref_alt_donor_map_size, &ref_alt_donor_map);
+                    get_prediction_pairs_for_site(DONOR_POS, ref_predictions, pred_width(session.prediction_radius), hap_alt_predictions, pred_width(session.prediction_radius)-pred_offset, &hap_in, pred_range, &ref_alt_donor_map_size, &ref_alt_donor_map);
                     get_splice_probabilities_from_map(r, DONOR, phase, current_gene, pred_range, ref_alt_donor_map_size, ref_alt_donor_map, &splice_probabilities);
 
                     for (int i = 0; i < r->tscripts->n; i++) {
@@ -2655,24 +2704,24 @@ int main(int argc, char *argv[]) {
 
                                         if (pair.predicted) continue;
 
-                                        Range pred_range = { pair.position - 50, pair.position + 51 };
-                                        float *pair_predictions_ref = predict_on_sequence(models, gene->seq.s, WIDTH, pair.position, tgene->coords, tgene->strand, NULL);
+                                        Range pred_range = range_around(pair.position, session.prediction_radius);
+                                        float *pair_predictions_ref = predict_on_sequence(session.models, gene->seq.s, model_width(session.prediction_radius), pair.position, tgene->coords, tgene->strand, NULL, session.prediction_radius);
 
                                         int pred_offset = haplotype_offset(&just_alt, pred_range);
-                                        float *pair_predictions_alt = predict_on_sequence(models, alt.s, WIDTH-pred_offset, pair.position, tgene->coords, tgene->strand, &just_alt);
-                                        float *corrected_pair_predictions_alt = match_predictions_to_reference(pair_predictions_alt, pred_range, &just_alt, 303);
+                                        float *pair_predictions_alt = predict_on_sequence(session.models, alt.s, model_width(session.prediction_radius)-pred_offset, pair.position, tgene->coords, tgene->strand, &just_alt, session.prediction_radius);
+                                        float *corrected_pair_predictions_alt = match_predictions_to_reference(pair_predictions_alt, pred_range, &just_alt, pred_array_len(session.prediction_radius));
 
                                         int hap_pred_offset = haplotype_offset(&hap_in, pred_range);
-                                        float *pair_predictions_hap_alt = predict_on_sequence(models, hap_alt.s, WIDTH-hap_pred_offset, pair.position, tgene->coords, tgene->strand, &hap_in);
-                                        float *corrected_pair_predictions_hap_alt = match_predictions_to_reference(pair_predictions_hap_alt, pred_range, &hap_in, 303);
+                                        float *pair_predictions_hap_alt = predict_on_sequence(session.models, hap_alt.s, model_width(session.prediction_radius)-hap_pred_offset, pair.position, tgene->coords, tgene->strand, &hap_in, session.prediction_radius);
+                                        float *corrected_pair_predictions_hap_alt = match_predictions_to_reference(pair_predictions_hap_alt, pred_range, &hap_in, pred_array_len(session.prediction_radius));
 
                                         const char *prediction_names[3] = { "ref", "alt", "hap_alt" };
                                         const float *predictions[3] = { pair_predictions_ref, corrected_pair_predictions_alt, corrected_pair_predictions_hap_alt};
-                                        write_predictions(scores_tsv, chr, pair.position, r->v->d.allele[0], r->v->d.allele[1], gene->name, gff_id2string(gff, 0, t->id), phase+1, "pair", prediction_names, 3, predictions);
+                                        write_predictions(session.scores_tsv, chr, pair.position, r->v->d.allele[0], r->v->d.allele[1], gene->name, gff_id2string(session.gff, 0, t->id), phase+1, "pair", prediction_names, 3, predictions, session.prediction_radius);
 
 
-                                        filter_to_most_likely_prediction(PRED_WIDTH * NUM_SCORES, pair_predictions_ref);
-                                        filter_to_most_likely_prediction((PRED_WIDTH-hap_pred_offset) * NUM_SCORES, pair_predictions_hap_alt);
+                                        filter_to_most_likely_prediction(pred_array_len(session.prediction_radius), pair_predictions_ref);
+                                        filter_to_most_likely_prediction((pred_width(session.prediction_radius)-hap_pred_offset) * NUM_SCORES, pair_predictions_hap_alt);
 
 
                                         SpliceProbabilities pair_probabilities;
@@ -2681,14 +2730,14 @@ int main(int argc, char *argv[]) {
                                         // Get acceptor pairs
                                         PairPrediction *ref_alt_acceptor_map = NULL;
                                         size_t ref_alt_acceptor_map_size = 0;
-                                        get_prediction_pairs_for_site(ACCEPTOR_POS, pair_predictions_ref, 101, pair_predictions_hap_alt, 101-hap_pred_offset, &hap_in, pred_range, &ref_alt_acceptor_map_size, &ref_alt_acceptor_map);
+                                        get_prediction_pairs_for_site(ACCEPTOR_POS, pair_predictions_ref, pred_width(session.prediction_radius), pair_predictions_hap_alt, pred_width(session.prediction_radius)-hap_pred_offset, &hap_in, pred_range, &ref_alt_acceptor_map_size, &ref_alt_acceptor_map);
                                         get_splice_probabilities_from_map(r, ACCEPTOR, phase, current_gene, pred_range, ref_alt_acceptor_map_size, ref_alt_acceptor_map, &pair_probabilities);
 
 
                                         // Get donor pairs
                                         PairPrediction *ref_alt_donor_map = NULL;
                                         size_t ref_alt_donor_map_size = 0;
-                                        get_prediction_pairs_for_site(DONOR_POS, pair_predictions_ref, 101, pair_predictions_hap_alt, 101-hap_pred_offset, &hap_in, pred_range, &ref_alt_donor_map_size, &ref_alt_donor_map);
+                                        get_prediction_pairs_for_site(DONOR_POS, pair_predictions_ref, pred_width(session.prediction_radius), pair_predictions_hap_alt, pred_width(session.prediction_radius)-hap_pred_offset, &hap_in, pred_range, &ref_alt_donor_map_size, &ref_alt_donor_map);
                                         get_splice_probabilities_from_map(r, DONOR, phase, current_gene, pred_range, ref_alt_donor_map_size, ref_alt_donor_map, &pair_probabilities);
 
 
@@ -2731,24 +2780,24 @@ int main(int argc, char *argv[]) {
 
                                         if (pair.predicted) continue;
 
-                                        Range pred_range = { pair.position - 50, pair.position + 51 };
-                                        float *pair_predictions_ref = predict_on_sequence(models, gene->seq.s, WIDTH, pair.position, tgene->coords, tgene->strand, NULL);
-                                        // float *pair_predictions_alt = predict_on_sequence(models, hap_alt.s, WIDTH - pred_offset, pair.position, tgene->coords, tgene->strand, &hap_in);
+                                        Range pred_range = range_around(pair.position, session.prediction_radius);
+                                        float *pair_predictions_ref = predict_on_sequence(session.models, gene->seq.s, model_width(session.prediction_radius), pair.position, tgene->coords, tgene->strand, NULL, session.prediction_radius);
+                                        // float *pair_predictions_alt = predict_on_sequence(session.models, hap_alt.s, WIDTH - pred_offset, pair.position, tgene->coords, tgene->strand, &hap_in);
 
                                         int pred_offset = haplotype_offset(&just_alt, pred_range);
-                                        float *pair_predictions_alt = predict_on_sequence(models, alt.s, WIDTH-pred_offset, pair.position, tgene->coords, tgene->strand, &just_alt);
-                                        float *corrected_pair_predictions_alt = match_predictions_to_reference(pair_predictions_alt, pred_range, &just_alt, 303);
+                                        float *pair_predictions_alt = predict_on_sequence(session.models, alt.s, model_width(session.prediction_radius)-pred_offset, pair.position, tgene->coords, tgene->strand, &just_alt, session.prediction_radius);
+                                        float *corrected_pair_predictions_alt = match_predictions_to_reference(pair_predictions_alt, pred_range, &just_alt, pred_array_len(session.prediction_radius));
 
                                         int hap_pred_offset = haplotype_offset(&hap_in, pred_range);
-                                        float *pair_predictions_hap_alt = predict_on_sequence(models, hap_alt.s, WIDTH-hap_pred_offset, pair.position, tgene->coords, tgene->strand, &hap_in);
-                                        float *corrected_pair_predictions_hap_alt = match_predictions_to_reference(pair_predictions_hap_alt, pred_range, &hap_in, 303);
+                                        float *pair_predictions_hap_alt = predict_on_sequence(session.models, hap_alt.s, model_width(session.prediction_radius)-hap_pred_offset, pair.position, tgene->coords, tgene->strand, &hap_in, session.prediction_radius);
+                                        float *corrected_pair_predictions_hap_alt = match_predictions_to_reference(pair_predictions_hap_alt, pred_range, &hap_in, pred_array_len(session.prediction_radius));
 
                                         const char *prediction_names[3] = { "ref", "alt", "hap_alt" };
                                         const float *predictions[3] = { pair_predictions_ref, corrected_pair_predictions_alt, corrected_pair_predictions_hap_alt};
-                                        write_predictions(scores_tsv, chr, pair.position, r->v->d.allele[0], r->v->d.allele[1], gene->name, gff_id2string(gff, 0, t->id), phase+1, "pair", prediction_names, 3, predictions);
+                                        write_predictions(session.scores_tsv, chr, pair.position, r->v->d.allele[0], r->v->d.allele[1], gene->name, gff_id2string(session.gff, 0, t->id), phase+1, "pair", prediction_names, 3, predictions, session.prediction_radius);
 
-                                        filter_to_most_likely_prediction(PRED_WIDTH * NUM_SCORES, pair_predictions_ref);
-                                        filter_to_most_likely_prediction((PRED_WIDTH - hap_pred_offset) * NUM_SCORES, pair_predictions_hap_alt);
+                                        filter_to_most_likely_prediction(pred_array_len(session.prediction_radius), pair_predictions_ref);
+                                        filter_to_most_likely_prediction((pred_width(session.prediction_radius) - hap_pred_offset) * NUM_SCORES, pair_predictions_hap_alt);
 
 
                                         SpliceProbabilities pair_probabilities;
@@ -2757,14 +2806,14 @@ int main(int argc, char *argv[]) {
                                         // Get acceptor pairs
                                         PairPrediction *ref_alt_acceptor_map = NULL;
                                         size_t ref_alt_acceptor_map_size = 0;
-                                        get_prediction_pairs_for_site(ACCEPTOR_POS, pair_predictions_ref, 101, pair_predictions_hap_alt, 101-hap_pred_offset, &hap_in, pred_range, &ref_alt_acceptor_map_size, &ref_alt_acceptor_map);
+                                        get_prediction_pairs_for_site(ACCEPTOR_POS, pair_predictions_ref, pred_width(session.prediction_radius), pair_predictions_hap_alt, pred_width(session.prediction_radius)-hap_pred_offset, &hap_in, pred_range, &ref_alt_acceptor_map_size, &ref_alt_acceptor_map);
                                         get_splice_probabilities_from_map(r, ACCEPTOR, phase, current_gene, pred_range, ref_alt_acceptor_map_size, ref_alt_acceptor_map, &pair_probabilities);
 
 
                                         // Get donor pairs
                                         PairPrediction *ref_alt_donor_map = NULL;
                                         size_t ref_alt_donor_map_size = 0;
-                                        get_prediction_pairs_for_site(DONOR_POS, pair_predictions_ref, 101, pair_predictions_hap_alt, 101-hap_pred_offset, &hap_in, pred_range, &ref_alt_donor_map_size, &ref_alt_donor_map);
+                                        get_prediction_pairs_for_site(DONOR_POS, pair_predictions_ref, pred_width(session.prediction_radius), pair_predictions_hap_alt, pred_width(session.prediction_radius)-hap_pred_offset, &hap_in, pred_range, &ref_alt_donor_map_size, &ref_alt_donor_map);
                                         get_splice_probabilities_from_map(r, DONOR, phase, current_gene, pred_range, ref_alt_donor_map_size, ref_alt_donor_map, &pair_probabilities);
 
                                         for (int pi = 0; pi < pair_probabilities.n; pi++) {
@@ -2810,25 +2859,25 @@ int main(int argc, char *argv[]) {
 
                                         if (competitor.predicted) continue;
 
-                                        Range pred_range = { competitor.position - 50, competitor.position + 51 };
+                                        Range pred_range = range_around(competitor.position, session.prediction_radius);
                                         // int pred_offset = haplotype_offset(&hap_in, pred_range);
-                                        float *competitor_predictions_ref = predict_on_sequence(models, gene->seq.s, WIDTH, competitor.position, tgene->coords, tgene->strand, NULL);
-                                        // float *competitor_predictions_alt = predict_on_sequence(models, hap_alt.s, WIDTH - pred_offset, competitor.position, tgene->coords, tgene->strand, &hap_in);
+                                        float *competitor_predictions_ref = predict_on_sequence(session.models, gene->seq.s, model_width(session.prediction_radius), competitor.position, tgene->coords, tgene->strand, NULL, session.prediction_radius);
+                                        // float *competitor_predictions_alt = predict_on_sequence(session.models, hap_alt.s, WIDTH - pred_offset, competitor.position, tgene->coords, tgene->strand, &hap_in);
 
                                         int pred_offset = haplotype_offset(&just_alt, pred_range);
-                                        float *competitor_predictions_alt = predict_on_sequence(models, alt.s, WIDTH-pred_offset, competitor.position, tgene->coords, tgene->strand, &just_alt);
-                                        float *corrected_competitor_predictions_alt = match_predictions_to_reference(competitor_predictions_alt, pred_range, &just_alt, 303);
+                                        float *competitor_predictions_alt = predict_on_sequence(session.models, alt.s, model_width(session.prediction_radius)-pred_offset, competitor.position, tgene->coords, tgene->strand, &just_alt, session.prediction_radius);
+                                        float *corrected_competitor_predictions_alt = match_predictions_to_reference(competitor_predictions_alt, pred_range, &just_alt, pred_array_len(session.prediction_radius));
 
                                         int hap_pred_offset = haplotype_offset(&hap_in, pred_range);
-                                        float *competitor_predictions_hap_alt = predict_on_sequence(models, hap_alt.s, WIDTH-hap_pred_offset, competitor.position, tgene->coords, tgene->strand, &hap_in);
-                                        float *corrected_competitor_predictions_hap_alt = match_predictions_to_reference(competitor_predictions_hap_alt, pred_range, &hap_in, 303);
+                                        float *competitor_predictions_hap_alt = predict_on_sequence(session.models, hap_alt.s, model_width(session.prediction_radius)-hap_pred_offset, competitor.position, tgene->coords, tgene->strand, &hap_in, session.prediction_radius);
+                                        float *corrected_competitor_predictions_hap_alt = match_predictions_to_reference(competitor_predictions_hap_alt, pred_range, &hap_in, pred_array_len(session.prediction_radius));
 
                                         const char *prediction_names[3] = { "ref", "alt", "hap_alt" };
                                         const float *predictions[3] = { competitor_predictions_ref, corrected_competitor_predictions_alt, corrected_competitor_predictions_hap_alt};
-                                        write_predictions(scores_tsv, chr, competitor.position, r->v->d.allele[0], r->v->d.allele[1], gene->name, gff_id2string(gff, 0, t->id), phase+1, "competitor", prediction_names, 3, predictions);
+                                        write_predictions(session.scores_tsv, chr, competitor.position, r->v->d.allele[0], r->v->d.allele[1], gene->name, gff_id2string(session.gff, 0, t->id), phase+1, "competitor", prediction_names, 3, predictions, session.prediction_radius);
 
-                                        filter_to_most_likely_prediction(PRED_WIDTH * NUM_SCORES, competitor_predictions_ref);
-                                        filter_to_most_likely_prediction((PRED_WIDTH - hap_pred_offset) * NUM_SCORES, competitor_predictions_hap_alt);
+                                        filter_to_most_likely_prediction(pred_array_len(session.prediction_radius), competitor_predictions_ref);
+                                        filter_to_most_likely_prediction((pred_width(session.prediction_radius) - hap_pred_offset) * NUM_SCORES, competitor_predictions_hap_alt);
 
 
                                         SpliceProbabilities competitor_probabilities;
@@ -2837,14 +2886,14 @@ int main(int argc, char *argv[]) {
                                         // Get acceptor pairs
                                         PairPrediction *ref_alt_acceptor_map = NULL;
                                         size_t ref_alt_acceptor_map_size = 0;
-                                        get_prediction_pairs_for_site(ACCEPTOR_POS, competitor_predictions_ref, 101, competitor_predictions_hap_alt, 101-hap_pred_offset, &hap_in, pred_range, &ref_alt_acceptor_map_size, &ref_alt_acceptor_map);
+                                        get_prediction_pairs_for_site(ACCEPTOR_POS, competitor_predictions_ref, pred_width(session.prediction_radius), competitor_predictions_hap_alt, pred_width(session.prediction_radius)-hap_pred_offset, &hap_in, pred_range, &ref_alt_acceptor_map_size, &ref_alt_acceptor_map);
                                         get_splice_probabilities_from_map(r, ACCEPTOR, phase, current_gene, pred_range, ref_alt_acceptor_map_size, ref_alt_acceptor_map, &competitor_probabilities);
 
 
                                         // Get donor pairs
                                         PairPrediction *ref_alt_donor_map = NULL;
                                         size_t ref_alt_donor_map_size = 0;
-                                        get_prediction_pairs_for_site(DONOR_POS, competitor_predictions_ref, 101, competitor_predictions_hap_alt, 101-hap_pred_offset, &hap_in, pred_range, &ref_alt_donor_map_size, &ref_alt_donor_map);
+                                        get_prediction_pairs_for_site(DONOR_POS, competitor_predictions_ref, pred_width(session.prediction_radius), competitor_predictions_hap_alt, pred_width(session.prediction_radius)-hap_pred_offset, &hap_in, pred_range, &ref_alt_donor_map_size, &ref_alt_donor_map);
                                         get_splice_probabilities_from_map(r, DONOR, phase, current_gene, pred_range, ref_alt_donor_map_size, ref_alt_donor_map, &competitor_probabilities);
 
                                         for (int csi = 0; csi < competitor_probabilities.n; csi++) {
@@ -2886,24 +2935,24 @@ int main(int argc, char *argv[]) {
 
                                         if (competitor.predicted) continue;
 
-                                        Range pred_range = { competitor.position - 50, competitor.position + 51 };
+                                        Range pred_range = range_around(competitor.position, session.prediction_radius);
                                         // int pred_offset = haplotype_offset(&hap_in, pred_range);
-                                        float *competitor_predictions_ref = predict_on_sequence(models, gene->seq.s, WIDTH, competitor.position, tgene->coords, tgene->strand, NULL);
-                                        // float *competitor_predictions_alt = predict_on_sequence(models, hap_alt.s, WIDTH - pred_offset, competitor.position, tgene->coords, tgene->strand, &hap_in);
+                                        float *competitor_predictions_ref = predict_on_sequence(session.models, gene->seq.s, model_width(session.prediction_radius), competitor.position, tgene->coords, tgene->strand, NULL, session.prediction_radius);
+                                        // float *competitor_predictions_alt = predict_on_sequence(session.models, hap_alt.s, WIDTH - pred_offset, competitor.position, tgene->coords, tgene->strand, &hap_in);
                                         int pred_offset = haplotype_offset(&just_alt, pred_range);
-                                        float *competitor_predictions_alt = predict_on_sequence(models, alt.s, WIDTH-pred_offset, competitor.position, tgene->coords, tgene->strand, &just_alt);
-                                        float *corrected_competitor_predictions_alt = match_predictions_to_reference(competitor_predictions_alt, pred_range, &just_alt, 303);
+                                        float *competitor_predictions_alt = predict_on_sequence(session.models, alt.s, model_width(session.prediction_radius)-pred_offset, competitor.position, tgene->coords, tgene->strand, &just_alt, session.prediction_radius);
+                                        float *corrected_competitor_predictions_alt = match_predictions_to_reference(competitor_predictions_alt, pred_range, &just_alt, pred_array_len(session.prediction_radius));
 
                                         int hap_pred_offset = haplotype_offset(&hap_in, pred_range);
-                                        float *competitor_predictions_hap_alt = predict_on_sequence(models, hap_alt.s, WIDTH-hap_pred_offset, competitor.position, tgene->coords, tgene->strand, &hap_in);
-                                        float *corrected_competitor_predictions_hap_alt = match_predictions_to_reference(competitor_predictions_hap_alt, pred_range, &hap_in, 303);
+                                        float *competitor_predictions_hap_alt = predict_on_sequence(session.models, hap_alt.s, model_width(session.prediction_radius)-hap_pred_offset, competitor.position, tgene->coords, tgene->strand, &hap_in, session.prediction_radius);
+                                        float *corrected_competitor_predictions_hap_alt = match_predictions_to_reference(competitor_predictions_hap_alt, pred_range, &hap_in, pred_array_len(session.prediction_radius));
 
                                         const char *prediction_names[3] = { "ref", "alt", "hap_alt" };
                                         const float *predictions[3] = { competitor_predictions_ref, corrected_competitor_predictions_alt, corrected_competitor_predictions_hap_alt};
-                                        write_predictions(scores_tsv, chr, competitor.position, r->v->d.allele[0], r->v->d.allele[1], gene->name, gff_id2string(gff, 0, t->id), phase+1, "competitor", prediction_names, 3, predictions);
+                                        write_predictions(session.scores_tsv, chr, competitor.position, r->v->d.allele[0], r->v->d.allele[1], gene->name, gff_id2string(session.gff, 0, t->id), phase+1, "competitor", prediction_names, 3, predictions, session.prediction_radius);
 
-                                        filter_to_most_likely_prediction(PRED_WIDTH * NUM_SCORES, competitor_predictions_ref);
-                                        filter_to_most_likely_prediction((PRED_WIDTH - hap_pred_offset) * NUM_SCORES, competitor_predictions_hap_alt);
+                                        filter_to_most_likely_prediction(pred_array_len(session.prediction_radius), competitor_predictions_ref);
+                                        filter_to_most_likely_prediction((pred_width(session.prediction_radius) - hap_pred_offset) * NUM_SCORES, competitor_predictions_hap_alt);
 
 
                                         SpliceProbabilities competitor_probabilities;
@@ -2912,14 +2961,14 @@ int main(int argc, char *argv[]) {
                                         // Get acceptor pairs
                                         PairPrediction *ref_alt_acceptor_map = NULL;
                                         size_t ref_alt_acceptor_map_size = 0;
-                                        get_prediction_pairs_for_site(ACCEPTOR_POS, competitor_predictions_ref, 101, competitor_predictions_hap_alt, 101-hap_pred_offset, &hap_in, pred_range, &ref_alt_acceptor_map_size, &ref_alt_acceptor_map);
+                                        get_prediction_pairs_for_site(ACCEPTOR_POS, competitor_predictions_ref, pred_width(session.prediction_radius), competitor_predictions_hap_alt, pred_width(session.prediction_radius)-hap_pred_offset, &hap_in, pred_range, &ref_alt_acceptor_map_size, &ref_alt_acceptor_map);
                                         get_splice_probabilities_from_map(r, ACCEPTOR, phase, current_gene, pred_range, ref_alt_acceptor_map_size, ref_alt_acceptor_map, &competitor_probabilities);
 
 
                                         // Get donor pairs
                                         PairPrediction *ref_alt_donor_map = NULL;
                                         size_t ref_alt_donor_map_size = 0;
-                                        get_prediction_pairs_for_site(DONOR_POS, competitor_predictions_ref, 101, competitor_predictions_hap_alt, 101-hap_pred_offset, &hap_in, pred_range, &ref_alt_donor_map_size, &ref_alt_donor_map);
+                                        get_prediction_pairs_for_site(DONOR_POS, competitor_predictions_ref, pred_width(session.prediction_radius), competitor_predictions_hap_alt, pred_width(session.prediction_radius)-hap_pred_offset, &hap_in, pred_range, &ref_alt_donor_map_size, &ref_alt_donor_map);
                                         get_splice_probabilities_from_map(r, DONOR, phase, current_gene, pred_range, ref_alt_donor_map_size, ref_alt_donor_map, &competitor_probabilities);
 
                                         for (int ci = 0; ci < competitor_probabilities.n; ci++) {
@@ -2981,7 +3030,7 @@ int main(int argc, char *argv[]) {
             for (int i = 0; i < records.n; i++) {
                 Record *r = kv_A(records, i);
 
-                if (strlen(r->v->d.allele[1]) > CAI_DISTANCE || r->v->rlen > CAI_DISTANCE) continue;
+                if (!variant_fits_window(r->v, session.prediction_radius)) continue;
 
 
                 for (int ti = 0; ti < r->tscripts->n; ti++) {
@@ -3439,7 +3488,7 @@ int main(int argc, char *argv[]) {
 
                     kstring_t hap_seq;
                     get_haplotype_sequence(gene->seq, &hap_in, gene->coords, &hap_seq);
-                    log_info("%s:%li (num_isoforms=%i)", bcf_hdr_id2name(hdr, r->v->rid), r->v->pos, nisoforms); 
+                    log_info("%s:%li (num_isoforms=%i)", bcf_hdr_id2name(session.hdr, r->v->rid), r->v->pos, nisoforms);
 
                     Isoforms isoforms = {
                         1,
@@ -3800,7 +3849,7 @@ int main(int argc, char *argv[]) {
 
 
                         // Reverse direction if necessary, 3' - 5' --> 5' - 3'
-                        log_info("%s:%li (isoform_length=%i)", bcf_hdr_id2name(hdr, r->v->rid), r->v->pos, spliced_seq.l);
+                        log_info("%s:%li (isoform_length=%i)", bcf_hdr_id2name(session.hdr, r->v->rid), r->v->pos, spliced_seq.l);
                         if (t->strand == STRAND_REV) {
                             for (int first = 0, last = spliced_seq.l-1; first < last; first++, last--) {
                                 const char tmp = spliced_seq.s[first];
@@ -4199,11 +4248,10 @@ int main(int argc, char *argv[]) {
             }
 
             if (!splice_triggered) continue;
-            if (strlen(r->v->d.allele[1]) > CAI_DISTANCE || r->v->rlen > CAI_DISTANCE) continue;
+            if (!variant_fits_window(r->v, session.prediction_radius)) continue;
 
             kstring_t splice_score = {0};
 
-            int has_scores = 0;
             for (int g = 0; g < r->genes->n; g++) {
                 if (g > 0) {
                     kputc(',', &splice_score);
@@ -4222,8 +4270,6 @@ int main(int argc, char *argv[]) {
                         kputs("|.|.|.|.|.|.|.|.", &splice_score);
                         continue;
                     }
-                    has_scores = 1;
-
                     kputc('|', &splice_score); kputs(score->gene, &splice_score);
 
                     // Format and append DS scores
@@ -4239,9 +4285,7 @@ int main(int argc, char *argv[]) {
                 }
             }
 
-            if (has_scores) log_info(splice_score.s);
-
-            bcf_update_info_string(hdr, r->v, SPLICEAI_TAG, splice_score.s);
+            bcf_update_info_string(session.hdr, r->v, SPLICEAI_TAG, splice_score.s);
         }
 
         for (int i = 0; i < block.records.n; i++) {
@@ -4253,11 +4297,10 @@ int main(int argc, char *argv[]) {
             }
 
             if (!splice_triggered) continue;
-            if (strlen(r->v->d.allele[1]) > CAI_DISTANCE || r->v->rlen > CAI_DISTANCE) continue;
+            if (!variant_fits_window(r->v, session.prediction_radius)) continue;
 
             kstring_t diff_score = {0};
 
-            int has_scores = 0;
             for (int g = 0; g < r->genes->n; g++) {
                 if (g > 0) {
                     kputc(',', &diff_score);
@@ -4277,8 +4320,6 @@ int main(int argc, char *argv[]) {
                         kputs("|.|.|.|.|.|.|.|.", &diff_score);
                         continue;
                     }
-                    has_scores = 1;
-
                     kputc('|', &diff_score); kputs(score->gene, &diff_score);
 
                     // Format and append DS scores
@@ -4295,9 +4336,7 @@ int main(int argc, char *argv[]) {
                 }
             }
 
-            if (has_scores) log_info(diff_score.s);
-
-            bcf_update_info_string(hdr, r->v, CS_TAG, diff_score.s);
+            bcf_update_info_string(session.hdr, r->v, CS_TAG, diff_score.s);
         }
 
         for (int i = 0; i < block.records.n; i++) {
@@ -4309,11 +4348,10 @@ int main(int argc, char *argv[]) {
             }
 
             if (!splice_triggered) continue;
-            if (strlen(r->v->d.allele[1]) > CAI_DISTANCE || r->v->rlen > CAI_DISTANCE) continue;
+            if (!variant_fits_window(r->v, session.prediction_radius)) continue;
 
             kstring_t haplotype_splice_scores = {0};
 
-            int has_scores = 0;
             for (int g = 0; g < r->genes->n; g++) {
                 if (g > 0) {
                     kputc(',', &haplotype_splice_scores);
@@ -4332,8 +4370,6 @@ int main(int argc, char *argv[]) {
                         kputs("|.|.|.|.|.|.|.|.", &haplotype_splice_scores);
                         continue;
                     }
-                    has_scores = 1;
-
                     kputc('|', &haplotype_splice_scores); kputs(score->gene, &haplotype_splice_scores);
 
                     // Format and append DS scores
@@ -4349,9 +4385,7 @@ int main(int argc, char *argv[]) {
                 }
             }
 
-            if (has_scores) log_info(haplotype_splice_scores.s);
-
-            bcf_update_info_string(hdr, r->v, SPLICEAI_HAP_TAG, haplotype_splice_scores.s);
+            bcf_update_info_string(session.hdr, r->v, SPLICEAI_HAP_TAG, haplotype_splice_scores.s);
 
             free(haplotype_splice_scores.s);
         }
@@ -4368,7 +4402,7 @@ int main(int argc, char *argv[]) {
             }
 
             if (!triggered && !has_ptv_effect) continue;
-            if (strlen(r->v->d.allele[1]) > CAI_DISTANCE || r->v->rlen > CAI_DISTANCE) continue;
+            if (!variant_fits_window(r->v, session.prediction_radius)) continue;
 
             kstring_t rescue_tag = {0};
             kstring_t rescue_prob_tag = {0};
@@ -4427,9 +4461,9 @@ int main(int argc, char *argv[]) {
                 }
             }
 
-            bcf_update_info_string(hdr, r->v, RESCUE_TAG, rescue_tag.s);
-            bcf_update_info_string(hdr, r->v, RESCUE_PROB_TAG, rescue_prob_tag.s);
-            bcf_update_info_string(hdr, r->v, RESCUE_TYPE_TAG, rescue_type_tag.s);
+            bcf_update_info_string(session.hdr, r->v, RESCUE_TAG, rescue_tag.s);
+            bcf_update_info_string(session.hdr, r->v, RESCUE_PROB_TAG, rescue_prob_tag.s);
+            bcf_update_info_string(session.hdr, r->v, RESCUE_TYPE_TAG, rescue_type_tag.s);
         }
 
         for (int i = 0; i < block.records.n; i++) {
@@ -4442,7 +4476,7 @@ int main(int argc, char *argv[]) {
             }
 
             if (!triggered) continue;
-            if (strlen(r->v->d.allele[1]) > CAI_DISTANCE || r->v->rlen > CAI_DISTANCE) continue;
+            if (!variant_fits_window(r->v, session.prediction_radius)) continue;
 
             int has_ptv = 0;
             kstring_t ptv_tag = {0};
@@ -4503,9 +4537,9 @@ int main(int argc, char *argv[]) {
 
             // if (!has_ptv) continue;
 
-            bcf_update_info_string(hdr, r->v, PTV_TAG, ptv_tag.s);
-            bcf_update_info_string(hdr, r->v, PTV_PROB_TAG, ptv_prob_tag.s);
-            bcf_update_info_string(hdr, r->v, PTV_TYPE_TAG, ptv_type_tag.s);
+            bcf_update_info_string(session.hdr, r->v, PTV_TAG, ptv_tag.s);
+            bcf_update_info_string(session.hdr, r->v, PTV_PROB_TAG, ptv_prob_tag.s);
+            bcf_update_info_string(session.hdr, r->v, PTV_TYPE_TAG, ptv_type_tag.s);
 
         }
 
@@ -4520,7 +4554,7 @@ int main(int argc, char *argv[]) {
             }
 
             if (!triggered) continue;
-            if (strlen(r->v->d.allele[1]) > CAI_DISTANCE || r->v->rlen > CAI_DISTANCE) continue;
+            if (!variant_fits_window(r->v, session.prediction_radius)) continue;
 
             kstring_t tags = {0};
 
@@ -4542,31 +4576,21 @@ int main(int argc, char *argv[]) {
                 }
             }
 
-            bcf_update_info_string(hdr, r->v, PREDICTION_FLAGS_TAG, tags.s);
+            bcf_update_info_string(session.hdr, r->v, PREDICTION_FLAGS_TAG, tags.s);
         }
 
         // Write out records
         for (int i = 0; i < block.records.n; i++) {
             Record *r = kv_A(block.records, i);
-            bcf_write(fp_out, hdr, r->v);
+            bcf_write(session.fp_out, session.hdr, r->v);
         }
 
         RecordBlock_destroy(block);
     }
 
-    // Clean up remaining structures
-    destroy_hdr_fmt(vep_fmt);
-    destroy_models(models);
     bcf_destroy(buffer.v);
+    Session_close(&session);
 
-    // Clean up remaining file handles
-    bcf_close(fp_in);
-    bcf_close(fp_out);
-    bcf_hdr_destroy(hdr);
-    fai_destroy(fai);
-    gff_destroy(gff);
-
-    // Free raw scores file
-    fclose(scores_tsv);
+    return EXIT_SUCCESS;
 }
 

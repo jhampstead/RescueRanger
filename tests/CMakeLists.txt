@@ -13,7 +13,6 @@ set(TEST_SOURCES
 )
 
 add_executable(unit_test ${TEST_SOURCES})
-add_dependencies(unit_test rescueranger)
 
 target_link_libraries(unit_test ${CHECK_LIBRARIES})
 

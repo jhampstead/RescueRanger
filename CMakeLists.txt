@@ -16,7 +16,7 @@ pkg_check_modules(CHECK REQUIRED check)
 
 add_subdirectory(src)
 
-#add_subdirectory(tests)
-#enable_testing()
-#add_test(NAME test_test COMMAND test_test)
+enable_testing()
+add_subdirectory(tests)
+add_test(NAME unit_test COMMAND unit_test)
 

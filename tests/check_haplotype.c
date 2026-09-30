@@ -34,9 +34,9 @@ void checked_teardown() {
  * SNVs
  */
 START_TEST(check_get_haplotype_sequence__snvs_within_bounds) {
-    kv_push(Record *, rs, init_record(mock_bcf1_t(6, "A", "T"), NULL));
-    kv_push(Record *, rs, init_record(mock_bcf1_t(10, "A", "G"), NULL));
-    kv_push(Record *, rs, init_record(mock_bcf1_t(19, "A", "C"), NULL));
+    kv_push(Record *, rs, Record_init(mock_bcf1_t(6, "A", "T"), NULL));
+    kv_push(Record *, rs, Record_init(mock_bcf1_t(10, "A", "G"), NULL));
+    kv_push(Record *, rs, Record_init(mock_bcf1_t(19, "A", "C"), NULL));
 
     get_haplotype_sequence(seq, &rs, range, &hap);
 
@@ -44,7 +44,7 @@ START_TEST(check_get_haplotype_sequence__snvs_within_bounds) {
 } END_TEST
 
 START_TEST(check_get_haplotype_sequence__snv_outside_bounds) {
-    kv_push(Record *, rs, init_record(mock_bcf1_t(20, "A", "T"), NULL));
+    kv_push(Record *, rs, Record_init(mock_bcf1_t(20, "A", "T"), NULL));
 
     get_haplotype_sequence(seq, &rs, range, &hap);
 
@@ -55,7 +55,7 @@ START_TEST(check_get_haplotype_sequence__snv_outside_bounds) {
  * Insertions
  */
 START_TEST(check_get_haplotype_sequence__insertion_within_bounds) {
-    kv_push(Record *, rs, init_record(mock_bcf1_t(10, "A", "AT"), NULL));
+    kv_push(Record *, rs, Record_init(mock_bcf1_t(10, "A", "AT"), NULL));
 
     get_haplotype_sequence(seq, &rs, range, &hap);
 
@@ -63,7 +63,7 @@ START_TEST(check_get_haplotype_sequence__insertion_within_bounds) {
 } END_TEST
 
 START_TEST(check_get_haplotype_sequence__insertion_overlaps_bounds_start) {
-    kv_push(Record *, rs, init_record(mock_bcf1_t(0, "A", "AT"), NULL));
+    kv_push(Record *, rs, Record_init(mock_bcf1_t(0, "A", "AT"), NULL));
 
     seq.s[19] = '\0';
     get_haplotype_sequence(seq, &rs, (Range) {1, 20}, &hap);
@@ -72,7 +72,7 @@ START_TEST(check_get_haplotype_sequence__insertion_overlaps_bounds_start) {
 } END_TEST
 
 START_TEST(check_get_haplotype_sequence__insertion_overlaps_bound_end) {
-    kv_push(Record *, rs, init_record(mock_bcf1_t(19, "A", "ATT"), NULL));
+    kv_push(Record *, rs, Record_init(mock_bcf1_t(19, "A", "ATT"), NULL));
 
     get_haplotype_sequence(seq, &rs, range, &hap);
 
@@ -83,7 +83,7 @@ START_TEST(check_get_haplotype_sequence__insertion_overlaps_bound_end) {
 * Deletions
 */
 START_TEST(check_get_haplotype_sequence__deletion_within_bounds) {
-    kv_push(Record *, rs, init_record(mock_bcf1_t(10, "AA", "A"), NULL));
+    kv_push(Record *, rs, Record_init(mock_bcf1_t(10, "AA", "A"), NULL));
 
     get_haplotype_sequence(seq, &rs, range, &hap);
 
@@ -91,7 +91,7 @@ START_TEST(check_get_haplotype_sequence__deletion_within_bounds) {
 } END_TEST
 
 START_TEST(check_get_haplotype_sequence__deletion_overlaps_bound_start) {
-    kv_push(Record *, rs, init_record(mock_bcf1_t(0, "AAA", "A"), NULL));
+    kv_push(Record *, rs, Record_init(mock_bcf1_t(0, "AAA", "A"), NULL));
 
     get_haplotype_sequence(seq, &rs, (Range) {1, 20}, &hap);
 
@@ -99,7 +99,7 @@ START_TEST(check_get_haplotype_sequence__deletion_overlaps_bound_start) {
 } END_TEST
 
 START_TEST(check_get_haplotype_sequence__deletion_overlaps_bound_end) {
-    kv_push(Record *, rs, init_record(mock_bcf1_t(18, "AAA", "A"), NULL));
+    kv_push(Record *, rs, Record_init(mock_bcf1_t(18, "AAA", "A"), NULL));
 
     get_haplotype_sequence(seq, &rs, range, &hap);
 
@@ -110,10 +110,10 @@ START_TEST(check_get_haplotype_sequence__deletion_overlaps_bound_end) {
 * Complex cases
 */
 START_TEST(check_get_haplotype_sequence__consecutive_indels) {
-    kv_push(Record *, rs, init_record(mock_bcf1_t(10, "A", "A"), NULL));
-    kv_push(Record *, rs, init_record(mock_bcf1_t(10, "A", "A"), NULL));
-    kv_push(Record *, rs, init_record(mock_bcf1_t(10, "A", "A"), NULL));
-    kv_push(Record *, rs, init_record(mock_bcf1_t(10, "A", "A"), NULL));
+    kv_push(Record *, rs, Record_init(mock_bcf1_t(10, "A", "A"), NULL));
+    kv_push(Record *, rs, Record_init(mock_bcf1_t(10, "A", "A"), NULL));
+    kv_push(Record *, rs, Record_init(mock_bcf1_t(10, "A", "A"), NULL));
+    kv_push(Record *, rs, Record_init(mock_bcf1_t(10, "A", "A"), NULL));
 
     get_haplotype_sequence(seq, &rs, range, &hap);
 
