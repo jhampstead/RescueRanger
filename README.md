@@ -55,7 +55,7 @@ bcftools +rescue in.vcf.gz -m models/ -g annot.gff3.gz -f ref.fa -o out.vcf.gz -
 | `--csq-tag TAG` | INFO tag with the consequences [CSQ for vep, BCSQ for bcftools] |
 | `--exclude-unphased` | Ignore heterozygous variants with unknown phase (by default they are placed on both haplotypes) |
 | `--reference-scores FILE` | Precomputed reference scores, to save time (optional, see [Reference scores](#reference-scores-optional)) |
-| `--raw-scores FILE` | Also write the raw SpliceAI scores to a TSV file |
+| `--raw-scores FILE` | Write the raw SpliceAI scores to a TSV file (optional, useful for debugging) |
 
 Run `bcftools +rescue -h` for all options.
 
@@ -85,7 +85,7 @@ The plugin adds these INFO tags:
 | `PTV` | Newly predicted PTV consequence |
 | `PTV_PROB` | Probability of the induced PTV |
 | `PTV_TYPE` | Type of induced PTV |
-| `PREDICTION_FLAGS` | Context of the prediction, including NMD (`nmd_target`, `long_exon`, `distal`, `start_proximal`,`non-coding`,`nmd_uncertain`), based on the NMD regions of [Blakes et al. (2026)](https://doi.org/10.1038/s41467-026-69983-z) |
+| `PREDICTION_FLAGS` | Context of the prediction, including NMD (`nmd_target`, `long_exon`, `distal`, `start_proximal`, `non-coding`, `nmd_uncertain`), based on the NMD regions of [Blakes et al. (2026)](https://doi.org/10.1038/s41467-026-69983-z) |
 
 ## Citations
 
