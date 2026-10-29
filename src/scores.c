@@ -10,21 +10,13 @@ void parse_prediction_pairs(const float *ref_priors, const float *ref_posteriors
     for (int i = 0; i < rs->n; i++) {
         const Record *r = kv_A(*rs, i);
 
-        const Range ref = variant_to_range(r->v, 0);
-        Range intersected_ref;
-        if (intersect_ranges(ref, pred_range, &intersected_ref) == 0) continue;
-        int ref_len = range_len(ref);
-        if (ref_len == 0) continue;
+        // The variant starts at the base it is attached to (the base before an indel), which is where an indel's pairs start
+        const Range footprint = variant_footprint(&r->alleles);
+        Range touched;
+        if (intersect_ranges(footprint, pred_range, &touched) == 0) continue;
+        const int64_t attached_to = footprint.start;
 
-        const Range alt = variant_to_range(r->v, 1);
-        Range intersected_alt;
-        int alt_segment = 0;
-        if (intersect_ranges(alt, pred_range, &intersected_alt) > 0) {
-            const int skipped_bases = intersected_alt.start - alt.start;
-            alt_segment = range_len(alt) - skipped_bases;
-        }
-
-        while (curr_position < r->v->pos) {
+        while (curr_position < attached_to) {
             const Prediction ref_pred = { false, curr_position, ref_priors[refs_idx], ref_posteriors[refs_idx] };
             refs_idx++;
             const Prediction alt_pred = { false, curr_position, alt_priors[alts_idx], alt_posteriors[alts_idx] };
@@ -34,11 +26,11 @@ void parse_prediction_pairs(const float *ref_priors, const float *ref_posteriors
             curr_position++;
         }
 
-        const int offset = allele_offset(r->v, 0, 1, pred_range);
+        const int offset = allele_offset(&r->alleles, pred_range);
         if (offset == 0) continue; // Doesn't need special handling, can be copied over in while loops
 
-        // Copy over preceding reference base, if it hasn't already (e.g. no overlapping reference base should be copied over in the case of touching indels)
-        if (curr_position == r->v->pos) {
+        // The base the variant is attached to keeps an ordinary pair, unless it was already paired (touching indels)
+        if (curr_position == attached_to) {
             const Prediction ref_pred = { false, curr_position, ref_priors[refs_idx], ref_posteriors[refs_idx] };
             refs_idx++;
             const Prediction alt_pred = { false, curr_position, alt_priors[alts_idx], alt_posteriors[alts_idx] };
@@ -48,6 +40,18 @@ void parse_prediction_pairs(const float *ref_priors, const float *ref_posteriors
             curr_position++;
         }
 
+        // The REF and ALT bases are paired one to one from the left: the paired bases of a complex indel are ordinary pairs, and
+        // only the bases left over after them are deleted or inserted. For a pure insertion or deletion nothing is paired.
+        const int paired = r->alleles.ref_len < r->alleles.alt_len ? r->alleles.ref_len : r->alleles.alt_len;
+        while ((int64_t) curr_position < r->alleles.pos + paired && (int64_t) curr_position < pred_range.end) {
+            const Prediction ref_pred = { false, curr_position, ref_priors[refs_idx], ref_posteriors[refs_idx] };
+            refs_idx++;
+            const Prediction alt_pred = { false, curr_position, alt_priors[alts_idx], alt_posteriors[alts_idx] };
+            alts_idx++;
+            const PairPrediction pp = {ref_pred, alt_pred};
+            kv_push(PairPrediction, map, pp);
+            curr_position++;
+        }
 
         const Prediction empty_pred = { true, 0, 0.0, 0.0 };
         if (offset > 0) { // Deletion

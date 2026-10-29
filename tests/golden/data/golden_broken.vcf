@@ -1,0 +1,9 @@
+##fileformat=VCFv4.2
+##contig=<ID=chr1,length=192525>
+##INFO=<ID=AF,Number=A,Type=Float,Description="Allele frequency">
+##INFO=<ID=CSQ,Number=.,Type=String,Description="Consequence annotations from Ensembl VEP. Format: Allele|Consequence|Feature_type|Feature">
+##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	S1
+chr1	1927	GPAIR_p1_snv_in_first_gene	C	G	.	.	AF=0.001;CSQ=G|missense_variant|Transcript|ENST00002	GT	0|1
+chr1	2024	GPAIR_p0_mnv_before_next_gene	CG	GC	.	.	AF=0.001;CSQ=GC|3_prime_UTR_variant|Transcript|ENST00002	GT	1|0
+chr1	4023	.	A
