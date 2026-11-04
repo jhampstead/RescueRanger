@@ -2,7 +2,7 @@
 
 #include <string.h>
 #include <htslib/faidx.h>
-#include <htslib/regidx.h>
+#include "bcftools/regidx.h"
 
 #include "bcftools/gff.h"
 #include "logging/log.h"

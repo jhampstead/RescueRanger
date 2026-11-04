@@ -39,6 +39,12 @@ void predict_for_seq(Model *models, const char *seq, int seq_len, int strand, fl
 // The same layout as the predictions of predict_on_sequence: NUM_SCORES floats per base, which the caller frees.
 float *precomputed_reference_predictions(const Session *s, const Gene *gene, const char *chrom, const int64_t position);
 
+// Where the sequence of the prediction boundaries (the gene) lies in the model window around the position. start is how many
+// bases of the window come before the sequence, and end how many come after it; a negative value is how far the sequence goes
+// on past that side of the window. rs, if given, are the records the sequence carries: the window is that many bases shorter
+// or longer on the side they are on.
+Range sequence_in_window(uint32_t position, Range prediction_boundaries, Records *rs, const int prediction_radius);
+
 // Predicts the window of a model width around the position in a sequence. rs, if given, are the records the sequence carries:
 // they move the window. The caller frees the predictions.
 float *predict_on_sequence(Model *models, const char *seq, const int width, uint32_t position, Range prediction_boundaries, int strand, Records *rs, const int prediction_radius);

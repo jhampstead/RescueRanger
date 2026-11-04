@@ -87,26 +87,30 @@ int transform_to_posterior_probabilities(const size_t num_probabilities, const f
     return num_values;
 }
 
-float * predict_on_sequence(Model *models, const char *seq, const int width, uint32_t position, Range prediction_boundaries, int strand, Records *rs, const int prediction_radius) {
+Range sequence_in_window(uint32_t position, Range prediction_boundaries, Records *rs, const int prediction_radius) {
     int64_t gene_start = prediction_boundaries.start;
     int64_t gene_end = prediction_boundaries.end;
     int64_t vposition = position;
 
     if (rs != NULL) {
         int start_pred_offset = haplotype_offset(rs, range_before(vposition, prediction_radius));
+        int end_pred_offset = haplotype_offset(rs, (Range) { vposition, vposition + prediction_radius + 1 }); // The rest of the window, from the site on
         gene_start -= start_pred_offset;
-        gene_end -= (haplotype_offset(rs, prediction_boundaries) - start_pred_offset);
+        gene_end -= (haplotype_offset(rs, prediction_boundaries) - end_pred_offset);
         vposition -= haplotype_offset(rs, (Range) { prediction_boundaries.start, position });
 
     }
     int32_t start_offset = variant_position_in_sequence(prediction_radius) + (gene_start - vposition);
     int32_t end_offset = variant_position_in_sequence(prediction_radius) - (gene_end - (vposition + 1)); // gene_end is exclusive
 
-    const char *shifted_seq = seq - start_offset;
-    if (start_offset < 0) start_offset = 0;
-    if (end_offset < 0) end_offset = 0;
+    return (Range) { start_offset, end_offset };
+}
 
-    Range padding_boundary = { start_offset, end_offset };
+float * predict_on_sequence(Model *models, const char *seq, const int width, uint32_t position, Range prediction_boundaries, int strand, Records *rs, const int prediction_radius) {
+    const Range offsets = sequence_in_window(position, prediction_boundaries, rs, prediction_radius);
+
+    const char *shifted_seq = seq - offsets.start;
+    Range padding_boundary = { offsets.start > 0 ? offsets.start : 0, offsets.end > 0 ? offsets.end : 0 };
     char *padded_seq = pad_sequence(shifted_seq, padding_boundary, width);
     float *predictions; int num_predictions;
     predict_for_seq(models, padded_seq, width, strand, &predictions, &num_predictions);
@@ -178,7 +182,7 @@ static void get_splice_probabilities_from_map(Record *r, enum SpliceType type, i
 
                     if (pair.alt.missing | (pair.alt.prior < 0.01)) continue;
 
-                    SpliceProbability p = { r, type, pair.alt.prior, pair.alt.posterior, pair.alt.missing ? pair.ref.position : pair.alt.position, exon_boundary_position };
+                    SpliceProbability p = { r, type, pair.ref.prior, pair.alt.prior, pair.alt.posterior, pair.alt.missing ? pair.ref.position : pair.alt.position, exon_boundary_position };
                     kv_push_new_probability(probabilities, p);
                 } else {
                     // If splice site has weakened
@@ -396,6 +400,8 @@ void store_splice_sites(SpliceProbability prediction, int *predict_for_pair, int
 // Writes the positions of the window where one of the predictions has a probability above the rescue threshold to the raw
 // scores file
 static void write_predictions(FILE *scores_tsv, const char *chr, const int64_t pos, const char *ref, const char *alt, const char *gene_name, const char *transcript_name, const int phase, const char *type, const char *pred_tags[], const int n_predictions, const float *predictions[], const int prediction_radius) {
+    if (scores_tsv == NULL) return; // The raw scores are optional
+
     for (int i = 0; i < pred_width(prediction_radius); i++) {
         const int offset = i - prediction_radius;
 
@@ -417,7 +423,7 @@ static void write_predictions(FILE *scores_tsv, const char *chr, const int64_t p
             const float donor = predictions[j][i * NUM_SCORES + DONOR];
 
             fprintf(scores_tsv, "%s\t%li\t%s\t%s\t%s\t%s\t%d\t%d\t%s\t%s\t%.6f\t%.6f\t%.6f\n",
-                    chr, pos + 1, ref, alt, gene_name, transcript_name, phase+1, offset, pred_tags[j], type, donor, acceptor, neither);
+                    chr, pos + 1, ref, alt, gene_name, transcript_name, phase, offset, pred_tags[j], type, donor, acceptor, neither);
         }
     }
 }
@@ -712,7 +718,7 @@ void predict_splice_changes_for_phase(const Session *s, const int phase, const R
 
             for (int j = 0; j < records->n; j++) {
                 Record *other = kv_A(*records, j);
-                if (has_matching_phase(other->v, s->hdr, phase, false)) {
+                if (has_matching_phase(other->v, s->hdr, s->gt_tag, phase, false)) {
                     continue;
                 }
 

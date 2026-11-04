@@ -10,9 +10,10 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/build)
 add_executable(rescueranger rescueranger.c)
 #add_sanitizers(rescueranger)
 
-# Link external libraries
-target_link_libraries(rescueranger ${HTSLIB_LIBRARIES})
-target_link_libraries(rescueranger ${CPLICEAI_LIBRARIES})
+# cpliceai and htslib are not given to the program itself, but come in through the libraries below, which give them after
+# bcftools. CMake puts what is given to the program before what the libraries bring in, so given here they would come before
+# objects that are only taken from the libraries later. When pkg-config finds cpliceai its libraries include htslib (-lhts), and
+# htslib has a region index with the same function names as bcftools/regidx.c, which would then be the one used.
 
 # Add logging
 add_library(Logging STATIC logging/log.c)
@@ -44,7 +45,9 @@ target_link_libraries(Scores Utils)
 target_link_libraries(rescueranger Scores)
 
 # Add BCFTools
-add_library(bcftools STATIC bcftools/regidx.c bcftools/gff.c)
+add_library(bcftools STATIC bcftools/gff.c bcftools/regidx.c bcftools/error.c)
+target_link_libraries(bcftools ${HTSLIB_LIBRARIES})
+set_target_properties(bcftools PROPERTIES C_VISIBILITY_PRESET hidden) # Not exported by the programs, so libraries that use htslib's region index keep it
 target_include_directories(rescueranger PRIVATE bcftools)
 target_link_libraries(rescueranger bcftools)
 
@@ -55,7 +58,7 @@ target_link_libraries(rescueranger ReferenceScores)
 
 # Add session
 add_library(Session STATIC session.c)
-target_link_libraries(Session Record ReferenceScores bcftools ${HTSLIB_LIBRARIES} ${CPLICEAI_LIBRARIES})
+target_link_libraries(Session Record ReferenceScores Tags Phase Logging bcftools ${HTSLIB_LIBRARIES} ${CPLICEAI_LIBRARIES})
 target_link_libraries(rescueranger Session)
 
 # Add annotation
@@ -98,3 +101,43 @@ add_library(RecordBlock STATIC record_block.c)
 target_link_libraries(RecordBlock Annotation Record Region Utils Logging bcftools ${HTSLIB_LIBRARIES} ${CPLICEAI_LIBRARIES})
 target_link_libraries(rescueranger RecordBlock)
 
+# Add the public interface (include/rescueranger/rescueranger.h): the options, opening a session and running the stages
+add_library(Api STATIC api.c)
+target_link_libraries(Api Session RecordBlock Phase Triggers SplicePrediction Isoforms Tags Utils Logging ${HTSLIB_LIBRARIES} ${CPLICEAI_LIBRARIES})
+target_link_libraries(rescueranger Api)
+
+# The shared library that is installed for other programs, such as the bcftools plugin. It is built from the same sources as the
+# libraries above, which are not installed. Only the functions of include/rescueranger/rescueranger.h are exported (RR_EXPORT).
+add_library(rescueranger_shared SHARED
+    api.c
+    annotation.c
+    haplotype.c
+    isoform_position.c
+    isoforms.c
+    phase.c
+    record.c
+    record_block.c
+    reference_scores.c
+    region.c
+    scores.c
+    session.c
+    splice_prediction.c
+    tags.c
+    triggers.c
+    utils.c
+    logging/log.c
+    bcftools/error.c
+    bcftools/gff.c
+    bcftools/regidx.c
+)
+set_target_properties(rescueranger_shared PROPERTIES
+    OUTPUT_NAME rescueranger
+    VERSION ${PROJECT_VERSION}
+    SOVERSION ${PROJECT_VERSION_MAJOR}
+    C_VISIBILITY_PRESET hidden)
+target_compile_definitions(rescueranger_shared PRIVATE -DLOG_USE_COLOR)
+target_link_libraries(rescueranger_shared ${CPLICEAI_LIBRARIES} ${HTSLIB_LIBRARIES} m)
+
+install(TARGETS rescueranger rescueranger_shared
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})

@@ -18,7 +18,7 @@ static int present(const int gt0, const int gt1, const bool phased, const int ph
     bcf_hdr_t *hdr = mock_hdr();
     bcf1_t *v = mock_genotyped_bcf1_t(hdr, 100, "A,G", gt0, gt1, phased, -1);
 
-    int result = has_matching_phase(v, hdr, phase, include_unphased);
+    int result = has_matching_phase(v, hdr, "GT", phase, include_unphased);
 
     bcf_destroy(v);
     bcf_hdr_destroy(hdr);
@@ -61,6 +61,101 @@ START_TEST(check_has_matching_phase__unphased_heterozygous_follows_include_unpha
 }
 END_TEST
 
+// An allele of -1 is a missing allele ('.')
+START_TEST(check_has_matching_phase__a_missing_genotype_is_on_neither_haplotype) {
+    for (int phase = 0; phase < 2; phase++) {
+        ck_assert_int_eq(present(-1, -1, false, phase, true), 0);  // ./.
+        ck_assert_int_eq(present(-1, -1, true, phase, true), 0);   // .|.
+    }
+}
+END_TEST
+
+START_TEST(check_has_matching_phase__a_half_missing_genotype_is_on_neither_haplotype) {
+    for (int phase = 0; phase < 2; phase++) {
+        ck_assert_int_eq(present(-1, 1, true, phase, true), 0);    // .|1
+        ck_assert_int_eq(present(1, -1, false, phase, true), 0);   // 1/.
+    }
+}
+END_TEST
+
+START_TEST(check_has_matching_phase__a_record_without_genotypes_is_on_neither_haplotype) {
+    bcf_hdr_t *hdr = mock_hdr();
+    bcf1_t *v = bcf_init();
+    v->rid = bcf_hdr_name2id(hdr, "chr1");
+    v->pos = 100;
+    v->n_sample = bcf_hdr_nsamples(hdr);
+    bcf_update_alleles_str(hdr, v, "A,G");
+
+    for (int phase = 0; phase < 2; phase++) {
+        ck_assert_int_eq(has_matching_phase(v, hdr, "GT", phase, true), 0);
+    }
+
+    bcf_destroy(v);
+    bcf_hdr_destroy(hdr);
+}
+END_TEST
+
+// Present on the haplotype of a phase by FORMAT/PGT, a String field with the genotype written like GT. GT itself is 0/0, which
+// would put the record on both haplotypes if it were read instead. pgt NULL leaves PGT off the record.
+static int present_by_pgt(const char *pgt, const int phase, const bool include_unphased) {
+    bcf_hdr_t *hdr = mock_hdr();
+    ck_assert_int_eq(bcf_hdr_append(hdr, "##FORMAT=<ID=PGT,Number=1,Type=String,Description=\"Phased genotype\">"), 0);
+    ck_assert_int_eq(bcf_hdr_sync(hdr), 0);
+    bcf1_t *v = mock_genotyped_bcf1_t(hdr, 100, "A,G", 0, 0, false, -1);
+    if (pgt) {
+        const char *values[1] = { pgt };
+        bcf_update_format_string(hdr, v, "PGT", values, 1);
+    }
+
+    int result = has_matching_phase(v, hdr, "PGT", phase, include_unphased);
+
+    bcf_destroy(v);
+    bcf_hdr_destroy(hdr);
+
+    return result;
+}
+
+START_TEST(check_has_matching_phase__a_string_tag_is_read_like_gt) {
+    ck_assert_int_ne(present_by_pgt("1|0", 0, false), 0);
+    ck_assert_int_eq(present_by_pgt("1|0", 1, false), 0);
+    ck_assert_int_eq(present_by_pgt("0|1", 0, false), 0);
+    ck_assert_int_ne(present_by_pgt("0|1", 1, false), 0);
+
+    for (int phase = 0; phase < 2; phase++) {
+        ck_assert_int_eq(present_by_pgt("1|1", phase, false), 1);
+        ck_assert_int_eq(present_by_pgt("0/1", phase, true), 1);
+        ck_assert_int_eq(present_by_pgt("0/1", phase, false), 0);
+    }
+}
+END_TEST
+
+START_TEST(check_has_matching_phase__a_string_tag_takes_the_first_two_alleles) {
+    ck_assert_int_eq(present_by_pgt("0|1|1", 0, false), 0);
+    ck_assert_int_ne(present_by_pgt("0|1|1", 1, false), 0);
+}
+END_TEST
+
+START_TEST(check_has_matching_phase__a_string_tag_without_a_usable_genotype_is_on_neither_haplotype) {
+    const char *unusable[] = { "./.", ".|1", "1/.", ".", "1", "", "a|b" };
+    for (size_t i = 0; i < sizeof(unusable) / sizeof(unusable[0]); i++) {
+        for (int phase = 0; phase < 2; phase++) {
+            ck_assert_msg(present_by_pgt(unusable[i], phase, true) == 0, "PGT \"%s\" counts as a genotype", unusable[i]);
+        }
+    }
+
+    // Not on the record at all
+    for (int phase = 0; phase < 2; phase++) ck_assert_int_eq(present_by_pgt(NULL, phase, true), 0);
+}
+END_TEST
+
+START_TEST(check_genotype_tag_name__strips_format_and_refuses_other_kinds) {
+    ck_assert_str_eq(Genotype_tag_name("FORMAT/GT"), "GT");
+    ck_assert_str_eq(Genotype_tag_name("GT"), "GT");
+    ck_assert_str_eq(Genotype_tag_name("FORMAT/PGT"), "PGT");
+    ck_assert_ptr_null(Genotype_tag_name("INFO/GT"));
+}
+END_TEST
+
 // A record with the given genotype. The loader gives a record with coding transcripts a tscripts vector, and leaves it NULL otherwise.
 static Record *make_record(bcf_hdr_t *hdr, const int64_t pos, const int gt0, const int gt1, const bool phased, const bool with_transcripts) {
     bcf1_t *v = mock_genotyped_bcf1_t(hdr, pos, "A,G", gt0, gt1, phased, -1);
@@ -88,12 +183,12 @@ START_TEST(check_record_select_for_phase__keeps_the_records_on_the_haplotype_of_
     Records block; kv_init(block);
     kv_push(Record *, block, first); kv_push(Record *, block, second); kv_push(Record *, block, both);
 
-    Records phase_0 = Record_select_for_phase(&block, hdr, 0, false);
+    Records phase_0 = Record_select_for_phase(&block, hdr, "GT", 0, false);
     ck_assert_int_eq(kv_size(phase_0), 2);
     ck_assert_ptr_eq(kv_A(phase_0, 0), first);
     ck_assert_ptr_eq(kv_A(phase_0, 1), both);
 
-    Records phase_1 = Record_select_for_phase(&block, hdr, 1, false);
+    Records phase_1 = Record_select_for_phase(&block, hdr, "GT", 1, false);
     ck_assert_int_eq(kv_size(phase_1), 2);
     ck_assert_ptr_eq(kv_A(phase_1, 0), second);
     ck_assert_ptr_eq(kv_A(phase_1, 1), both);
@@ -110,7 +205,7 @@ START_TEST(check_record_select_for_phase__keeps_the_order_of_the_block) {
     Records block; kv_init(block);
     for (int i = 0; i < 4; i++) kv_push(Record *, block, make_record(hdr, 100 + 10 * i, 1, 1, true, true));
 
-    Records selected = Record_select_for_phase(&block, hdr, 0, false);
+    Records selected = Record_select_for_phase(&block, hdr, "GT", 0, false);
 
     ck_assert_int_eq(kv_size(selected), 4);
     for (int i = 0; i < 4; i++) ck_assert_ptr_eq(kv_A(selected, i), kv_A(block, i));
@@ -128,7 +223,7 @@ START_TEST(check_record_select_for_phase__leaves_out_records_without_coding_tran
     Records block; kv_init(block);
     kv_push(Record *, block, without); kv_push(Record *, block, with);
 
-    Records selected = Record_select_for_phase(&block, hdr, 0, false);
+    Records selected = Record_select_for_phase(&block, hdr, "GT", 0, false);
 
     ck_assert_int_eq(kv_size(selected), 1);
     ck_assert_ptr_eq(kv_A(selected, 0), with);
@@ -145,10 +240,10 @@ START_TEST(check_record_select_for_phase__unphased_records_need_include_unphased
     Records block; kv_init(block);
     kv_push(Record *, block, unphased);
 
-    Records excluded = Record_select_for_phase(&block, hdr, 0, false);
+    Records excluded = Record_select_for_phase(&block, hdr, "GT", 0, false);
     ck_assert_int_eq(kv_size(excluded), 0);
 
-    Records included = Record_select_for_phase(&block, hdr, 0, true);
+    Records included = Record_select_for_phase(&block, hdr, "GT", 0, true);
     ck_assert_int_eq(kv_size(included), 1);
 
     kv_destroy(excluded);
@@ -158,11 +253,30 @@ START_TEST(check_record_select_for_phase__unphased_records_need_include_unphased
 }
 END_TEST
 
+START_TEST(check_record_select_for_phase__leaves_out_records_without_a_usable_genotype) {
+    bcf_hdr_t *hdr = mock_hdr();
+    Record *missing = make_record(hdr, 100, -1, -1, false, true);  // ./.
+    Record *genotyped = make_record(hdr, 110, 1, 1, true, true);
+    Records block; kv_init(block);
+    kv_push(Record *, block, missing); kv_push(Record *, block, genotyped);
+
+    for (int phase = 0; phase < 2; phase++) {
+        Records selected = Record_select_for_phase(&block, hdr, "GT", phase, true);
+        ck_assert_int_eq(kv_size(selected), 1);
+        ck_assert_ptr_eq(kv_A(selected, 0), genotyped);
+        kv_destroy(selected);
+    }
+
+    free_records(&block);
+    bcf_hdr_destroy(hdr);
+}
+END_TEST
+
 START_TEST(check_record_select_for_phase__empty_block) {
     bcf_hdr_t *hdr = mock_hdr();
     Records block; kv_init(block);
 
-    Records selected = Record_select_for_phase(&block, hdr, 0, false);
+    Records selected = Record_select_for_phase(&block, hdr, "GT", 0, false);
     ck_assert_int_eq(kv_size(selected), 0);
 
     kv_destroy(selected);
@@ -542,6 +656,13 @@ Suite *phase_suite() {
     tcase_add_test(tc_hmp, check_has_matching_phase__homozygous_reference_also_matches);
     tcase_add_test(tc_hmp, check_has_matching_phase__phased_heterozygous_is_on_the_haplotype_with_the_alt);
     tcase_add_test(tc_hmp, check_has_matching_phase__unphased_heterozygous_follows_include_unphased);
+    tcase_add_test(tc_hmp, check_has_matching_phase__a_missing_genotype_is_on_neither_haplotype);
+    tcase_add_test(tc_hmp, check_has_matching_phase__a_half_missing_genotype_is_on_neither_haplotype);
+    tcase_add_test(tc_hmp, check_has_matching_phase__a_record_without_genotypes_is_on_neither_haplotype);
+    tcase_add_test(tc_hmp, check_has_matching_phase__a_string_tag_is_read_like_gt);
+    tcase_add_test(tc_hmp, check_has_matching_phase__a_string_tag_takes_the_first_two_alleles);
+    tcase_add_test(tc_hmp, check_has_matching_phase__a_string_tag_without_a_usable_genotype_is_on_neither_haplotype);
+    tcase_add_test(tc_hmp, check_genotype_tag_name__strips_format_and_refuses_other_kinds);
 
     TCase *tc_select = mocked_tcase("record_select_for_phase");
     suite_add_tcase(s, tc_select);
@@ -550,6 +671,7 @@ Suite *phase_suite() {
     tcase_add_test(tc_select, check_record_select_for_phase__keeps_the_order_of_the_block);
     tcase_add_test(tc_select, check_record_select_for_phase__leaves_out_records_without_coding_transcripts);
     tcase_add_test(tc_select, check_record_select_for_phase__unphased_records_need_include_unphased);
+    tcase_add_test(tc_select, check_record_select_for_phase__leaves_out_records_without_a_usable_genotype);
     tcase_add_test(tc_select, check_record_select_for_phase__empty_block);
 
     TCase *tc_filter = mocked_tcase("filter_overlapping_variants");

@@ -2,12 +2,19 @@ cmake_minimum_required(VERSION 3.10)
 
 set(CMAKE_C_STANDARD 99)
 
-project(RescueRanger C)
+# The version of the library: RR_VERSION in rescueranger/version.h, the version of librescueranger.so and of rescueranger.pc
+project(RescueRanger VERSION 1.0.0 LANGUAGES C)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # set(CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/externals/sanitizers-cmake/cmake" ${CMAKE_MODULE_PATH})
 
+include(GNUInstallDirs)
+
 include_directories(include)
+
+# rescueranger/version.h is generated, next to the headers in include/
+configure_file(include/rescueranger/version.h.in "${PROJECT_BINARY_DIR}/include/rescueranger/version.h" @ONLY)
+include_directories("${PROJECT_BINARY_DIR}/include")
 
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(HTSLIB REQUIRED htslib)
@@ -39,10 +46,16 @@ if(CPLICEAI_ROOT)
     # Every cpliceai has the soname libcpliceai.so.1, and the runtime loader takes the first it finds. The directory of the one
     # that was linked is put in the binaries as DT_RPATH, which is searched before LD_LIBRARY_PATH (DT_RUNPATH is not), so a
     # cpliceai on LD_LIBRARY_PATH or in /usr/local/lib cannot take its place without anyone noticing.
+    #
+    # The binaries in the build directory get the same RPATH as the installed ones. Otherwise CMake ends the RPATH of the build
+    # directory with an empty entry, to rewrite it at install, and the runtime loader reads an empty entry as the current directory:
+    # the libraries that are not in the directories before it, such as libhts.so.3, would be looked for in the directory the
+    # program is run from. Nothing in the build directory links a shared library of the build directory, so nothing else is needed.
     get_filename_component(CPLICEAI_LIBRARY_DIR "${CPLICEAI_LIBRARY}" DIRECTORY)
-    set(CMAKE_BUILD_RPATH "${CPLICEAI_LIBRARY_DIR}")
+    set(CMAKE_BUILD_WITH_INSTALL_RPATH ON)
     set(CMAKE_INSTALL_RPATH "${CPLICEAI_LIBRARY_DIR}")
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--disable-new-dtags")
+    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,--disable-new-dtags")
 
     # The newer cpliceai is linked against ONNX Runtime. The linker checks that what libcpliceai.so refers to is defined, and for
     # that it has to find the libraries libcpliceai.so needs: -rpath-link says where. The same directories go into the binaries as
@@ -58,7 +71,7 @@ if(CPLICEAI_ROOT)
     endif()
     foreach(CPLICEAI_DEPENDENCY_DIR IN LISTS CPLICEAI_DEPENDENCY_DIRS_USED)
         set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,-rpath-link,${CPLICEAI_DEPENDENCY_DIR}")
-        list(APPEND CMAKE_BUILD_RPATH "${CPLICEAI_DEPENDENCY_DIR}")
+        set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,-rpath-link,${CPLICEAI_DEPENDENCY_DIR}")
         list(APPEND CMAKE_INSTALL_RPATH "${CPLICEAI_DEPENDENCY_DIR}")
     endforeach()
 
@@ -110,4 +123,10 @@ add_subdirectory(src)
 enable_testing()
 add_subdirectory(tests)
 add_test(NAME unit_test COMMAND unit_test)
+
+# Installed: the shared library and the program (see src/CMakeLists.txt), the headers and rescueranger.pc
+install(FILES "${PROJECT_SOURCE_DIR}/include/rescueranger/rescueranger.h" "${PROJECT_BINARY_DIR}/include/rescueranger/version.h"
+        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/rescueranger")
+configure_file(rescueranger.pc.in "${PROJECT_BINARY_DIR}/rescueranger.pc" @ONLY)
+install(FILES "${PROJECT_BINARY_DIR}/rescueranger.pc" DESTINATION "${CMAKE_INSTALL_LIBDIR}/pkgconfig")
 

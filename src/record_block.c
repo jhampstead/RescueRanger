@@ -1,6 +1,6 @@
 #include "record_block.h"
 
-#include <htslib/regidx.h>
+#include "bcftools/regidx.h"
 
 #include "bcftools/gff.h"
 #include "logging/log.h"

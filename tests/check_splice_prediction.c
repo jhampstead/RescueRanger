@@ -600,6 +600,41 @@ START_TEST(check_collect_splice_probabilities__a_cryptic_donor_on_the_haplotype)
     Transcript_destroy(t);
 } END_TEST
 
+// A canonical donor that is weak on the reference and viable on the haplotype is collected with every field in its place
+START_TEST(check_collect_splice_probabilities__a_weak_canonical_donor_viable_on_the_haplotype) {
+    Transcript *t = donor_at_105_transcript();
+    Gene gene = { .gff_id = 1, .name = "G", .coords = { 100, 251 } };
+    Record *r = record_on_transcript(105, t, &gene);
+    r->flags = calloc(NUM_PHASES, sizeof(uint32_t));
+    Records hap_in; kv_init(hap_in);
+    kv_push(Record *, hap_in, r);
+
+    float ref[WINDOW_POSITIONS * NUM_SCORES] = {0};
+    float hap[WINDOW_POSITIONS * NUM_SCORES] = {0};
+    ref[(105 - 100) * NUM_SCORES + DONOR_POS] = 0.005f;
+    hap[(105 - 100) * NUM_SCORES + DONOR_POS] = 0.8f;
+
+    int in_gene[1] = { 1 };
+    SpliceProbabilities probabilities; kv_init(probabilities);
+    collect_splice_probabilities(r, 0, in_gene, range_around(105, WINDOW_RADIUS), WINDOW_RADIUS, ref, hap, 0, &hap_in, &probabilities);
+
+    ck_assert_int_eq(kv_size(probabilities), 1);
+    const SpliceProbability p = kv_A(probabilities, 0);
+    ck_assert_ptr_eq(p.record, r);
+    ck_assert_int_eq(p.type, DONOR);
+    ck_assert_float_eq(p.ref_prior_probability, 0.005f);
+    ck_assert_float_eq(p.prior_probability, 0.8f);
+    ck_assert_float_eq(p.posterior_probability, 1.0f); // The only site of the haplotype
+    ck_assert_int_eq(p.position, 105);
+    ck_assert_int_eq(p.canonical_position, 105);
+    ck_assert_uint_eq(r->flags[0], WEAK_CANONICAL_DONOR);
+
+    kv_destroy(probabilities);
+    kv_destroy(hap_in);
+    destroy_record_on_transcript(r);
+    Transcript_destroy(t);
+} END_TEST
+
 // Nothing changes: nothing is collected and nothing is flagged
 START_TEST(check_collect_splice_probabilities__no_predictions_gives_nothing) {
     Transcript *t = donor_at_105_transcript();
@@ -624,6 +659,56 @@ START_TEST(check_collect_splice_probabilities__no_predictions_gives_nothing) {
     kv_destroy(hap_in);
     destroy_record_on_transcript(r);
     Transcript_destroy(t);
+} END_TEST
+
+/*
+* Where the sequence of the gene lies in the model window. The window has to hold exactly the bases of the sequence that are in
+* it: a window that takes more reads past the end of the sequence, and one that takes fewer puts N over bases it has.
+*/
+#define SEQUENCE_WINDOW_RADIUS 50
+#define SEQUENCE_WINDOW_GENE ((Range) { 79625, 80425 })
+#define SEQUENCE_WINDOW_SITE 80275
+
+// The sequence in the window around SEQUENCE_WINDOW_SITE of the gene SEQUENCE_WINDOW_GENE, which is 800 bases long on the reference and ends within
+// the context after the site, with the haplotype of one indel (mock_bcf1_t(position, ref, alt)). ref and alt NULL is the
+// reference. Checks that the window has the expected start and holds hap_len bases, the length of the haplotype of the gene.
+static void check_sequence_in_window(const uint64_t position, const char *ref, const char *alt, const int expected_start, const int hap_len) {
+    Records rs;
+    kv_init(rs);
+    if (ref != NULL) kv_push(Record *, rs, Record_init(mock_bcf1_t(position, ref, alt), NULL));
+
+    // The width the window is predicted with (see predict_splice_changes_for_phase): the model width, shorter or longer by the
+    // indel where it is in the prediction window
+    const int width = model_width(SEQUENCE_WINDOW_RADIUS) - haplotype_offset(&rs, range_around(SEQUENCE_WINDOW_SITE, SEQUENCE_WINDOW_RADIUS));
+    const Range offsets = sequence_in_window(SEQUENCE_WINDOW_SITE, SEQUENCE_WINDOW_GENE, ref != NULL ? &rs : NULL, SEQUENCE_WINDOW_RADIUS);
+
+    ck_assert_int_eq(offsets.start, expected_start);
+    ck_assert_int_eq(width - offsets.start - offsets.end, hap_len);
+
+    for (size_t i = 0; i < kv_size(rs); i++) Record_destroy(kv_A(rs, i));
+    kv_destroy(rs);
+}
+
+START_TEST(check_sequence_in_window__the_reference) {
+    check_sequence_in_window(0, NULL, NULL, 4400, 800);
+} END_TEST
+
+// The window of the haplotype whose prediction varied: the deletion before the site made the window take 5 bases past the end
+// of the sequence, which were whatever was in memory there
+START_TEST(check_sequence_in_window__a_deletion_before_the_site) {
+    check_sequence_in_window(80254, "NNNNNN", "N", 4400, 795);
+} END_TEST
+
+START_TEST(check_sequence_in_window__an_insertion_before_the_site) {
+    check_sequence_in_window(80254, "N", "NNNNNN", 4400, 805);
+} END_TEST
+
+START_TEST(check_sequence_in_window__a_deletion_after_the_site) {
+    check_sequence_in_window(80299, "NNNNNN", "N", 4400, 795);
+} END_TEST
+
+START_TEST(check_sequence_in_window__a_deletion_after_the_prediction_window) {
+    check_sequence_in_window(80399, "NNNNNN", "N", 4400, 795);
 } END_TEST
 
 Suite *splice_prediction_suite() {
@@ -662,6 +747,7 @@ Suite *splice_prediction_suite() {
     TCase *tc_collect = mocked_tcase("collect_splice_probabilities");
     tcase_add_test(tc_collect, check_collect_splice_probabilities__a_lost_canonical_donor);
     tcase_add_test(tc_collect, check_collect_splice_probabilities__a_cryptic_donor_on_the_haplotype);
+    tcase_add_test(tc_collect, check_collect_splice_probabilities__a_weak_canonical_donor_viable_on_the_haplotype);
     tcase_add_test(tc_collect, check_collect_splice_probabilities__no_predictions_gives_nothing);
     suite_add_tcase(s, tc_collect);
 
@@ -670,6 +756,14 @@ Suite *splice_prediction_suite() {
     tcase_add_test(tc_locate, check_locate_prediction_on_exon__an_acceptor_in_the_window);
     tcase_add_test(tc_locate, check_locate_prediction_on_exon__an_exon_without_a_window_gives_false);
     suite_add_tcase(s, tc_locate);
+
+    TCase *tc_window = mocked_tcase("sequence_in_window");
+    tcase_add_test(tc_window, check_sequence_in_window__the_reference);
+    tcase_add_test(tc_window, check_sequence_in_window__a_deletion_before_the_site);
+    tcase_add_test(tc_window, check_sequence_in_window__an_insertion_before_the_site);
+    tcase_add_test(tc_window, check_sequence_in_window__a_deletion_after_the_site);
+    tcase_add_test(tc_window, check_sequence_in_window__a_deletion_after_the_prediction_window);
+    suite_add_tcase(s, tc_window);
 
     return s;
 }

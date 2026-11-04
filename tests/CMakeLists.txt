@@ -27,10 +27,6 @@ add_executable(unit_test ${TEST_SOURCES})
 
 target_link_libraries(unit_test ${CHECK_LIBRARIES})
 
-target_link_libraries(unit_test ${HTSLIB_LIBRARIES})
-target_link_libraries(unit_test ${CPLICEAI_LIBRARIES})
-
-
 target_link_libraries(unit_test RecordBlock)
 target_link_libraries(unit_test Session)
 target_link_libraries(unit_test ReferenceScores)
@@ -46,3 +42,6 @@ target_link_libraries(unit_test Utils)
 target_link_libraries(unit_test Haplotype)
 target_link_libraries(unit_test Region)
 
+# cpliceai and htslib come in through the libraries above, after bcftools. Given here they would come before those libraries, and
+# when pkg-config finds cpliceai its libraries include htslib (-lhts), whose region index has the same function names as
+# bcftools/regidx.c: the region index would be the one of htslib.
