@@ -7,21 +7,59 @@ Range variant_to_range(const bcf1_t *v, const int allele) {
     return (Range) { v->pos, v->pos + strlen(v->d.allele[allele]) };
 }
 
-int allele_offset(const bcf1_t *v, const int ref_index, const int alt_index, const Range bounds) {
-    Range ref = variant_to_range(v, ref_index);
-    Range ref_range;
-    if (intersect_ranges(ref, bounds, &ref_range) == 0 || range_len(ref_range) == 0) {
-        return 0;
+bool variant_fits_window(const Alleles *a, const int prediction_radius) {
+    return a->alt_len <= prediction_radius && a->ref_len <= prediction_radius;
+}
+
+// The base the ALT of a variant is attached to: the base before an indel, the first base of a substitution
+static int64_t attachment_base(const Alleles *a) {
+    return a->pos - (a->prefix_len > 0);
+}
+
+int64_t variant_position(const Alleles *a) {
+    return a->ref_len > 0 ? a->pos : attachment_base(a);
+}
+
+Range variant_footprint(const Alleles *a) {
+    return (Range) { attachment_base(a), a->pos + a->ref_len };
+}
+
+bool variant_overlaps(const Alleles *a, const Range range) {
+    Range intersection;
+    return intersect_ranges(variant_footprint(a), range, &intersection) != 0 && range_len(intersection) > 0;
+}
+
+bool variant_in_region(const Alleles *a, const Range region) {
+    // An insertion changes no REF base. It lies between the bases pos - 1 and pos, and is in the region when both are
+    if (a->ref_len == 0) return a->pos - 1 >= region.start && a->pos < region.end;
+
+    return a->pos < region.end && a->pos + a->ref_len > region.start;
+}
+
+int64_t variant_shift(const Alleles *a, const int64_t b, const bool insertions_at_b) {
+    const int paired = a->ref_len < a->alt_len ? a->ref_len : a->alt_len;
+    int64_t shift = 0;
+
+    // The REF bases left over after pairing them with the ALT bases are deleted: the ones before b move what comes after them
+    const int64_t deleted_start = a->pos + paired;
+    const int64_t deleted_end = a->pos + a->ref_len < b ? a->pos + a->ref_len : b;
+    if (deleted_end > deleted_start) shift += deleted_end - deleted_start;
+
+    // The ALT bases left over are inserted at the point after the last REF base, between the bases point - 1 and point
+    if (a->alt_len > a->ref_len) {
+        const int64_t point = a->pos + a->ref_len;
+        if (point < b || (point == b && insertions_at_b)) shift -= a->alt_len - a->ref_len;
     }
 
-    Range alt = variant_to_range(v, alt_index);
-    Range intersected_alt;
-    int alt_len = 0;
-    if (intersect_ranges((Range) {v->pos, v->pos+1}, bounds, &intersected_alt) != 0 && range_len(intersected_alt) > 0) {
-        alt_len = range_len(alt);
-    }
+    return shift;
+}
 
-    return range_len(ref_range) - alt_len;
+int allele_offset(const Alleles *a, const Range bounds) {
+    if (bounds.end <= bounds.start) return 0;
+
+    // The deleted bases in bounds, and the inserted bases whose attached base (the base before their point) is in bounds, which
+    // is when the point is in (start, end]
+    return (int) (variant_shift(a, bounds.end, true) - variant_shift(a, bounds.start, true));
 }
 
 int haplotype_offset(const Records *rs, const Range bounds) {
@@ -29,14 +67,51 @@ int haplotype_offset(const Records *rs, const Range bounds) {
 
     for (int i = 0; i < rs->n; i++) {
         Record *r = kv_A(*rs, i);
-        offset += allele_offset(r->v, 0, 1, bounds);
+        offset += allele_offset(&r->alleles, bounds);
     }
 
     return offset;
 }
 
-int prediction_offset(const bcf1_t *v, const Records *rs) {
-    return haplotype_offset(rs, (Range) { v->pos - 50, v->pos + 51 }); // TODO: Change to a const/defined variable
+int64_t haplotype_shift(const Records *rs, const Range gene, const int64_t b, const bool insertions_at_b) {
+    if (b <= gene.start) return 0;
+
+    int64_t shift = 0;
+
+    for (size_t i = 0; i < kv_size(*rs); i++) {
+        const Alleles *a = &kv_A(*rs, i)->alleles;
+        if (!variant_in_region(a, gene)) continue;
+
+        // Only what lies in the gene counts: the shift at b minus the shift at the start of the gene
+        shift += variant_shift(a, b, insertions_at_b) - variant_shift(a, gene.start, insertions_at_b);
+    }
+
+    return shift;
+}
+
+Range region_to_haplotype(const Records *rs, const Range gene, const Range region, const bool is_utr) {
+    const int64_t start = region.start - haplotype_shift(rs, gene, region.start, !is_utr);
+
+    // An empty region has no inside: an insertion at its position cannot be before its start and after its end, which would
+    // turn it around. It stays empty.
+    if (region.end <= region.start) return (Range) { start, start };
+
+    return (Range) { start, region.end - haplotype_shift(rs, gene, region.end, is_utr) };
+}
+
+Range reference_range_to_haplotype(const Records *rs, const Range gene, const Range range, const uint32_t strand) {
+    // An insertion at b lies between the bases b - 1 and b. Forward it is attached to b - 1, so it counts as before b at both
+    // borders. Reverse it is attached to b, and does not
+    const bool insertions_at_b = strand != STRAND_REV;
+
+    const int64_t start = range.start - haplotype_shift(rs, gene, range.start, insertions_at_b);
+    if (range.end <= range.start) return (Range) { start, start };
+
+    return (Range) { start, range.end - haplotype_shift(rs, gene, range.end, insertions_at_b) };
+}
+
+int prediction_offset(const Alleles *a, const Records *rs, const int prediction_radius) {
+    return haplotype_offset(rs, range_around(variant_footprint(a).start, prediction_radius));
 }
 
 void get_best_insertion_score(const float *insert_start, const int length, float *best) {
@@ -48,58 +123,58 @@ void get_best_insertion_score(const float *insert_start, const int length, float
 }
 
 float *match_predictions_to_reference(const float *predictions, const Range pred_range, const Records *rs, const size_t num_reference_predictions) {
-    float *corrected_predictions = malloc(num_reference_predictions * sizeof(float));
-    // Range pred_range = {v->pos - (50), v->pos + 51}; // +1 for open ended coordinates
+    float *corrected = malloc(num_reference_predictions * sizeof(float));
+    const size_t score_size = NUM_SCORES * sizeof(float);
 
-    int idx = 0;
+    int64_t idx = 0; // First position of the window (relative to its start) that has not been written yet
     for (int l = 0; l < rs->n; l++) {
-        Record *r = kv_A(*rs, l);
+        const Alleles *a = &kv_A(*rs, l)->alleles;
+        if (!variant_overlaps(a, pred_range)) continue;
 
-        Range ref;
-        if (intersect_ranges(variant_to_range(r->v, 0), pred_range, &ref) == 0) continue;
-        shift_range(&ref, -pred_range.start);
-        int ref_len = range_len(ref);
-        if (ref_len == 0) continue;
+        // The positions of the window the variant touches, relative to the window start
+        Range touched;
+        intersect_ranges(variant_footprint(a), pred_range, &touched);
+        shift_range(&touched, -pred_range.start);
 
-        Range alt = variant_to_range(r->v, 1);
-        Range intersected_alt;
-        int alt_segment = 0;
-        if (intersect_ranges(alt, pred_range, &intersected_alt) > 0) {
-            // shift_range(&alt, -pred_range.start);
-            alt_segment = range_len(alt);
+        // Up to the variant, the haplotype predictions are shifted by the variants before it
+        const int64_t shift = haplotype_offset(rs, (Range) { pred_range.start, pred_range.start + touched.start });
+        const float *hap = predictions - shift * NUM_SCORES; // hap + q * NUM_SCORES is the prediction for window position q
+
+        if (touched.start > idx) memcpy(corrected + idx * NUM_SCORES, hap + idx * NUM_SCORES, (touched.start - idx) * score_size);
+
+        if (a->ref_len == a->alt_len) { // A substitution replaces its bases one by one
+            for (int64_t q = touched.start; q < touched.end; q++) memcpy(corrected + q * NUM_SCORES, hap + q * NUM_SCORES, score_size);
+        } else {
+            // The REF and ALT bases are paired one to one from the left. The junction is the base the indel is attached to, if
+            // that base lies in the window; it keeps its own prediction. The paired bases keep the prediction of the base that
+            // takes their place, and the REF bases left over are removed and get 0, also the first one of a deletion whose
+            // attachment base lies before the window.
+            const int paired = a->ref_len < a->alt_len ? a->ref_len : a->alt_len;
+            const bool junction_in_window = a->prefix_len > 0 && variant_footprint(a).start >= pred_range.start;
+            for (int64_t q = touched.start; q < touched.end; q++) {
+                const bool kept = (junction_in_window && q == touched.start) || pred_range.start + q < a->pos + paired;
+                if (kept) memcpy(corrected + q * NUM_SCORES, hap + q * NUM_SCORES, score_size);
+                else memset(corrected + q * NUM_SCORES, 0, score_size);
+            }
+
+            // The ALT bases left over are inserted after the last paired base (the base the insertion is attached to when
+            // nothing is paired). If it is in the window it takes the best of itself and the inserted bases.
+            if (a->alt_len > a->ref_len) {
+                const int64_t last_paired = a->pos + paired - 1;
+                if (last_paired >= pred_range.start && last_paired < pred_range.end) {
+                    const int64_t q = last_paired - pred_range.start;
+                    float best_scores[NUM_SCORES] = {0};
+                    get_best_insertion_score(hap + q * NUM_SCORES, (1 + a->alt_len - a->ref_len) * NUM_SCORES, best_scores);
+                    memcpy(corrected + q * NUM_SCORES, best_scores, score_size);
+                }
+            }
         }
 
-        int skipped_alt_bases = (intersected_alt.start - alt.start);
-        if (alt_segment > 0) alt_segment -= skipped_alt_bases;
-        Range ref_segment = scale_range(ref, NUM_SCORES);
-
-        int variant_offset = haplotype_offset(rs, (Range) { pred_range.start, pred_range.start + ref.start }) * NUM_SCORES;
-
-        // Copy segments between variants/boundaries
-        int segment_len = (ref_segment.start - idx);
-        if (segment_len > 0) memcpy(corrected_predictions + idx, predictions + idx - variant_offset, segment_len * sizeof(float));
-
-        int offset = ref_len - alt_segment; // Naive offset in end position vs ref and alt
-        float *corrected_start = corrected_predictions + ref_segment.start;
-        if (offset == 0) {
-            memcpy(corrected_start, predictions + ref_segment.start - variant_offset, range_len(ref_segment) * sizeof(float));
-        } else if (offset < 0) {
-            float best_scores[NUM_SCORES] = {0};
-            get_best_insertion_score(predictions + ref_segment.start - variant_offset, alt_segment * NUM_SCORES, best_scores);
-            memcpy(corrected_start, best_scores, NUM_SCORES * sizeof(float));
-        } else { // offset > 0
-            memcpy(corrected_start, predictions + ref_segment.start - variant_offset, NUM_SCORES * sizeof(float));
-            memset(corrected_start + NUM_SCORES, 0, (offset - (skipped_alt_bases > 0)) * NUM_SCORES * sizeof(float));
-        }
-
-
-        if (ref_segment.end > idx) {
-            idx = ref_segment.end;
-        }
+        if (touched.end > idx) idx = touched.end;
     }
 
-    int variant_offset = haplotype_offset(rs, pred_range) * NUM_SCORES;
-    memcpy(corrected_predictions + idx, predictions + idx - variant_offset, (num_reference_predictions - idx) * sizeof(float));
+    const int64_t shift = haplotype_offset(rs, pred_range);
+    memcpy(corrected + idx * NUM_SCORES, predictions + (idx - shift) * NUM_SCORES, (num_reference_predictions - idx * NUM_SCORES) * sizeof(float));
 
-    return corrected_predictions;
+    return corrected;
 }

@@ -1,0 +1,200 @@
+id	copy	template	strand	phase	pos	ref	alt	gt	af	csq	items	expect	description
+INTERGENIC_p0_snv	none	none	+	0	1027	C	G	1|0	0.001			same	SNV in no gene: written unchanged
+GPAIR_p1_snv_in_first_gene	GPAIR	single	+	1	1927	C	G	0|1	0.001	missense_variant	17	diff	SNV in the coding sequence of the first gene
+GPAIR_p0_mnv_before_next_gene	GPAIR	single	+	0	2024	CG	GC	1|0	0.001	3_prime_UTR_variant	17	diff	an MNV whose REF ends one base before the second gene begins
+GPAIR_p1_snv_on_shared_base	GPAIR	single	+	1	2026	G	T	0|1	0.001	3_prime_UTR_variant&5_prime_UTR_variant	17	diff	SNV on the one base both genes have
+GPAIR_p0_snv_in_second_gene	GPAIR	single	+	0	2126	T	A	1|0	0.001	missense_variant	17	diff	SNV in the coding sequence of the second gene (a block of its own or the same block)
+A1F_p0_donor_snv	A1F	standard	+	0	3876	G	T	1|0	0.001	splice_donor_variant		same	SNV at the first base of the donor, a cryptic donor 60 bases in
+A1F_p1_cds_snv	A1F	standard	+	1	4126	A	C	0|1	0.001	missense_variant		same	missense SNV in the coding sequence of exon 1, rare
+A1R_p1_cds_snv	A1R	standard	-	1	6425	T	G	0|1	0.001	missense_variant		same	missense SNV in the coding sequence of exon 1, rare
+A1R_p0_donor_snv	A1R	standard	-	0	6675	C	A	1|0	0.001	splice_donor_variant		same	SNV at the first base of the donor, a cryptic donor 60 bases in
+A2F_p1_utr_snv	A2F	standard	+	1	8356	T	A	0|1	0.001	5_prime_UTR_variant		same	SNV in the 5' UTR, rare
+A2F_p0_acceptor_snv	A2F	standard	+	0	8675	G	T	1|0	0.001	splice_acceptor_variant		same	SNV at the last base of the acceptor, a cryptic acceptor 40 bases before it
+A2R_p0_acceptor_snv	A2R	standard	-	0	11076	C	A	1|0	0.001	splice_acceptor_variant		same	SNV at the last base of the acceptor, a cryptic acceptor 40 bases before it
+A2R_p1_utr_snv	A2R	standard	-	1	11395	A	T	0|1	0.001	5_prime_UTR_variant		same	SNV in the 5' UTR, rare
+A3F_p1_intron_snv	A3F	standard	+	1	13176	G	T	0|1	0.001	intron_variant		same	SNV deep in the first intron, rare
+A3F_p0_vep_stop	A3F	standard	+	0	13279	C	T	1|0		stop_gained		start_proximal	stop_gained SNV (CAA to TAA) at the coding index 93: start-proximal
+A3R_p0_vep_stop	A3R	standard	-	0	15672	G	A	1|0		stop_gained		start_proximal	stop_gained SNV (CAA to TAA) at the coding index 93: start-proximal
+A3R_p1_intron_snv	A3R	standard	-	1	15775	A	T	0|1	0.001	intron_variant		same	SNV deep in the first intron, rare
+B1F_p0_donor_and_intron_del.1	B1F	standard	+	0	17676	G	T	1|0	0.001	splice_donor_variant	1	diff	lost donor and a 3 base deletion in the retained part of the intron, one haplotype
+B1F_p0_donor_and_intron_del.2	B1F	standard	+	0	17705	GGAA	G	1|0	0.3	intron_variant	1	diff	lost donor and a 3 base deletion in the retained part of the intron, one haplotype
+B1F_p1_exon_end_frameshift	B1F	standard	+	1	17972	TA	T	0|1		frameshift_variant	1	diff	deletion of the 3rd last base of exon 1: a frameshift next to the intron
+B1R_p1_exon_end_frameshift	B1R	standard	-	1	20177	AC	A	0|1		frameshift_variant	1	diff	deletion of the 3rd last base of exon 1: a frameshift next to the intron
+B1R_p0_donor_and_intron_del.2	B1R	standard	-	0	20442	CAAT	C	1|0	0.3	intron_variant	1	diff	lost donor and a 3 base deletion in the retained part of the intron, one haplotype
+B1R_p0_donor_and_intron_del.1	B1R	standard	-	0	20475	C	A	1|0	0.001	splice_donor_variant	1	diff	lost donor and a 3 base deletion in the retained part of the intron, one haplotype
+B2F_p0_del_over_cds_start	B2F	standard	+	0	22183	CATATGC	C	1|0	0.001	start_lost&5_prime_UTR_variant	2,10	diff	deletion of 6 bases across the start of the coding sequence (2 in the UTR)
+B2F_p1_del_over_cds_end	B2F	standard	+	1	22856	TAACGCTAC	T	0|1	0.001	stop_lost&3_prime_UTR_variant	2,10	diff	deletion of 8 bases across the end of the coding sequence (the stop codon and the UTR)
+B2R_p1_del_over_cds_end	B2R	standard	-	1	24486	TTTGAGATT	T	0|1	0.001	stop_lost&3_prime_UTR_variant	2,10	diff	deletion of 8 bases across the end of the coding sequence (the stop codon and the UTR)
+B2R_p0_del_over_cds_start	B2R	standard	-	0	25161	ACCATAG	A	1|0	0.001	start_lost&5_prime_UTR_variant	2,10	diff	deletion of 6 bases across the start of the coding sequence (2 in the UTR)
+B3F_p1_del_over_acceptor	B3F	standard	+	1	27071	CTTAGGGA	C	0|1	0.001	splice_acceptor_variant&coding_sequence_variant	2	diff	deletion of 7 bases across the acceptor and the exon start
+B3F_p0_del_over_donor	B3F	standard	+	0	27172	GCCAGTAA	G	1|0	0.001	splice_donor_variant&coding_sequence_variant	2	diff	deletion of 7 bases across the exon end and the donor
+B3R_p0_del_over_donor	B3R	standard	-	0	29371	CTTACAGC	C	1|0	0.001	splice_donor_variant&coding_sequence_variant	2	diff	deletion of 7 bases across the exon end and the donor
+B3R_p1_del_over_acceptor	B3R	standard	-	1	29472	ATGTCTAA	A	0|1	0.001	splice_acceptor_variant&coding_sequence_variant	2	diff	deletion of 7 bases across the acceptor and the exon start
+B4F_p1_del_over_gene_start	B4F	standard	+	1	31323	TACTC	T	0|1	0.001	5_prime_UTR_variant&upstream_gene_variant	2,11	diff	deletion that begins 2 bases before the gene and runs 2 bases into it
+B4F_p0_del_over_gene_end	B4F	standard	+	0	32123	GCTACT	G	1|0	0.001	3_prime_UTR_variant&downstream_gene_variant	2,11	diff	deletion that begins inside the gene and runs 3 bases past its last base
+B4R_p1_del_over_gene_start	B4R	standard	-	1	33623	CTCTC	C	0|1	0.001	5_prime_UTR_variant&upstream_gene_variant	2,11	diff	deletion that begins 2 bases before the gene and runs 2 bases into it
+B4R_p0_del_over_gene_end	B4R	standard	-	0	34423	AGCGCC	A	1|0	0.001	3_prime_UTR_variant&downstream_gene_variant	2,11	diff	deletion that begins inside the gene and runs 3 bases past its last base
+B5F_p0_mnv_over_donor.1	B5F	standard	+	0	36305	GT	G	1|0		frameshift_variant	3	diff	MNV of 4 bases across the exon end and the donor, and a frameshift deletion before it
+B5F_p1_complex_over_donor	B5F	standard	+	1	36373	ACAGT	TG	0|1	0.001	splice_donor_variant&coding_sequence_variant	3	diff	complex indel (5 bases to 2) across the exon end and the donor
+B5F_p0_mnv_over_donor.2	B5F	standard	+	0	36374	CAGT	GTCA	1|0	0.001	splice_donor_variant	3	diff	MNV of 4 bases across the exon end and the donor, and a frameshift deletion before it
+B5R_p0_mnv_over_donor.2	B5R	standard	-	0	38574	ACGA	TGCT	1|0	0.001	splice_donor_variant	3	diff	MNV of 4 bases across the exon end and the donor, and a frameshift deletion before it
+B5R_p1_complex_over_donor	B5R	standard	-	1	38574	ACGAG	TG	0|1	0.001	splice_donor_variant&coding_sequence_variant	3	diff	complex indel (5 bases to 2) across the exon end and the donor
+B5R_p0_mnv_over_donor.1	B5R	standard	-	0	38644	CG	C	1|0		frameshift_variant	3	diff	MNV of 4 bases across the exon end and the donor, and a frameshift deletion before it
+B6F_p0_ins_at_acceptor_border.1	B6F	standard	+	0	40645	TG	T	1|0		frameshift_variant	3	diff	insertion of 2 bases between the last intron base and the first exon base, and a frameshift before it
+B6F_p0_ins_at_acceptor_border.2	B6F	standard	+	0	40875	G	GAC	1|0	0.001	splice_acceptor_variant	3	diff	insertion of 2 bases between the last intron base and the first exon base, and a frameshift before it
+B6F_p1_ins_at_cds_utr_border.1	B6F	standard	+	1	41195	AA	A	0|1		frameshift_variant	3	diff	insertion of 2 bases after the last coding base, before the 3' UTR, and a frameshift before it
+B6F_p1_ins_at_cds_utr_border.2	B6F	standard	+	1	41258	A	AAC	0|1	0.001	3_prime_UTR_variant	3	diff	insertion of 2 bases after the last coding base, before the 3' UTR, and a frameshift before it
+B6R_p1_ins_at_cds_utr_border.2	B6R	standard	-	1	42892	T	TGT	0|1	0.001	3_prime_UTR_variant	3	diff	insertion of 2 bases after the last coding base, before the 3' UTR, and a frameshift before it
+B6R_p1_ins_at_cds_utr_border.1	B6R	standard	-	1	42954	GG	G	0|1		frameshift_variant	3	diff	insertion of 2 bases after the last coding base, before the 3' UTR, and a frameshift before it
+B6R_p0_ins_at_acceptor_border.2	B6R	standard	-	0	43275	G	GGT	1|0	0.001	splice_acceptor_variant	3	diff	insertion of 2 bases between the last intron base and the first exon base, and a frameshift before it
+B6R_p0_ins_at_acceptor_border.1	B6R	standard	-	0	43504	CA	C	1|0		frameshift_variant	3	diff	insertion of 2 bases between the last intron base and the first exon base, and a frameshift before it
+B7F_p0_ins_utr_edge_next_to_cds	B7F	standard	+	0	45185	A	AAC	1|0	0.001	5_prime_UTR_variant	4,5	diff	insertion of 2 bases after the UTR base next to the coding sequence (the lower UTR region of the + strand)
+B7F_p1_ins_after_last_gene_base	B7F	standard	+	1	45925	T	TAC	0|1	0.001	downstream_gene_variant	4,11	diff	insertion of 2 bases after the last base of the gene on the + strand
+B7R_p0_ins_utr_edge_next_to_cds	B7R	standard	-	0	47492	A	AAC	1|0	0.001	3_prime_UTR_variant	4,5	diff	insertion of 2 bases after the UTR base next to the coding sequence (the lower UTR region of the + strand)
+B7R_p1_ins_after_last_gene_base	B7R	standard	-	1	48225	A	AAC	0|1	0.001	downstream_gene_variant	4,11	diff	insertion of 2 bases after the last base of the gene on the + strand
+B8F_p0_utr_and_cds_snvs.1	B8F	standard	+	0	49785	A	C	1|0	0.001	5_prime_UTR_variant	5	diff	SNVs on the last base of the 5' UTR and on the first coding base
+B8F_p1_del_anchored_in_utr	B8F	standard	+	1	49785	AA	A	0|1		start_lost	5	diff	deletion of the first coding base, anchored in the 5' UTR
+B8F_p0_utr_and_cds_snvs.2	B8F	standard	+	0	49786	A	C	1|0	0.001	start_lost	5	diff	SNVs on the last base of the 5' UTR and on the first coding base
+B8R_p1_del_anchored_in_utr	B8R	standard	-	1	52764	AT	A	0|1		start_lost	5	diff	deletion of the first coding base, anchored in the 5' UTR
+B8R_p0_utr_and_cds_snvs.2	B8R	standard	-	0	52765	T	G	1|0	0.001	start_lost	5	diff	SNVs on the last base of the 5' UTR and on the first coding base
+B8R_p0_utr_and_cds_snvs.1	B8R	standard	-	0	52766	G	C	1|0	0.001	5_prime_UTR_variant	5	diff	SNVs on the last base of the 5' UTR and on the first coding base
+B9F_p1_snv_after_deletion.1	B9F	standard	+	1	54395	ACATTGAGATTTGACGCGGTCATGTGTAGAG	A	0|1		inframe_deletion	5	diff	an in-frame deletion of 30 coding bases and an SNV after it
+B9F_p1_snv_after_deletion.2	B9F	standard	+	1	54466	G	T	0|1	0.001	missense_variant	5	diff	an in-frame deletion of 30 coding bases and an SNV after it
+B9F_p0_ins_in_3utr	B9F	standard	+	0	55059	A	AAC	1|0	0.001	3_prime_UTR_variant	5	diff	insertion of 2 bases in the first base of the 3' UTR
+B9R_p0_ins_in_3utr	B9R	standard	-	0	56691	C	CGT	1|0	0.001	3_prime_UTR_variant	5	diff	insertion of 2 bases in the first base of the 3' UTR
+B9R_p1_snv_after_deletion.2	B9R	standard	-	1	57285	C	A	0|1	0.001	missense_variant	5	diff	an in-frame deletion of 30 coding bases and an SNV after it
+B9R_p1_snv_after_deletion.1	B9R	standard	-	1	57325	ACCCTGCTAGCCCTGCAGTACTCTGGGATAA	A	0|1		inframe_deletion	5	diff	an in-frame deletion of 30 coding bases and an SNV after it
+B10F_p0_ins_at_exon_end	B10F	standard	+	0	59075	C	CAC	1|0	0.001	frameshift_variant&splice_region_variant	6	diff	insertion of 2 bases after the last base of the exon: the border with the intron
+B10F_p1_del_into_intron	B10F	standard	+	1	59075	CG	C	0|1	0.001	splice_donor_variant	6	diff	deletion of the first intron base, anchored on the last exon base
+B10R_p1_del_into_intron	B10R	standard	-	1	61874	AC	A	0|1	0.001	splice_donor_variant	6	diff	deletion of the first intron base, anchored on the last exon base
+B10R_p0_ins_at_exon_end	B10R	standard	-	0	61875	C	CGT	1|0	0.001	frameshift_variant&splice_region_variant	6	diff	insertion of 2 bases after the last base of the exon: the border with the intron
+B11F_p0_cplx_exon_to_intron	B11F	standard	+	0	63674	TCG	A	1|0	0.001	splice_donor_variant&coding_sequence_variant	6	diff	complex indel (3 bases to 1) from the exon end into the intron
+B11F_p1_del_over_acceptor_anchor	B11F	standard	+	1	63874	AGC	A	0|1	0.001	splice_acceptor_variant&coding_sequence_variant	6	diff	deletion of the last intron base and the first exon base, anchored in the intron
+B11R_p1_del_over_acceptor_anchor	B11R	standard	-	1	66274	GAC	G	0|1	0.001	splice_acceptor_variant&coding_sequence_variant	6	diff	deletion of the last intron base and the first exon base, anchored in the intron
+B11R_p0_cplx_exon_to_intron	B11R	standard	-	0	66475	CCG	G	1|0	0.001	splice_donor_variant&coding_sequence_variant	6	diff	complex indel (3 bases to 1) from the exon end into the intron
+B12F_p1_del_at_cds_start_then_snv.1	B12F	standard	+	1	68185	TA	T	0|1	0.001	start_lost	7	diff	deletion of the first coding base (anchored in the UTR) and an SNV 2 bases after it
+B12F_p1_del_at_cds_start_then_snv.2	B12F	standard	+	1	68188	G	T	0|1	0.3	missense_variant	7	diff	deletion of the first coding base (anchored in the UTR) and an SNV 2 bases after it
+B12F_p0_snv_then_del_into_intron.1	B12F	standard	+	0	68574	A	C	1|0	0.3	missense_variant	7	diff	SNV at the 3rd last exon base and a deletion of the first intron base (anchored in the exon)
+B12F_p0_snv_then_del_into_intron.2	B12F	standard	+	0	68575	GG	G	1|0	0.001	splice_donor_variant	7	diff	SNV at the 3rd last exon base and a deletion of the first intron base (anchored in the exon)
+B12R_p0_snv_then_del_into_intron.2	B12R	standard	-	0	70774	AC	A	1|0	0.001	splice_donor_variant	7	diff	SNV at the 3rd last exon base and a deletion of the first intron base (anchored in the exon)
+B12R_p0_snv_then_del_into_intron.1	B12R	standard	-	0	70777	G	C	1|0	0.3	missense_variant	7	diff	SNV at the 3rd last exon base and a deletion of the first intron base (anchored in the exon)
+B12R_p1_del_at_cds_start_then_snv.2	B12R	standard	-	1	71163	C	A	0|1	0.3	missense_variant	7	diff	deletion of the first coding base (anchored in the UTR) and an SNV 2 bases after it
+B12R_p1_del_at_cds_start_then_snv.1	B12R	standard	-	1	71164	AT	A	0|1	0.001	start_lost	7	diff	deletion of the first coding base (anchored in the UTR) and an SNV 2 bases after it
+B13F_p0_two_donor_snvs_and_frameshift.1	B13F	standard	+	0	72876	G	T	1|0	0.001	splice_donor_variant	8	diff	two SNVs at the donor (the same splice site changes twice) and a frameshift deletion; a cryptic donor 61 bases in
+B13F_p1_one_donor_snv_and_frameshift.1	B13F	standard	+	1	72876	G	T	0|1	0.001	splice_donor_variant	8	diff	the same with one donor SNV
+B13F_p0_two_donor_snvs_and_frameshift.2	B13F	standard	+	0	72877	T	A	1|0	0.001	splice_donor_variant	8	diff	two SNVs at the donor (the same splice site changes twice) and a frameshift deletion; a cryptic donor 61 bases in
+B13F_p0_two_donor_snvs_and_frameshift.3	B13F	standard	+	0	73125	AG	A	1|0		frameshift_variant	8	diff	two SNVs at the donor (the same splice site changes twice) and a frameshift deletion; a cryptic donor 61 bases in
+B13F_p1_one_donor_snv_and_frameshift.2	B13F	standard	+	1	73125	AG	A	0|1		frameshift_variant	8	diff	the same with one donor SNV
+B13R_p0_two_donor_snvs_and_frameshift.3	B13R	standard	-	0	75424	GA	G	1|0		frameshift_variant	8	diff	two SNVs at the donor (the same splice site changes twice) and a frameshift deletion; a cryptic donor 61 bases in
+B13R_p1_one_donor_snv_and_frameshift.2	B13R	standard	-	1	75424	GA	G	0|1		frameshift_variant	8	diff	the same with one donor SNV
+B13R_p0_two_donor_snvs_and_frameshift.2	B13R	standard	-	0	75674	A	T	1|0	0.001	splice_donor_variant	8	diff	two SNVs at the donor (the same splice site changes twice) and a frameshift deletion; a cryptic donor 61 bases in
+B13R_p0_two_donor_snvs_and_frameshift.1	B13R	standard	-	0	75675	C	A	1|0	0.001	splice_donor_variant	8	diff	two SNVs at the donor (the same splice site changes twice) and a frameshift deletion; a cryptic donor 61 bases in
+B13R_p1_one_donor_snv_and_frameshift.1	B13R	standard	-	1	75675	C	A	0|1	0.001	splice_donor_variant	8	diff	the same with one donor SNV
+B14F_p0_del_early_in_intron.1	B14F	standard	+	0	77490	CTTTCT	C	1|0	0.3	intron_variant	9	model	acceptor lost, a deletion of 5 bases early in the intron; cryptic acceptors near the donor
+B14F_p1_del_late_in_intron.1	B14F	standard	+	1	77655	ATTCC	A	0|1	0.3	intron_variant	9	model	acceptor lost, a deletion of 4 bases near the acceptor
+B14F_p1_del_late_in_intron.2	B14F	standard	+	1	77674	A	C	0|1	0.001	splice_acceptor_variant	9	model	acceptor lost, a deletion of 4 bases near the acceptor
+B14F_p0_del_early_in_intron.2	B14F	standard	+	0	77675	G	T	1|0	0.001	splice_acceptor_variant	9	model	acceptor lost, a deletion of 5 bases early in the intron; cryptic acceptors near the donor
+B14R_p0_del_early_in_intron.2	B14R	standard	-	0	80076	C	A	1|0	0.001	splice_acceptor_variant	9	model	acceptor lost, a deletion of 5 bases early in the intron; cryptic acceptors near the donor
+B14R_p1_del_late_in_intron.2	B14R	standard	-	1	80077	T	G	0|1	0.001	splice_acceptor_variant	9	model	acceptor lost, a deletion of 4 bases near the acceptor
+B14R_p1_del_late_in_intron.1	B14R	standard	-	1	80091	AGGAA	A	0|1	0.3	intron_variant	9	model	acceptor lost, a deletion of 4 bases near the acceptor
+B14R_p0_del_early_in_intron.1	B14R	standard	-	0	80255	AAGAAA	A	1|0	0.3	intron_variant	9	model	acceptor lost, a deletion of 5 bases early in the intron; cryptic acceptors near the donor
+B15F_p0_del_first_coding_bases	B15F	standard	+	0	81985	AATGGGT	A	1|0	0.001	start_lost	10	diff	deletion of the first 6 coding bases
+B15F_p1_del_last_coding_bases	B15F	standard	+	1	82652	TAAGTAA	T	0|1	0.001	stop_lost	10	diff	deletion of the last 6 coding bases (the stop codon and the codon before)
+B15R_p1_del_last_coding_bases	B15R	standard	-	1	84292	CTTACAC	C	0|1	0.001	stop_lost	10	diff	deletion of the last 6 coding bases (the stop codon and the codon before)
+B15R_p0_del_first_coding_bases	B15R	standard	-	0	84959	TGTTCAT	T	1|0	0.001	start_lost	10	diff	deletion of the first 6 coding bases
+B16F_p1_long_ins_near_start	B16F	standard	+	1	86626	G	GACGTACGTACGTACGTACGTACGTACGTACG	0|1	0.001	frameshift_variant	10	diff	insertion of 31 bases near the start of the coding sequence
+B16F_p0_long_ins_near_end	B16F	standard	+	0	87246	G	GACGTACGTACGTACGTACGTACGTACGTACG	1|0	0.001	frameshift_variant	10	diff	insertion of 31 bases 12 bases before the end of the coding sequence
+B16R_p0_long_ins_near_end	B16R	standard	-	0	88904	T	TCGTACGTACGTACGTACGTACGTACGTACGT	1|0	0.001	frameshift_variant	10	diff	insertion of 31 bases 12 bases before the end of the coding sequence
+B16R_p1_long_ins_near_start	B16R	standard	-	1	89524	C	CCGTACGTACGTACGTACGTACGTACGTACGT	0|1	0.001	frameshift_variant	10	diff	insertion of 31 bases near the start of the coding sequence
+B17F_p0_snv_first_base	B17F	standard	+	0	91126	G	T	1|0	0.001	5_prime_UTR_variant	11	diff	SNV on the first base of the gene on the + strand
+B17F_p1_snv_last_base	B17F	standard	+	1	91925	T	A	0|1	0.001	3_prime_UTR_variant	11	diff	SNV on the last base of the gene on the + strand
+B17R_p0_snv_first_base	B17R	standard	-	0	93426	A	C	1|0	0.001	3_prime_UTR_variant	11	diff	SNV on the first base of the gene on the + strand
+B17R_p1_snv_last_base	B17R	standard	-	1	94225	C	G	0|1	0.001	5_prime_UTR_variant	11	diff	SNV on the last base of the gene on the + strand
+B18F_p1_ins_before_first_base	B18F	standard	+	1	95725	G	GAC	0|1	0.001	upstream_gene_variant	11	diff	insertion of 2 bases before the first base of the gene
+B18F_p0_del_anchored_on_last_base	B18F	standard	+	0	96525	TTG	T	1|0	0.001	downstream_gene_variant	11	diff	deletion of 2 bases after the last base of the gene, anchored on that base
+B18R_p1_ins_before_first_base	B18R	standard	-	1	98025	C	CAC	0|1	0.001	upstream_gene_variant	11	diff	insertion of 2 bases before the first base of the gene
+B18R_p0_del_anchored_on_last_base	B18R	standard	-	0	98825	GAC	G	1|0	0.001	downstream_gene_variant	11	diff	deletion of 2 bases after the last base of the gene, anchored on that base
+B19F_p0_mnv_at_window_edge.1	B19F	standard	+	0	100686	T	A	1|0	0.001	splice_region_variant	12	diff	focal SNV and an MNV of 2 bases that the edge of its window (radius 50) runs through
+B19F_p1_cplx_at_window_edge.1	B19F	standard	+	1	100687	A	C	0|1	0.001	splice_region_variant	12,13	diff	focal SNV and a complex indel (4 bases to 2) that the edge of its window runs through
+B19F_p0_mnv_at_window_edge.2	B19F	standard	+	0	100736	AA	TT	1|0	0.3	missense_variant	12	diff	focal SNV and an MNV of 2 bases that the edge of its window (radius 50) runs through
+B19F_p1_cplx_at_window_edge.2	B19F	standard	+	1	100736	AATC	TT	0|1	0.3	missense_variant	12,13	diff	focal SNV and a complex indel (4 bases to 2) that the edge of its window runs through
+B19R_p1_cplx_at_window_edge.2	B19R	standard	-	1	103012	GGAG	CC	0|1	0.3	missense_variant	12,13	diff	focal SNV and a complex indel (4 bases to 2) that the edge of its window runs through
+B19R_p0_mnv_at_window_edge.2	B19R	standard	-	0	103014	AG	TC	1|0	0.3	missense_variant	12	diff	focal SNV and an MNV of 2 bases that the edge of its window (radius 50) runs through
+B19R_p1_cplx_at_window_edge.1	B19R	standard	-	1	103064	G	C	0|1	0.001	splice_region_variant	12,13	diff	focal SNV and a complex indel (4 bases to 2) that the edge of its window runs through
+B19R_p0_mnv_at_window_edge.1	B19R	standard	-	0	103065	A	T	1|0	0.001	splice_region_variant	12	diff	focal SNV and an MNV of 2 bases that the edge of its window (radius 50) runs through
+B20F_p0_variants_next_to_gene_start.1	B20F	standard	+	0	104928	GCGT	G	1|0	0.3	5_prime_UTR_variant	12	diff	focal SNV 12 bases into the gene and a deletion of 3 bases near the gene start
+B20F_p0_variants_next_to_gene_start.2	B20F	standard	+	0	104938	T	A	1|0	0.001	splice_region_variant	12	diff	focal SNV 12 bases into the gene and a deletion of 3 bases near the gene start
+B20F_p1_cplx_in_window.1	B20F	standard	+	1	105281	C	G	0|1	0.001	splice_region_variant	13	diff	focal SNV and a complex indel (3 bases to 2) well inside its window
+B20F_p1_cplx_in_window.2	B20F	standard	+	1	105306	GAC	CT	0|1	0.3	missense_variant	13	diff	focal SNV and a complex indel (3 bases to 2) well inside its window
+B20R_p0_variants_next_to_gene_start.1	B20R	standard	-	0	107228	GTTA	G	1|0	0.3	3_prime_UTR_variant	12	diff	focal SNV 12 bases into the gene and a deletion of 3 bases near the gene start
+B20R_p1_cplx_in_window.2	B20R	standard	-	1	107643	TAA	AT	0|1	0.3	missense_variant	13	diff	focal SNV and a complex indel (3 bases to 2) well inside its window
+B20R_p1_cplx_in_window.1	B20R	standard	-	1	107670	A	T	0|1	0.001	splice_region_variant	13	diff	focal SNV and a complex indel (3 bases to 2) well inside its window
+B20R_p0_variants_next_to_gene_start.2	B20R	standard	-	0	108013	T	A	1|0	0.001	splice_region_variant	12	diff	focal SNV 12 bases into the gene and a deletion of 3 bases near the gene start
+B21F_p0_del_before_window.2	B21F	standard	+	0	109875	GGAA	G	1|0	0.3	missense_variant	14	diff	focal SNV and a deletion of 3 bases anchored on the base before its window
+B21F_p0_del_before_window.1	B21F	standard	+	0	109926	C	G	1|0	0.001	splice_region_variant	14	diff	focal SNV and a deletion of 3 bases anchored on the base before its window
+B21R_p0_del_before_window.2	B21R	standard	-	0	112174	ACCG	A	1|0	0.3	missense_variant	14	diff	focal SNV and a deletion of 3 bases anchored on the base before its window
+B21R_p0_del_before_window.1	B21R	standard	-	0	112225	G	C	1|0	0.001	splice_region_variant	14	diff	focal SNV and a deletion of 3 bases anchored on the base before its window
+B22F_p0_unphased_in_window.1	B22F	standard	+	0	114276	G	T	1|0	0.001	splice_donor_variant	15,20	diff	focal donor SNV and an unphased heterozygous SNV 20 bases away
+B22F_p0_unphased_in_window.2	B22F	standard	+	0	114296	A	C	0/1	0.3	intron_variant	15,20	diff	focal donor SNV and an unphased heterozygous SNV 20 bases away
+B22R_p0_unphased_in_window.2	B22R	standard	-	0	117055	T	G	0/1	0.3	intron_variant	15,20	diff	focal donor SNV and an unphased heterozygous SNV 20 bases away
+B22R_p0_unphased_in_window.1	B22R	standard	-	0	117075	C	A	1|0	0.001	splice_donor_variant	15,20	diff	focal donor SNV and an unphased heterozygous SNV 20 bases away
+B23F_p0_too_long_in_window.1	B23F	standard	+	0	118876	G	T	1|0	0.001	splice_donor_variant	15	diff	focal donor SNV and a deletion of 60 bases (more than the radius) in its window
+B23F_p0_too_long_in_window.2	B23F	standard	+	0	118900	TGCTCAGCGCCCTACATCGATACACCAATCCAATACATTGAGATTTGACGCGGTCATGTGT	T	1|0	0.3	intron_variant	15	diff	focal donor SNV and a deletion of 60 bases (more than the radius) in its window
+B23R_p0_too_long_in_window.2	B23R	standard	-	0	121590	AGCAGTACTCTGGGATAACTCTTTCCCTTAATCCCGCACCTCTACTCTCTACACATGACCG	A	1|0	0.3	intron_variant	15	diff	focal donor SNV and a deletion of 60 bases (more than the radius) in its window
+B23R_p0_too_long_in_window.1	B23R	standard	-	0	121675	C	A	1|0	0.001	splice_donor_variant	15	diff	focal donor SNV and a deletion of 60 bases (more than the radius) in its window
+B24F_p0_del_50	B24F	standard	+	0	123805	GACTGACTTATTAGACGATATGACCGATTGGGGCGGAAATTCCGGGTGGGA	G	1|0	0.001	intron_variant	16	diff	deletion of exactly 50 bases in the second intron
+B24F_p1_ins_50	B24F	standard	+	1	123886	A	AACGTACGTACACGTACGTACACGTACGTACACGTACGTACACGTACGTAC	0|1	0.001	intron_variant	16	diff	insertion of exactly 50 bases in the second intron
+B24R_p1_ins_50	B24R	standard	-	1	125864	C	CGTACGTACGTGTACGTACGTGTACGTACGTGTACGTACGTGTACGTACGT	0|1	0.001	intron_variant	16	diff	insertion of exactly 50 bases in the second intron
+B24R_p0_del_50	B24R	standard	-	0	125895	GCATGTTCCGCAGTCGTCACCTGCAATAACTAACCGCGGGTGCTGGATCCC	G	1|0	0.001	intron_variant	16	diff	deletion of exactly 50 bases in the second intron
+B25F_p0_pair_makes_stop.1	B25F	standard	+	0	128306	C	T	1|0	0.3	missense_variant	18	diff	two SNVs in one codon (CCA to TAA) on one haplotype: a stop only together
+B25F_p0_pair_makes_stop.2	B25F	standard	+	0	128307	C	A	1|0	0.3	missense_variant	18	diff	two SNVs in one codon (CCA to TAA) on one haplotype: a stop only together
+B25R_p0_pair_makes_stop.2	B25R	standard	-	0	130644	G	T	1|0	0.3	missense_variant	18	diff	two SNVs in one codon (CCA to TAA) on one haplotype: a stop only together
+B25R_p0_pair_makes_stop.1	B25R	standard	-	0	130645	G	A	1|0	0.3	missense_variant	18	diff	two SNVs in one codon (CCA to TAA) on one haplotype: a stop only together
+B26F_p0_pair_on_phase_0	B26F	standard	+	0	132906	C	T	1|0	0.3	missense_variant	18	same	one of the two SNVs on this haplotype
+B26F_p1_pair_on_phase_1	B26F	standard	+	1	132907	C	A	0|1	0.3	missense_variant	18	same	the other SNV on the other haplotype: no stop on either
+B26R_p1_pair_on_phase_1	B26R	standard	-	1	135244	G	T	0|1	0.3	missense_variant	18	same	the other SNV on the other haplotype: no stop on either
+B26R_p0_pair_on_phase_0	B26R	standard	-	0	135245	G	A	1|0	0.3	missense_variant	18	same	one of the two SNVs on this haplotype
+B27F_p0_multi_alt	B27F	standard	+	0	137526	C	G,T	1|0	0.001	missense_variant	multi-ALT	diff	a record with two ALT alleles: skipped with a warning
+N1F_p0_stop_99	N1F	nmd	+	0	139575	C	T	1|0		stop_gained	NMD	start_proximal	stop_gained SNV at the coding index 99 (start_proximal)
+N1F_p1_stop_147	N1F	nmd	+	1	139623	C	T	0|1		stop_gained	NMD	start_proximal	stop_gained SNV at the coding index 147 (start_proximal)
+N1R_p1_stop_147	N1R	nmd	-	1	143628	G	A	0|1		stop_gained	NMD	start_proximal	stop_gained SNV at the coding index 147 (start_proximal)
+N1R_p0_stop_99	N1R	nmd	-	0	143676	G	A	1|0		stop_gained	NMD	start_proximal	stop_gained SNV at the coding index 99 (start_proximal)
+N2F_p0_stop_150	N2F	nmd	+	0	145526	C	T	1|0		stop_gained	NMD	none	stop_gained SNV at the coding index 150 (none)
+N2F_p1_stop_201	N2F	nmd	+	1	145577	C	T	0|1		stop_gained	NMD	none	stop_gained SNV at the coding index 201 (none)
+N2R_p1_stop_201	N2R	nmd	-	1	149474	G	A	0|1		stop_gained	NMD	none	stop_gained SNV at the coding index 201 (none)
+N2R_p0_stop_150	N2R	nmd	-	0	149525	G	A	1|0		stop_gained	NMD	none	stop_gained SNV at the coding index 150 (none)
+N3F_p0_stop_300	N3F	nmd	+	0	151776	C	T	1|0		stop_gained	NMD	long_exon	stop_gained SNV at the coding index 300 (long_exon)
+N3F_p1_stop_447	N3F	nmd	+	1	151923	C	T	0|1		stop_gained	NMD	long_exon	stop_gained SNV at the coding index 447 (long_exon)
+N3R_p1_stop_447	N3R	nmd	-	1	154928	G	A	0|1		stop_gained	NMD	long_exon	stop_gained SNV at the coding index 447 (long_exon)
+N3R_p0_stop_300	N3R	nmd	-	0	155075	G	A	1|0		stop_gained	NMD	long_exon	stop_gained SNV at the coding index 300 (long_exon)
+N4F_p0_stop_450	N4F	nmd	+	0	157826	C	T	1|0		stop_gained	NMD	none	stop_gained SNV at the coding index 450 (none)
+N4F_p1_stop_600	N4F	nmd	+	1	157976	C	T	0|1		stop_gained	NMD	none	stop_gained SNV at the coding index 600 (none)
+N4R_p1_stop_600	N4R	nmd	-	1	160675	G	A	0|1		stop_gained	NMD	none	stop_gained SNV at the coding index 600 (none)
+N4R_p0_stop_450	N4R	nmd	-	0	160825	G	A	1|0		stop_gained	NMD	none	stop_gained SNV at the coding index 450 (none)
+N5F_p0_stop_798	N5F	nmd	+	0	164074	C	T	1|0		stop_gained	NMD	none	stop_gained SNV at the coding index 798 (none)
+N5F_p1_stop_801	N5F	nmd	+	1	164077	C	T	0|1		stop_gained	NMD	distal	stop_gained SNV at the coding index 801 (distal)
+N5R_p1_stop_801	N5R	nmd	-	1	166374	G	A	0|1		stop_gained	NMD	distal	stop_gained SNV at the coding index 801 (distal)
+N5R_p0_stop_798	N5R	nmd	-	0	166377	G	A	1|0		stop_gained	NMD	none	stop_gained SNV at the coding index 798 (none)
+N6F_p0_stop_900	N6F	nmd	+	0	170276	C	T	1|0		stop_gained	NMD	distal	stop_gained SNV at the coding index 900 (distal)
+N6F_p1_stop_930	N6F	nmd	+	1	170306	C	T	0|1		stop_gained	NMD	distal	stop_gained SNV at the coding index 930 (distal)
+N6R_p1_stop_930	N6R	nmd	-	1	171945	G	A	0|1		stop_gained	NMD	distal	stop_gained SNV at the coding index 930 (distal)
+N6R_p0_stop_900	N6R	nmd	-	0	171975	G	A	1|0		stop_gained	NMD	distal	stop_gained SNV at the coding index 900 (distal)
+N7F_p1_frameshift_60	N7F	nmd	+	1	174935	AA	A	0|1		frameshift_variant	NMD	start_proximal	frameshift (deletion of the coding base 60): a new stop at 60, from the base 61
+N7F_p0_frameshift_219	N7F	nmd	+	0	175094	AA	A	1|0		frameshift_variant	NMD	none	frameshift (deletion of the coding base 219): a new stop at 219, from the base 220
+N7R_p0_frameshift_219	N7R	nmd	-	0	178955	AG	A	1|0		frameshift_variant	NMD	none	frameshift (deletion of the coding base 219): a new stop at 219, from the base 220
+N7R_p1_frameshift_60	N7R	nmd	-	1	179114	AT	A	0|1		frameshift_variant	NMD	start_proximal	frameshift (deletion of the coding base 60): a new stop at 60, from the base 61
+N8F_p1_frameshift_273	N8F	nmd	+	1	181248	GT	G	0|1		frameshift_variant	NMD	long_exon	frameshift (deletion of the coding base 273): a new stop at 273, in the long exon
+N8F_p0_frameshift_921_no_stop	N8F	nmd	+	0	182096	CG	C	1|0		frameshift_variant	NMD	none	frameshift near the end of the coding sequence with no stop in the new frame
+N8R_p0_frameshift_921_no_stop	N8R	nmd	-	0	183753	GC	G	1|0		frameshift_variant	NMD	none	frameshift near the end of the coding sequence with no stop in the new frame
+N8R_p1_frameshift_273	N8R	nmd	-	1	184601	AT	A	0|1		frameshift_variant	NMD	long_exon	frameshift (deletion of the coding base 273): a new stop at 273, in the long exon
+N9F_p0_retained_first_intron.1	N9F	nmd	+	0	186926	G	T	1|0	0.001	splice_donor_variant	NMD	nmd-model	lost donor of exon 0, TAG in its intron: no flag if the intron is retained (not the last intron)
+N9F_p0_retained_first_intron.2	N9F	nmd	+	0	186927	T	A	1|0	0.001	splice_donor_variant	NMD	nmd-model	lost donor of exon 0, TAG in its intron: no flag if the intron is retained (not the last intron)
+N9F_p1_retained_last_intron.1	N9F	nmd	+	1	187726	G	T	0|1	0.001	splice_donor_variant	NMD	nmd-model	lost donor of exon 1, TAG in its intron: distal if the intron is retained (the last intron)
+N9F_p1_retained_last_intron.2	N9F	nmd	+	1	187727	T	A	0|1	0.001	splice_donor_variant	NMD	nmd-model	lost donor of exon 1, TAG in its intron: distal if the intron is retained (the last intron)
+N9R_p1_retained_last_intron.2	N9R	nmd	-	1	189924	A	T	0|1	0.001	splice_donor_variant	NMD	nmd-model	lost donor of exon 1, TAG in its intron: distal if the intron is retained (the last intron)
+N9R_p1_retained_last_intron.1	N9R	nmd	-	1	189925	C	A	0|1	0.001	splice_donor_variant	NMD	nmd-model	lost donor of exon 1, TAG in its intron: distal if the intron is retained (the last intron)
+N9R_p0_retained_first_intron.2	N9R	nmd	-	0	190724	A	T	1|0	0.001	splice_donor_variant	NMD	nmd-model	lost donor of exon 0, TAG in its intron: no flag if the intron is retained (not the last intron)
+N9R_p0_retained_first_intron.1	N9R	nmd	-	0	190725	C	A	1|0	0.001	splice_donor_variant	NMD	nmd-model	lost donor of exon 0, TAG in its intron: no flag if the intron is retained (not the last intron)
+GEDGE_p1_del_near_start	GEDGE	edge	+	1	8	GTT	G	0|1	0.001	upstream_gene_variant	12	info	deletion of 2 bases 8 bases into the contig, before the gene begins
+GEDGE_p0_exon_snv	GEDGE	edge	+	0	25	G	T	1|0	0.001	missense_variant	wraparound	info	SNV in the first exon
+GEDGE_p0_donor_snv	GEDGE	edge	+	0	51	G	T	1|0	0.001	splice_donor_variant	wraparound	info	SNV on the first donor base 49 bases from the start of the contig

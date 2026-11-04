@@ -12,7 +12,7 @@ For analysis supporting Hampstead JE, et al. Incompletely penetrant protein-trun
 - The reference genome (FASTA)
 - A GFF3 annotation matching the VCF, in the format used by `bcftools csq`
 - A directory of SpliceAI models (see [Models](#models))
-- The [cpliceai](https://github.com/jhampstead/cpliceai) library (and its dependencies, such as ONNX Runtime), to build the plugin
+- The RescueRanger library of this repository, installed (see [Build](#build)), to build the plugin
 
 ## Models
 
@@ -20,19 +20,64 @@ The model files we distribute are the SpliceAI models ([Jaganathan et al., 2019]
 
 ## Build
 
-Build bcftools as usual (see [INSTALL](../INSTALL)). The plugin is built as `plugins/rescue.so`:
+The plugin is built in two steps: first the RescueRanger library of this repository is built and installed, then bcftools is
+built against it.
+
+### Dependencies
+
+- [HTSlib](https://github.com/samtools/htslib)
+- [cpliceai](https://github.com/jhampstead/cpliceai), with [ONNX Runtime](https://onnxruntime.ai), the library it runs the
+  models with
+- CMake 3.10 or later (the `cmake --install` below needs 3.15, `ctest --test-dir` 3.20), pkg-config and
+  [Check](https://libcheck.github.io/check/) (for the unit tests) to build
+
+Install cpliceai and ONNX Runtime as the [cpliceai README](https://github.com/jhampstead/cpliceai) describes; install HTSlib
+before them.
+
+The GFF reader is a copy of the one of bcftools, compiled into the library, so bcftools itself is not needed to build the
+library.
+
+### The library
+
+```bash
+cmake -S . -B build-lib -DCMAKE_BUILD_TYPE=Release
+cmake --build build-lib
+cmake --install build-lib            # or: sudo cmake --install build-lib
+```
+
+The prefix is `/usr/local` unless `-DCMAKE_INSTALL_PREFIX=...` is given. This installs
+
+- `lib/librescueranger.so`
+- `include/rescueranger/rescueranger.h` and `include/rescueranger/version.h` (generated, with the version of `CMakeLists.txt`)
+- `lib/pkgconfig/rescueranger.pc`
+- the program `bin/rescueranger`
+
+To build against a cpliceai that pkg-config does not find, give its prefix and the directory of ONNX Runtime:
+
+```bash
+cmake -S . -B build-lib -DCPLICEAI_ROOT=/path/to/cpliceai -DCPLICEAI_DEPENDENCY_DIRS=/path/to/onnxruntime/lib
+```
+
+The directories are put in the RPATH of the library, so that the library finds them when it is loaded.
+
+The unit tests are run with `ctest --test-dir build-lib` or `build-lib/tests/unit_test`.
+
+### The plugin
+
+Build bcftools as usual (see its `INSTALL`, "Optional Compilation of the rescue Plugin"). The plugin is built as
+`plugins/rescue.so` when the library is found with pkg-config; otherwise it is left out with a notice:
 
 ```bash
 make
 ```
 
-If pkg-config can't find cpliceai, point the build to its installation:
+If pkg-config can't find the library, point the build to its installation prefix:
 
 ```bash
-make CPLICEAI_ROOT=/path/to/cpliceai CPLICEAI_DEPENDENCY_DIRS=/path/to/onnxruntime/lib
+make RESCUERANGER_ROOT=/path/to/rescueranger
 ```
 
-Then tell bcftools where the plugins are:
+The directory of the library is put in the RPATH of the plugin. Then tell bcftools where the plugins are:
 
 ```bash
 export BCFTOOLS_PLUGINS=/path/to/bcftools/plugins
