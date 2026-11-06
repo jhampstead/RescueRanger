@@ -67,8 +67,7 @@ The unit tests are run with `ctest --test-dir build-lib` or `build-lib/tests/uni
 
 ### The plugin
 
-The plugin is part of [bcftools](https://github.com/samtools/bcftools). Build bcftools as usual (see its `INSTALL`,
-"Optional Compilation of the rescue Plugin"). The plugin is built as `plugins/rescue.so` when the library is found with
+The plugin is part of [bcftools](https://github.com/samtools/bcftools). Build bcftools as usual (see its `INSTALL`). The plugin is built as `plugins/rescue.so` when the library is found with
 pkg-config; otherwise it is left out with a notice:
 
 ```bash
