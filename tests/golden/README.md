@@ -24,11 +24,11 @@ Two runs, both with the precomputed reference scores: the VEP-annotated records 
 Apart from the CSQ/BCSQ tag the two outputs have to be equal. From the repository root:
 
 ```
-# The six positionals come first, options after them. REF.bin is the reference scores of the golden genes (golden.regions.tsv).
+# The five positionals come first, options after them. REF.bin is the reference scores of the golden genes (golden.regions.tsv).
 # Every build writes build/rescue (src/CMakeLists.txt), so copy the binary after building it to keep two builds apart.
 M=../cpliceai_haplotype/models/onnx; D=tests/golden/data
-build/rescue $D/golden.vcf $M $D/golden.gff3 $D/golden.fa vep.vcf vep_scores.tsv --af-tag AF --reference-scores REF.bin
-build/rescue $D/golden_bcsq.vcf $M $D/golden.gff3 $D/golden.fa bcsq.vcf bcsq_scores.tsv --af-tag AF --annotation bcftools --reference-scores REF.bin
+build/rescue $D/golden.vcf $M $D/golden.gff3 $D/golden.fa vep.vcf --raw-scores vep_scores.tsv --af-tag AF --reference-scores REF.bin
+build/rescue $D/golden_bcsq.vcf $M $D/golden.gff3 $D/golden.fa bcsq.vcf --raw-scores bcsq_scores.tsv --af-tag AF --annotation bcftools --reference-scores REF.bin
 
 # old: its models are another format, and the option for unphased variants is --max-unphased 0 where the new one has --exclude-unphased
 ```
@@ -36,7 +36,8 @@ build/rescue $D/golden_bcsq.vcf $M $D/golden.gff3 $D/golden.fa bcsq.vcf bcsq_sco
 Run the new build on `golden_edge.vcf` and `golden_broken.vcf` as well. The broken file has to give an error and a non-zero exit
 status, after the first records were written. The edge file has to finish.
 
-The path of the binary and the model directory depend on the build; the arguments are `variants model_dir gff fasta output scores_output`.
+The path of the binary and the model directory depend on the build; the arguments are `variants model_dir gff fasta output`, and
+`--raw-scores` writes the raw scores to compare.
 `--af-tag AF` is needed because the default `INFO/AF` is not what the records carry.
 
 ## Reading the manifest

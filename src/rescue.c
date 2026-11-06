@@ -14,8 +14,7 @@
     REQUIRED_STRING_ARG(model_dir, "model_dir", "Directory containing SpliceAI models") \
     REQUIRED_STRING_ARG(gff, "gff_file", "GFF file matching the provided VCF file") \
     REQUIRED_STRING_ARG(fasta, "fasta_file", "Reference fasta file matching the provided VCF file") \
-    REQUIRED_STRING_ARG(variants_output, "output", "Annotated VCF") \
-    REQUIRED_STRING_ARG(scores_output, "output", "TSV with raw SpliceAI scores")
+    REQUIRED_STRING_ARG(variants_output, "output", "Annotated VCF")
 
 #define OPTIONAL_ARGS \
     OPTIONAL_STRING_ARG(af_tag, "INFO/AF", "--af-tag", "tag", "Allele frequency tag") \
@@ -24,7 +23,8 @@
     OPTIONAL_STRING_ARG(annotation, "vep", "--annotation", "vep|bcftools", "Program that annotated the consequences of the variants: Ensembl VEP or bcftools csq") \
     OPTIONAL_STRING_ARG(csq_tag, "", "--csq-tag", "tag", "INFO field with the consequences (default CSQ for vep, BCSQ for bcftools)") \
     OPTIONAL_UINT_ARG(prediction_radius, 50, "--prediction-radius", "radius", "Prediction window radius in bases (non-default values give scores not comparable to SpliceAI)") \
-    OPTIONAL_STRING_ARG(reference_scores, "", "--reference-scores", "file", "Precomputed reference scores (cpliceai_reference). Optional: without them, and for genes that are not in them like the annotation's, the reference predictions are made from the sequence while running")
+    OPTIONAL_STRING_ARG(reference_scores, "", "--reference-scores", "file", "Precomputed reference scores (cpliceai_reference). Optional: without them, and for genes that are not in them like the annotation's, the reference predictions are made from the sequence while running") \
+    OPTIONAL_STRING_ARG(raw_scores, "", "--raw-scores", "file", "Write the raw SpliceAI scores to a TSV file")
 
 #define BOOLEAN_ARGS \
     BOOLEAN_ARG(help, "-h", "Show help") \
@@ -90,11 +90,14 @@ int main(int argc, char *argv[]) {
         goto done;
     }
 
-    if (!(scores_tsv = fopen(args.scores_output, "w"))) {
-        fprintf(stderr, "Could not open raw scores TSV for writing: %s\n", args.scores_output);
-        goto done;
+    // The raw scores are only written when --raw-scores is given
+    if (args.raw_scores[0] != '\0') {
+        if (!(scores_tsv = fopen(args.raw_scores, "w"))) {
+            fprintf(stderr, "Could not open raw scores TSV for writing: %s\n", args.raw_scores);
+            goto done;
+        }
+        if (rr_set_scores_output(rr, scores_tsv) != 0) goto done;
     }
-    if (rr_set_scores_output(rr, scores_tsv) != 0) goto done;
 
     if (rr_annotate(rr, fp_in, fp_out) == 0) ret = EXIT_SUCCESS;
 
