@@ -20,6 +20,9 @@ For analysis supporting Hampstead JE, et al. Incompletely penetrant protein-trun
 
 The model files we distribute are the SpliceAI models ([Jaganathan et al., 2019](https://doi.org/10.1016/j.cell.2018.12.015)) converted and optimised for ONNX Runtime. They remain under Illumina's original license for the SpliceAI models [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/): they may be used for academic and non-commercial purposes only. Any other use requires a commercial license from Illumina (see the [SpliceAI repository](https://github.com/Illumina/SpliceAI)).
 
+The ONNX Runtime-optimised models are in the `models/onnx` directory of [cpliceai](https://github.com/jhampstead/cpliceai). Pass that directory to
+`-m` (plugin) or as the second argument to (`rescue`).
+
 ## Build
 
 The `rescue` library of this repository is built first. It is all that is needed to run `rescue` as a standalone library:
@@ -34,8 +37,22 @@ installed library.
 - CMake 3.10 or later (the `cmake --install` below needs 3.15, `ctest --test-dir` 3.20), pkg-config and
   [Check](https://libcheck.github.io/check/) (for the unit tests) to build
 
-Install cpliceai and ONNX Runtime as the [cpliceai README](https://github.com/jhampstead/cpliceai) describes; install HTSlib
-before them.
+Install HTSlib first (from your package manager or from source). Then install ONNX Runtime and cpliceai, here into `~/opt`:
+
+```bash
+curl -L -o onnxruntime.tgz https://github.com/microsoft/onnxruntime/releases/download/v1.28.0/onnxruntime-linux-x64-1.28.0.tgz
+mkdir -p ~/opt/onnxruntime && tar -C ~/opt/onnxruntime --strip-components=1 -xzf onnxruntime.tgz
+
+git clone https://github.com/jhampstead/cpliceai.git
+cmake -S cpliceai -B cpliceai/build -DCMAKE_BUILD_TYPE=Release -DONNXRUNTIME_ROOT=$HOME/opt/onnxruntime -DCMAKE_INSTALL_PREFIX=$HOME/opt/cpliceai
+cmake --build cpliceai/build
+cmake --install cpliceai/build
+```
+
+Building cpliceai also needs [bats](https://github.com/bats-core/bats-core) and a recent C compiler (tested with GCC 13).
+cpliceai installs no pkg-config file, so build the library with
+`-DCPLICEAI_ROOT=$HOME/opt/cpliceai -DCPLICEAI_DEPENDENCY_DIRS=$HOME/opt/onnxruntime/lib` (see below). With Check from
+Debian or Ubuntu packages, also add `-DCMAKE_MODULE_PATH=$PWD/cmake`.
 
 The GFF reader is a copy of the one of bcftools, compiled into the library, so bcftools itself is not needed to build the
 library.
@@ -67,10 +84,14 @@ The unit tests are run with `ctest --test-dir build-lib` or `build-lib/tests/uni
 
 ### The plugin
 
-The plugin is part of [bcftools](https://github.com/samtools/bcftools). Build bcftools as usual (see its `INSTALL`). The plugin is built as `plugins/rescue.so` when the library is found with
-pkg-config; otherwise it is left out with a notice:
+The plugin is part of [bcftools](https://github.com/samtools/bcftools) but not of its release tarballs, so build bcftools
+and HTSlib from GitHub (see bcftools' `INSTALL`). The plugin is built as
+`plugins/rescue.so` when the library is found with pkg-config; otherwise it is left out with a notice:
 
 ```bash
+git clone --recurse-submodules https://github.com/samtools/htslib.git
+git clone https://github.com/samtools/bcftools.git
+cd bcftools
 make
 ```
 
