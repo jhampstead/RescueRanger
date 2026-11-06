@@ -4,7 +4,7 @@ A bcftools plugin that predicts whether protein-truncating variants (PTVs) are r
 
 For each haplotype in a phased VCF, `+rescue` scores splice changes with SpliceAI models. It tags PTVs (stop gained, frameshift, canonical splice donor or acceptor) that another variant on the haplotype rescues, tags variants that induce a PTV through exon skipping or intron retention, and annotates whether the transcript is predicted to undergo nonsense-mediated decay (NMD).
 
-The predictions are made by the RescueRanger library of this repository, which can be run in two ways: as the bcftools plugin `bcftools +rescue`, or as a standalone library, without bcftools. See [Usage](#usage).
+The predictions are made by `rescue`, the library of this repository, which can be run in two ways: as the bcftools plugin `bcftools +rescue`, or as a standalone library, without bcftools. See [Usage](#usage).
 
 For analysis supporting Hampstead JE, et al. Incompletely penetrant protein-truncating variants confer developmental disorder risk through partial reductions in gene expression. *medRxiv* (2026). https://doi.org/10.64898/2026.10.22.26366026, see the dedicated repository [here](https://github.com/jhampstead/ptv_penetrance).
 
@@ -14,7 +14,7 @@ For analysis supporting Hampstead JE, et al. Incompletely penetrant protein-trun
 - The reference genome (FASTA)
 - A GFF3 annotation matching the VCF, in the format used by `bcftools csq`
 - A directory of SpliceAI models (see [Models](#models))
-- The RescueRanger library of this repository, installed (see [Build](#build)). bcftools is only needed to run it as a plugin
+- The `rescue` library of this repository, installed (see [Build](#build)). bcftools is only needed to run it as a plugin
 
 ## Models
 
@@ -22,8 +22,8 @@ The model files we distribute are the SpliceAI models ([Jaganathan et al., 2019]
 
 ## Build
 
-The RescueRanger library of this repository is built first. It is all that is needed to run RescueRanger as a standalone library:
-installing it also installs the `rescueranger` program. To run it as a bcftools plugin, bcftools is then built against the
+The `rescue` library of this repository is built first. It is all that is needed to run `rescue` as a standalone library:
+installing it also installs its command-line program. To run it as a bcftools plugin, bcftools is then built against the
 installed library.
 
 ### Dependencies
@@ -86,8 +86,8 @@ The directory of the library is put in the RPATH of the plugin. To tell bcftools
 
 ## Usage
 
-Both ways of running RescueRanger use the same library: they take the same inputs, make the same predictions and add the same
-INFO tags (see [Output](#output)). They differ in how the options are given and in the output formats.
+`bcftools +rescue` and the standalone `rescue` library run the same code: they take the same inputs, make the same predictions
+and add the same INFO tags (see [Output](#output)). They differ in how the options are given and in the output formats.
 
 ### Running as a bcftools plugin (`bcftools +rescue`)
 
@@ -136,12 +136,14 @@ Run `bcftools +rescue -h` for the help.
 
 ### Running as a standalone library
 
-Without bcftools, the library is run with the `rescueranger` program that is installed with it, or called from your own code.
+Without bcftools, `rescue` is run with the command-line program that is installed with the library, or called from your own
+code.
 
-#### The `rescueranger` program
+#### The command-line program
 
-`cmake --install` puts the program in `<prefix>/bin/rescueranger` (`/usr/local/bin/rescueranger` by default). Before it is
-installed, `cmake --build` writes it to `build/rescueranger` at the root of the repository, whatever the build directory is.
+The program is installed as `rescueranger`. `cmake --install` puts it in `<prefix>/bin/rescueranger`
+(`/usr/local/bin/rescueranger` by default). Before it is installed, `cmake --build` writes it to `build/rescueranger` at the
+root of the repository, whatever the build directory is.
 
 The program takes six arguments, in this order, followed by any options:
 
@@ -187,8 +189,8 @@ Run `rescueranger -h` for the help.
 
 #### From your own code
 
-The library can be called from C (or C++). Its interface is `rescueranger/rescueranger.h`, the same one the plugin and the
-`rescueranger` program are built on. The steps are those of the program: set the options, read the VCF header with HTSlib,
+The `rescue` library can be called from C (or C++). Its interface is `rescueranger/rescueranger.h`, the same one the plugin
+and the command-line program are built on. The steps are those of the program: set the options, read the VCF header with HTSlib,
 `rr_init` (which loads the models, the annotation and the reference, and adds the output INFO tags to the header), write the
 header, then `rr_annotate` to read, annotate and write every record.
 
@@ -241,7 +243,7 @@ the GFF reader, like that of bcftools, ends the program when the GFF cannot be p
 
 ## Reference scores (optional)
 
-Instead of predicting the reference sequence while it runs, RescueRanger can read precomputed reference scores. Make them once per genome and annotation with `cpliceai_reference`, which comes with [cpliceai](https://github.com/jhampstead/cpliceai):
+Instead of predicting the reference sequence while it runs, `rescue` can read precomputed reference scores, both as the plugin and standalone. Make them once per genome and annotation with `cpliceai_reference`, which comes with [cpliceai](https://github.com/jhampstead/cpliceai):
 
 ```bash
 cpliceai_reference models/ ref.fa regions.tsv reference.bin
@@ -279,7 +281,7 @@ The raw SpliceAI scores (`--raw-scores` of the plugin, the sixth argument of the
 
 ## Citations
 
-RescueRanger builds on the following work:
+`rescue` builds on the following work:
 
 - **SpliceAI models:** Jaganathan K, et al. Predicting splicing from primary sequence with deep learning. *Cell* 176, 535–548 (2019). https://doi.org/10.1016/j.cell.2018.12.015
 - **NMD regions:** Blakes AJM, et al. Regional nonsense constraint offers biological and clinical insights into genetic disease. *Nature Communications* 17, 3152 (2026). https://doi.org/10.1038/s41467-026-69983-z
