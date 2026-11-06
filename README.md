@@ -142,10 +142,10 @@ Without bcftools, `rescue` is run with the `rescue` program that is installed wi
 `cmake --install` puts the program in `<prefix>/bin/rescue` (`/usr/local/bin/rescue` by default). Before it is installed,
 `cmake --build` writes it to `build/rescue` at the root of the repository, whatever the build directory is.
 
-The program takes six arguments, in this order, followed by any options:
+The program takes five arguments, in this order, followed by any options:
 
 ```
-rescue <in.vcf> <models> <annot.gff3> <ref.fa> <out.vcf> <scores.tsv> [options]
+rescue <in.vcf> <models> <annot.gff3> <ref.fa> <out.vcf> [options]
 ```
 
 | Argument | Description |
@@ -155,21 +155,19 @@ rescue <in.vcf> <models> <annot.gff3> <ref.fa> <out.vcf> <scores.tsv> [options]
 | `annot.gff3` | GFF3 annotation |
 | `ref.fa` | Reference genome |
 | `out.vcf` | Annotated VCF to write, or `-` for standard output |
-| `scores.tsv` | Raw SpliceAI scores to write as TSV (use `/dev/null` if you don't need them) |
 
 The plugin example above, run standalone:
 
 ```bash
-rescue in.vcf.gz models/ annot.gff3.gz ref.fa - scores.tsv | bgzip > out.vcf.gz
+rescue in.vcf.gz models/ annot.gff3.gz ref.fa - | bgzip > out.vcf.gz
 ```
 
 How it differs from the plugin:
 
-- **Options go after the six arguments.** Anything before them is read as one of the arguments. An option the program doesn't
-  know is skipped with a warning (`Ignoring invalid argument`) rather than stopping the run, so check the log for typos.
+- **Options go after the five arguments.** Anything before them is read as one of the arguments. An option the program doesn't
+  know is skipped with a warning (`Ignoring invalid argument`) rather than stopping the run.
 - **The output is always uncompressed VCF**, whatever the file name ends with. For a compressed VCF, write to `-` and pipe it to
   `bgzip`, as above, or run `bgzip` on the file afterwards.
-- **The raw scores are always written**, to the sixth argument. There is no `--raw-scores`, `-o` or `-O`.
 
 | Option | Description |
 |---|---|
@@ -181,6 +179,7 @@ How it differs from the plugin:
 | `--exclude-unphased` | Ignore heterozygous variants with unknown phase (by default they are placed on both haplotypes) |
 | `--prediction-radius INT` | Prediction window radius in bases; values other than 50 give scores not comparable to SpliceAI [50] |
 | `--reference-scores FILE` | Precomputed reference scores, to save time (optional, see [Reference scores](#reference-scores-optional)) |
+| `--raw-scores FILE` | Write the raw SpliceAI scores to a TSV file (optional, useful for debugging) |
 
 Run `rescue -h` for the help.
 
@@ -253,7 +252,7 @@ cpliceai_reference models/ ref.fa regions.tsv reference.bin
 bcftools +rescue in.vcf.gz -m models/ -g annot.gff3.gz -f ref.fa --reference-scores reference.bin -o out.vcf.gz -O z
 
 # standalone
-rescue in.vcf.gz models/ annot.gff3.gz ref.fa out.vcf scores.tsv --reference-scores reference.bin
+rescue in.vcf.gz models/ annot.gff3.gz ref.fa out.vcf --reference-scores reference.bin
 ```
 
 From your own code, set `opts.reference_scores` before `rr_init`.
@@ -277,8 +276,8 @@ Both ways of running add these INFO tags:
 | `PTV_TYPE` | Type of induced PTV |
 | `PREDICTION_FLAGS` | Context of the prediction, including NMD (`nmd_target`, `long_exon`, `distal`, `start_proximal`, `non-coding`, `nmd_uncertain`), based on the NMD regions of [Blakes et al. (2026)](https://doi.org/10.1038/s41467-026-69983-z) |
 
-The raw SpliceAI scores (`--raw-scores` of the plugin, the sixth argument of the program) are a TSV with the columns `CHR`,
-`POS`, `REF`, `ALT`, `GENE`, `TRANSCRIPT`, `PHASE`, `OFFSET`, `SOURCE`, `TYPE`, `DONOR`, `ACCEPTOR` and `NEITHER`.
+The raw SpliceAI scores, written with `--raw-scores`, are a TSV with the columns `CHR`, `POS`, `REF`, `ALT`, `GENE`,
+`TRANSCRIPT`, `PHASE`, `OFFSET`, `SOURCE`, `TYPE`, `DONOR`, `ACCEPTOR` and `NEITHER`.
 
 ## Citations
 
