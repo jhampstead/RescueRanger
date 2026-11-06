@@ -21,7 +21,7 @@ For analysis supporting Hampstead JE, et al. Incompletely penetrant protein-trun
 The model files we distribute are the SpliceAI models ([Jaganathan et al., 2019](https://doi.org/10.1016/j.cell.2018.12.015)) converted and optimised for ONNX Runtime. They remain under Illumina's original license for the SpliceAI models [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/): they may be used for academic and non-commercial purposes only. Any other use requires a commercial license from Illumina (see the [SpliceAI repository](https://github.com/Illumina/SpliceAI)).
 
 The ONNX Runtime-optimised models are in the `models/onnx` directory of [cpliceai](https://github.com/jhampstead/cpliceai). Pass that directory to
-`-m` (plugin) or as the second argument to (`rescue`).
+`-m` (plugin) or as the second argument to `rescue` (standalone library).
 
 ## Build
 
@@ -54,8 +54,7 @@ cpliceai installs no pkg-config file, so build the library with
 `-DCPLICEAI_ROOT=$HOME/opt/cpliceai -DCPLICEAI_DEPENDENCY_DIRS=$HOME/opt/onnxruntime/lib` (see below). With Check from
 Debian or Ubuntu packages, also add `-DCMAKE_MODULE_PATH=$PWD/cmake`.
 
-The GFF reader is a copy of the one of bcftools, compiled into the library, so bcftools itself is not needed to build the
-library.
+bcftools itself is not needed to build the library.
 
 ### The library
 
