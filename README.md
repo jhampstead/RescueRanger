@@ -18,7 +18,7 @@ For analysis supporting Hampstead JE, et al. Incompletely penetrant protein-trun
 
 ## Models
 
-The model files we distribute are the SpliceAI models ([Jaganathan et al., 2019](https://doi.org/10.1016/j.cell.2018.12.015)), converted and optimised for ONNX Runtime. They remain under Illumina's original license for the SpliceAI models, [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/): they may be used for academic and non-commercial purposes only. Any other use requires a commercial license from Illumina (see the [SpliceAI repository](https://github.com/Illumina/SpliceAI)).
+The model files we distribute are the SpliceAI models ([Jaganathan et al., 2019](https://doi.org/10.1016/j.cell.2018.12.015)) converted and optimised for ONNX Runtime. They remain under Illumina's original license for the SpliceAI models [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/): they may be used for academic and non-commercial purposes only. Any other use requires a commercial license from Illumina (see the [SpliceAI repository](https://github.com/Illumina/SpliceAI)).
 
 ## Build
 
