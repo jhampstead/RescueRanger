@@ -10,7 +10,7 @@
 #include "utils.h"
 
 #define TAG_SIZE 10
-int add_rescueranger_tags(bcf_hdr_t *hdr) {
+int add_rescue_tags(bcf_hdr_t *hdr) {
     const char *tags[TAG_SIZE] = INFO_TAGS;
     const char *descriptions[TAG_SIZE] = INFO_TAG_DESCS;
 

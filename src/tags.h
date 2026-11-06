@@ -44,7 +44,7 @@
 #define INFO_TAG_DESCS { SPLICEAI_DESC, SPLICEAI_HAP_DESC, CS_DESC, RESCUE_DESC, RESCUE_PROB_DESC, RESCUE_TYPE_DESC, PTV_DESC, PTV_PROB_DESC, PTV_TYPE_DESC, PREDICTION_FLAGS_DESC }
 
 // Appends the header lines of the output tags to the header. Returns 0, or -1 if a line could not be appended.
-int add_rescueranger_tags(bcf_hdr_t *hdr);
+int add_rescue_tags(bcf_hdr_t *hdr);
 
 // The value of INFO/RESCUE_TYPE for one transcript and phase: for every rescue type of the isoforms
 // rescue|type|probability|affected_bases, joined with ':'. The caller frees the string.

@@ -1,5 +1,5 @@
-#ifndef RESCUERANGER_UTILS_H
-#define RESCUERANGER_UTILS_H
+#ifndef RESCUE_UTILS_H
+#define RESCUE_UTILS_H
 
 #include <limits.h>
 #include <stdint.h>

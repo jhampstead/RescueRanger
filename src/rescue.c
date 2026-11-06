@@ -1,5 +1,5 @@
 // The stand-alone command line program. Everything it does goes through the public interface of the library, like the bcftools
-// plugin does (bcftools +rescueranger).
+// plugin does (bcftools +rescue).
 
 #include <stdbool.h>
 #include <stdlib.h>
@@ -7,7 +7,7 @@
 
 #include <htslib/hts.h>
 #include <htslib/vcf.h>
-#include <rescueranger/rescueranger.h>
+#include <rescue/rescue.h>
 
 #define REQUIRED_ARGS \
     REQUIRED_STRING_ARG(variants, "variants", "VCF file containing variants to predict for using SpliceAI") \
@@ -48,7 +48,7 @@ int main(int argc, char *argv[]) {
         return EXIT_FAILURE;
     }
 
-    RescueRangerOptions opts;
+    RescueOptions opts;
     rr_opts_init(&opts);
     opts.model_dir = args.model_dir;
     opts.gff_fname = args.gff;
@@ -69,7 +69,7 @@ int main(int argc, char *argv[]) {
     htsFile *fp_in = NULL, *fp_out = NULL;
     bcf_hdr_t *hdr = NULL;
     FILE *scores_tsv = NULL;
-    RescueRanger *rr = NULL;
+    Rescue *rr = NULL;
 
     if (!(fp_in = hts_open(args.variants, "r"))) {
         fprintf(stderr, "Could not open variants file: %s\n", args.variants);

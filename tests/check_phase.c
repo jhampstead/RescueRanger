@@ -289,7 +289,7 @@ END_TEST
 * filter_overlapping_variants
 */
 
-// The filter as it was before the anchor-free view (in rescueranger.c), without its log line, kept to compare against.
+// The filter as it was before the anchor-free view (in rescue.c), without its log line, kept to compare against.
 // Returns the records it kept, in order.
 static Records old_filter_overlapping_variants(const Records *vs) {
     Range last_variant_range = {0};

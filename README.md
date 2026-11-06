@@ -23,7 +23,7 @@ The model files we distribute are the SpliceAI models ([Jaganathan et al., 2019]
 ## Build
 
 The `rescue` library of this repository is built first. It is all that is needed to run `rescue` as a standalone library:
-installing it also installs its command-line program. To run it as a bcftools plugin, bcftools is then built against the
+installing it also installs the `rescue` program. To run it as a bcftools plugin, bcftools is then built against the
 installed library.
 
 ### Dependencies
@@ -50,10 +50,10 @@ cmake --install build-lib            # or: sudo cmake --install build-lib
 
 The prefix is `/usr/local` unless `-DCMAKE_INSTALL_PREFIX=...` is given. This installs
 
-- `lib/librescueranger.so`
-- `include/rescueranger/rescueranger.h` and `include/rescueranger/version.h` (generated, with the version of `CMakeLists.txt`)
-- `lib/pkgconfig/rescueranger.pc`
-- the program `bin/rescueranger`
+- `lib/librescue.so`
+- `include/rescue/rescue.h` and `include/rescue/version.h` (generated, with the version of `CMakeLists.txt`)
+- `lib/pkgconfig/rescue.pc`
+- the program `bin/rescue`
 
 To build against a cpliceai that pkg-config does not find, give its prefix and the directory of ONNX Runtime:
 
@@ -78,7 +78,7 @@ make
 If pkg-config can't find the library, point the build to its installation prefix:
 
 ```bash
-make RESCUERANGER_ROOT=/path/to/rescueranger
+make RESCUE_ROOT=/path/to/rescue
 ```
 
 The directory of the library is put in the RPATH of the plugin. To tell bcftools where the plugin is, see
@@ -136,19 +136,17 @@ Run `bcftools +rescue -h` for the help.
 
 ### Running as a standalone library
 
-Without bcftools, `rescue` is run with the command-line program that is installed with the library, or called from your own
-code.
+Without bcftools, `rescue` is run with the `rescue` program that is installed with the library, or called from your own code.
 
-#### The command-line program
+#### The `rescue` program
 
-The program is installed as `rescueranger`. `cmake --install` puts it in `<prefix>/bin/rescueranger`
-(`/usr/local/bin/rescueranger` by default). Before it is installed, `cmake --build` writes it to `build/rescueranger` at the
-root of the repository, whatever the build directory is.
+`cmake --install` puts the program in `<prefix>/bin/rescue` (`/usr/local/bin/rescue` by default). Before it is installed,
+`cmake --build` writes it to `build/rescue` at the root of the repository, whatever the build directory is.
 
 The program takes six arguments, in this order, followed by any options:
 
 ```
-rescueranger <in.vcf> <models> <annot.gff3> <ref.fa> <out.vcf> <scores.tsv> [options]
+rescue <in.vcf> <models> <annot.gff3> <ref.fa> <out.vcf> <scores.tsv> [options]
 ```
 
 | Argument | Description |
@@ -163,7 +161,7 @@ rescueranger <in.vcf> <models> <annot.gff3> <ref.fa> <out.vcf> <scores.tsv> [opt
 The plugin example above, run standalone:
 
 ```bash
-rescueranger in.vcf.gz models/ annot.gff3.gz ref.fa - scores.tsv | bgzip > out.vcf.gz
+rescue in.vcf.gz models/ annot.gff3.gz ref.fa - scores.tsv | bgzip > out.vcf.gz
 ```
 
 How it differs from the plugin:
@@ -185,12 +183,12 @@ How it differs from the plugin:
 | `--prediction-radius INT` | Prediction window radius in bases; values other than 50 give scores not comparable to SpliceAI [50] |
 | `--reference-scores FILE` | Precomputed reference scores, to save time (optional, see [Reference scores](#reference-scores-optional)) |
 
-Run `rescueranger -h` for the help.
+Run `rescue -h` for the help.
 
 #### From your own code
 
-The `rescue` library can be called from C (or C++). Its interface is `rescueranger/rescueranger.h`, the same one the plugin
-and the command-line program are built on. The steps are those of the program: set the options, read the VCF header with HTSlib,
+The `rescue` library can be called from C (or C++). Its interface is `rescue/rescue.h`, the same one the plugin
+and the `rescue` program are built on. The steps are those of the program: set the options, read the VCF header with HTSlib,
 `rr_init` (which loads the models, the annotation and the reference, and adds the output INFO tags to the header), write the
 header, then `rr_annotate` to read, annotate and write every record.
 
@@ -198,11 +196,11 @@ header, then `rr_annotate` to read, annotate and write every record.
 #include <stdlib.h>
 #include <htslib/hts.h>
 #include <htslib/vcf.h>
-#include <rescueranger/rescueranger.h>
+#include <rescue/rescue.h>
 
 int main(void)
 {
-    RescueRangerOptions opts;
+    RescueOptions opts;
     rr_opts_init(&opts);                    // the defaults; the required fields are NULL
     opts.model_dir   = "models/";
     opts.gff_fname   = "annot.gff3.gz";
@@ -212,7 +210,7 @@ int main(void)
     int ret = EXIT_FAILURE;
     htsFile *in = NULL, *out = NULL;
     bcf_hdr_t *hdr = NULL;
-    RescueRanger *rr = NULL;
+    Rescue *rr = NULL;
 
     if (!(in = hts_open("in.vcf.gz", "r")) || !(hdr = bcf_hdr_read(in))) goto done;
     if (!(rr = rr_init(&opts, hdr))) goto done;     // adds the output tags to hdr
@@ -229,13 +227,17 @@ done:
 }
 ```
 
-Compile it with pkg-config. `rescueranger.pc` does not list HTSlib, so ask for it as well; the RPATH lets the program find the
+Compile it with pkg-config. `rescue.pc` does not list HTSlib, so ask for it as well; the RPATH lets the program find the
 library at run time when it is installed outside the standard directories:
 
 ```bash
-cc -o annotate annotate.c $(pkg-config --cflags --libs rescueranger htslib) \
-    -Wl,-rpath,$(pkg-config --variable=libdir rescueranger)
+cc -o annotate annotate.c $(pkg-config --cflags --libs rescue htslib) \
+    -Wl,-rpath,$(pkg-config --variable=libdir rescue)
 ```
+
+If ONNX Runtime is not in a standard library directory, the linker stops with `libonnxruntime.so.1, needed by libcpliceai.so.1,
+not found`. Then also give it the directory of ONNX Runtime (the one given as `CPLICEAI_DEPENDENCY_DIRS`):
+`-Wl,-rpath-link,/path/to/onnxruntime/lib`.
 
 The header documents the rest of the interface: `rr_set_scores_output` to write the raw scores, `rr_set_log_level` for what is
 logged to standard error, and `rr_version` for the version of the linked library (`RR_VERSION` is that of the header). Note that
@@ -252,7 +254,7 @@ cpliceai_reference models/ ref.fa regions.tsv reference.bin
 bcftools +rescue in.vcf.gz -m models/ -g annot.gff3.gz -f ref.fa --reference-scores reference.bin -o out.vcf.gz -O z
 
 # standalone
-rescueranger in.vcf.gz models/ annot.gff3.gz ref.fa out.vcf scores.tsv --reference-scores reference.bin
+rescue in.vcf.gz models/ annot.gff3.gz ref.fa out.vcf scores.tsv --reference-scores reference.bin
 ```
 
 From your own code, set `opts.reference_scores` before `rr_init`.

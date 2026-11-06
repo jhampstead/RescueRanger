@@ -9,7 +9,7 @@
 #include "tags.h"
 #include "utils.h"
 
-int Session_open(const RescueRangerOptions *opts, bcf_hdr_t *hdr, Session *s) {
+int Session_open(const RescueOptions *opts, bcf_hdr_t *hdr, Session *s) {
     *s = (Session){0};
 
     if (!opts->model_dir || !opts->gff_fname || !opts->fasta_fname) {
@@ -91,7 +91,7 @@ int Session_open(const RescueRangerOptions *opts, bcf_hdr_t *hdr, Session *s) {
         goto fail;
     }
 
-    if (add_rescueranger_tags(hdr) != 0) goto fail;
+    if (add_rescue_tags(hdr) != 0) goto fail;
     s->hdr = hdr; /* Only once nothing can fail any more: on failure the header stays the caller's */
 
     return EXIT_SUCCESS;

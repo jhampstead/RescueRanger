@@ -12,13 +12,13 @@
 #include "check_tags.h"
 
 /*
-* add_rescueranger_tags: the header gets the INFO lines of every output tag, in the order of INFO_TAGS.
+* add_rescue_tags: the header gets the INFO lines of every output tag, in the order of INFO_TAGS.
 */
 
-START_TEST(check_add_rescueranger_tags__every_output_tag_is_in_the_header) {
+START_TEST(check_add_rescue_tags__every_output_tag_is_in_the_header) {
     bcf_hdr_t *hdr = mock_hdr();
 
-    ck_assert_int_eq(add_rescueranger_tags(hdr), 0);
+    ck_assert_int_eq(add_rescue_tags(hdr), 0);
     ck_assert_int_eq(bcf_hdr_sync(hdr), 0);
 
     const char *tags[] = INFO_TAGS;
@@ -29,7 +29,7 @@ START_TEST(check_add_rescueranger_tags__every_output_tag_is_in_the_header) {
     bcf_hdr_destroy(hdr);
 } END_TEST
 
-START_TEST(check_add_rescueranger_tags__tags_and_descriptions_match) {
+START_TEST(check_add_rescue_tags__tags_and_descriptions_match) {
     const char *tags[] = INFO_TAGS;
     const char *descriptions[] = INFO_TAG_DESCS;
 
@@ -257,9 +257,9 @@ START_TEST(check_format_gene_scores__genes_are_separated_by_commas) {
 Suite *tags_suite() {
     Suite *s = suite_create("Tags");
 
-    TCase *tc_header = tcase_create("add_rescueranger_tags");
-    tcase_add_test(tc_header, check_add_rescueranger_tags__every_output_tag_is_in_the_header);
-    tcase_add_test(tc_header, check_add_rescueranger_tags__tags_and_descriptions_match);
+    TCase *tc_header = tcase_create("add_rescue_tags");
+    tcase_add_test(tc_header, check_add_rescue_tags__every_output_tag_is_in_the_header);
+    tcase_add_test(tc_header, check_add_rescue_tags__tags_and_descriptions_match);
     suite_add_tcase(s, tc_header);
 
     TCase *tc_flags = tcase_create("get_prediction_flags");

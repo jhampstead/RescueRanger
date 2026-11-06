@@ -2,8 +2,8 @@ cmake_minimum_required(VERSION 3.10)
 
 set(CMAKE_C_STANDARD 99)
 
-# The version of the library: RR_VERSION in rescueranger/version.h, the version of librescueranger.so and of rescueranger.pc
-project(RescueRanger VERSION 1.0.0 LANGUAGES C)
+# The version of the library: RR_VERSION in rescue/version.h, the version of librescue.so and of rescue.pc
+project(rescue VERSION 1.0.0 LANGUAGES C)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # set(CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/externals/sanitizers-cmake/cmake" ${CMAKE_MODULE_PATH})
@@ -12,8 +12,8 @@ include(GNUInstallDirs)
 
 include_directories(include)
 
-# rescueranger/version.h is generated, next to the headers in include/
-configure_file(include/rescueranger/version.h.in "${PROJECT_BINARY_DIR}/include/rescueranger/version.h" @ONLY)
+# rescue/version.h is generated, next to the headers in include/
+configure_file(include/rescue/version.h.in "${PROJECT_BINARY_DIR}/include/rescue/version.h" @ONLY)
 include_directories("${PROJECT_BINARY_DIR}/include")
 
 find_package(PkgConfig REQUIRED)
@@ -124,9 +124,9 @@ enable_testing()
 add_subdirectory(tests)
 add_test(NAME unit_test COMMAND unit_test)
 
-# Installed: the shared library and the program (see src/CMakeLists.txt), the headers and rescueranger.pc
-install(FILES "${PROJECT_SOURCE_DIR}/include/rescueranger/rescueranger.h" "${PROJECT_BINARY_DIR}/include/rescueranger/version.h"
-        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/rescueranger")
-configure_file(rescueranger.pc.in "${PROJECT_BINARY_DIR}/rescueranger.pc" @ONLY)
-install(FILES "${PROJECT_BINARY_DIR}/rescueranger.pc" DESTINATION "${CMAKE_INSTALL_LIBDIR}/pkgconfig")
+# Installed: the shared library and the program (see src/CMakeLists.txt), the headers and rescue.pc
+install(FILES "${PROJECT_SOURCE_DIR}/include/rescue/rescue.h" "${PROJECT_BINARY_DIR}/include/rescue/version.h"
+        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/rescue")
+configure_file(rescue.pc.in "${PROJECT_BINARY_DIR}/rescue.pc" @ONLY)
+install(FILES "${PROJECT_BINARY_DIR}/rescue.pc" DESTINATION "${CMAKE_INSTALL_LIBDIR}/pkgconfig")
 

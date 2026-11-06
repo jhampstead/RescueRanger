@@ -25,10 +25,10 @@ Apart from the CSQ/BCSQ tag the two outputs have to be equal. From the repositor
 
 ```
 # The six positionals come first, options after them. REF.bin is the reference scores of the golden genes (golden.regions.tsv).
-# Every build writes build/rescueranger (src/CMakeLists.txt), so copy the binary after building it to keep two builds apart.
+# Every build writes build/rescue (src/CMakeLists.txt), so copy the binary after building it to keep two builds apart.
 M=../cpliceai_haplotype/models/onnx; D=tests/golden/data
-build/rescueranger $D/golden.vcf $M $D/golden.gff3 $D/golden.fa vep.vcf vep_scores.tsv --af-tag AF --reference-scores REF.bin
-build/rescueranger $D/golden_bcsq.vcf $M $D/golden.gff3 $D/golden.fa bcsq.vcf bcsq_scores.tsv --af-tag AF --annotation bcftools --reference-scores REF.bin
+build/rescue $D/golden.vcf $M $D/golden.gff3 $D/golden.fa vep.vcf vep_scores.tsv --af-tag AF --reference-scores REF.bin
+build/rescue $D/golden_bcsq.vcf $M $D/golden.gff3 $D/golden.fa bcsq.vcf bcsq_scores.tsv --af-tag AF --annotation bcftools --reference-scores REF.bin
 
 # old: its models are another format, and the option for unphased variants is --max-unphased 0 where the new one has --exclude-unphased
 ```

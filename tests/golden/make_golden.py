@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Writes the golden-file fixture of rescue_ranger: a small genome, its annotation and phased, VEP-annotated VCFs whose records exercise
+Writes the golden-file fixture of rescue: a small genome, its annotation and phased, VEP-annotated VCFs whose records exercise
 the changes listed in REFACTOR_PLAN.md ("Golden-file checklist") and the NMD flags, so that two builds (or the code before and after
 a change) can be run on the same input and their output compared.
 
@@ -899,7 +899,7 @@ def main():
             out.write("\n".join(gff_lines(gene)) + "\n")
 
     # The gene regions for cpliceai_reference: 0-based half-open (BED), as src/gene_regions.c reads them. The extent of a gene is that of
-    # its exons here, which is also what the annotation of rescue_ranger gives the gene
+    # its exons here, which is also what the annotation of rescue gives the gene
     with open(os.path.join(directory, "golden.regions.tsv"), "w") as out:
         out.write("NAME\tCHROM\tSTRAND\tTX_START\tTX_END\n")
         for gene in sorted(genes, key=lambda g: g.start):

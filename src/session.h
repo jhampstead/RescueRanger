@@ -6,7 +6,7 @@
 #include <htslib/hts.h>
 #include <htslib/vcf.h>
 #include <cpliceai/predict.h>
-#include <rescueranger/rescueranger.h>
+#include <rescue/rescue.h>
 
 #include "bcftools/gff.h"
 #include "record.h"
@@ -36,7 +36,7 @@ typedef struct {
  * (fp_in, fp_out, scores_tsv) are opened by the caller, because the program and the bcftools plugin open them differently.
  * Returns EXIT_SUCCESS, or EXIT_FAILURE after logging why and closing what was opened; then hdr is not freed.
  */
-int Session_open(const RescueRangerOptions *opts, bcf_hdr_t *hdr, Session *s);
+int Session_open(const RescueOptions *opts, bcf_hdr_t *hdr, Session *s);
 
 /*
  * Releases whatever the session holds. Every field is guarded, so this also

@@ -1,7 +1,7 @@
-// The public interface of the library (include/rescueranger/rescueranger.h): the options, opening a Session, and the order in
+// The public interface of the library (include/rescue/rescue.h): the options, opening a Session, and the order in
 // which the stages run on the blocks of records.
 
-#include <rescueranger/rescueranger.h>
+#include <rescue/rescue.h>
 
 #include <stdbool.h>
 #include <stdlib.h>
@@ -21,7 +21,7 @@
 #include "triggers.h"
 #include "utils.h"
 
-struct RescueRanger {
+struct Rescue {
     Session s; // fp_in, fp_out, hdr and scores_tsv are the caller's, see rr_destroy
     char *af_tag;
     float af_threshold;
@@ -32,15 +32,15 @@ const char *rr_version(void) {
     return RR_VERSION;
 }
 
-int rr_annotation_parse(const char *name, RescueRangerAnnotation *annotation) {
+int rr_annotation_parse(const char *name, RescueAnnotation *annotation) {
     if (name == NULL) return -1;
     if (strcmp(name, "vep") == 0) { *annotation = RR_ANNOTATION_VEP; return 0; }
     if (strcmp(name, "bcftools") == 0) { *annotation = RR_ANNOTATION_BCFTOOLS; return 0; }
     return -1;
 }
 
-void rr_opts_init(RescueRangerOptions *opts) {
-    *opts = (RescueRangerOptions){
+void rr_opts_init(RescueOptions *opts) {
+    *opts = (RescueOptions){
         .model_dir = NULL,
         .gff_fname = NULL,
         .fasta_fname = NULL,
@@ -59,7 +59,7 @@ void rr_set_log_level(int level) {
     log_set_level(level);
 }
 
-void rr_destroy(RescueRanger *rr) {
+void rr_destroy(Rescue *rr) {
     if (rr == NULL) return;
 
     // Session_close also closes the files and the header, which belong to the caller here
@@ -73,13 +73,13 @@ void rr_destroy(RescueRanger *rr) {
     free(rr);
 }
 
-RescueRanger *rr_init(const RescueRangerOptions *opts, bcf_hdr_t *hdr) {
+Rescue *rr_init(const RescueOptions *opts, bcf_hdr_t *hdr) {
     if (opts->af_threshold < 0 || opts->af_threshold > 1) {
         log_error("--af-threshold must be between 0 and 1, got %f", opts->af_threshold);
         return NULL;
     }
 
-    RescueRanger *rr = calloc(1, sizeof(RescueRanger));
+    Rescue *rr = calloc(1, sizeof(Rescue));
     if (rr == NULL) {
         log_error("Out of memory");
         return NULL;
@@ -100,7 +100,7 @@ fail:
     return NULL;
 }
 
-int rr_set_scores_output(RescueRanger *rr, FILE *fp) {
+int rr_set_scores_output(Rescue *rr, FILE *fp) {
     if (fprintf(fp,
                 "CHR\tPOS\tREF\tALT\tGENE\tTRANSCRIPT\t"
                 "PHASE\tOFFSET\tSOURCE\tTYPE\tDONOR\tACCEPTOR\tNEITHER\n") < 0) {
@@ -126,7 +126,7 @@ static int write_records(const Session *s, const Records *records) {
 
 // Runs the stages on the blocks of records, one block at a time. A block is a run of records that share a gene and so
 // a sequence to predict on, see record_block.h.
-int rr_annotate(RescueRanger *rr, htsFile *in, htsFile *out) {
+int rr_annotate(Rescue *rr, htsFile *in, htsFile *out) {
     Session *s = &rr->s;
     s->fp_in = in;
     s->fp_out = out;

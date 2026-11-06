@@ -2,8 +2,8 @@ prefix=@CMAKE_INSTALL_PREFIX@
 libdir=${prefix}/@CMAKE_INSTALL_LIBDIR@
 includedir=${prefix}/@CMAKE_INSTALL_INCLUDEDIR@
 
-Name: rescueranger
+Name: rescue
 Description: Rescue prediction for putatively protein-truncating variants in phased VCF files
 Version: @PROJECT_VERSION@
 Cflags: -I${includedir}
-Libs: -L${libdir} -lrescueranger
+Libs: -L${libdir} -lrescue
