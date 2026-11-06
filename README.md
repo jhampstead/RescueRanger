@@ -143,7 +143,7 @@ bcftools view -r chr17 in.vcf.gz -Ou | bcftools +rescue -m models/ -g annot.gff3
 | `--annotation vep\|bcftools` | Tool that annotated the VCF [vep] |
 | `--csq-tag TAG` | INFO tag with the consequences [CSQ for vep, BCSQ for bcftools] |
 | `--af-tag TAG` | INFO tag with the allele frequency [INFO/AF] |
-| `--af-threshold FLOAT` | Variants with an allele frequency at or below this trigger the splice analysis; more common variants only take part in the haplotypes [0.01] |
+| `--af-threshold FLOAT` | Variants with an allele frequency at or below this trigger the splice analysis; more common variants are included in haplotypes but not tested individually [0.01] |
 | `--gt-tag TAG` | FORMAT tag with the phased genotypes: `GT`, or a String field written like GT (`0\|1`) [FORMAT/GT] |
 | `--exclude-unphased` | Ignore heterozygous variants with unknown phase (by default they are placed on both haplotypes) |
 | `--prediction-radius INT` | Prediction window radius in bases; values other than 50 give scores not comparable to SpliceAI [50] |
